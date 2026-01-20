@@ -32,7 +32,7 @@ jfl status
 # View launch dashboard
 jfl hud
 
-# Start a session
+# Or just type. It will walk you through it
 jfl
 ```
 
@@ -125,15 +125,15 @@ jfl wallet
 **Trial - $0**
 - Full JFL toolkit
 - Foundation + brand setup
-- Bring your own AI key
-- Ends when you get value or add teammates
+- Use Claude Code or Codex CLI - download Claude Pro or Max at claude.ai 
+- Ends when you add teammates (context is more fun when you shape it together)
 
 **Day Pass - $5/day per person**
 - Only pay the days you use it
 - AI included (no API key needed)
 - Chat in Telegram, Slack, Discord
-- Dashboard + Deploy at jfl.run
-- Pay with crypto (x402)
+- Dashboard + Deploy at [TBD]
+- Pay with USDC (gasless via x402)
 
 **Solo - $49/mo**
 - Just you (1 seat)
@@ -178,7 +178,7 @@ JFL includes powerful skills for Claude Code:
 - `/video` - Founder video scripts (viral short-form)
 - `/startup` - Startup journey guidance (idea to scale)
 
-Run these in Claude Code after initializing your project.
+Run these in Claude Code after initializing your project. Easy to add more skills, it has a sklls factory just ask it or copy your favorite skills repos
 
 ## Knowledge Layer
 
@@ -288,7 +288,7 @@ MIT License - see LICENSE file for details.
 
 ## Credits
 
-Built by [@402goose](https://github.com/402goose) (Alec Taggart)
+Built by [@tagga](https://x.com/taggaoyl) (Alec Taggart)
 
 Powered by:
 - Claude (Anthropic)
