@@ -1,0 +1,38 @@
+# Source files (we ship dist/ only)
+src/
+tsconfig.json
+*.ts
+!*.d.ts
+
+# Development files
+node_modules/
+*.log
+.DS_Store
+.env
+.env.*
+
+# Git
+.git
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Testing
+test/
+tests/
+*.test.js
+*.spec.js
+coverage/
+
+# Build artifacts
+*.tsbuildinfo
+
+# Documentation (keep README and LICENSE)
+# docs/
+
+# Examples (if any)
+examples/
