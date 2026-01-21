@@ -477,7 +477,7 @@ async function onboardNewUser(cwd: string) {
   // Clone template
   const spinner = ora("Creating project...").start()
 
-  const TEMPLATE_REPO = "https://github.com/402goose/just-fucking-launch.git"
+  const TEMPLATE_REPO = "https://github.com/402goose/jfl-platform.git"
 
   try {
     // Ensure parent directory exists
