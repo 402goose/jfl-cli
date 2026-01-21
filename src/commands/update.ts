@@ -45,10 +45,14 @@ export async function updateCommand(options: { dry?: boolean } = {}) {
   // Check if this IS the product repo (don't update product with itself)
   const configPath = path.join(cwd, ".jfl", "config.json")
   if (fs.existsSync(configPath)) {
-    const config = JSON.parse(fs.readFileSync(configPath, "utf-8"))
-    if (config.type === "product") {
-      console.log(chalk.yellow("This is the product repo. Nothing to update from."))
-      return
+    try {
+      const config = JSON.parse(fs.readFileSync(configPath, "utf-8"))
+      if (config.type === "product") {
+        console.log(chalk.yellow("This is the product repo. Nothing to update from."))
+        return
+      }
+    } catch (err) {
+      console.log(chalk.yellow("Warning: .jfl/config.json is malformed. Proceeding with update."))
     }
   }
 
