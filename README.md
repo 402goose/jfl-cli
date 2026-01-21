@@ -177,6 +177,7 @@ JFL includes powerful skills for Claude Code:
 | `/brand-architect` | Generate brand identity (marks, colors, typography) |
 | `/web-architect` | Implement assets (SVG, favicon, OG images) |
 | `/content` | Create content (threads, posts, articles, one-pagers) |
+| `/x-algorithm` | Optimize tweets for X For You feed using the open-sourced algorithm |
 | `/video` | Founder video scripts (viral short-form) |
 | `/startup` | Startup journey guidance (idea to scale) |
 | `/agent-browser` | Headless browser automation - navigate, screenshot, scrape |
