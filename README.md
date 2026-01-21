@@ -171,12 +171,19 @@ When initializing a project, JFL asks about your setup:
 
 JFL includes powerful skills for Claude Code:
 
-- `/hud` - Campaign dashboard with countdown and tasks
-- `/brand-architect` - Generate brand identity (marks, colors, typography)
-- `/web-architect` - Implement assets (SVG, favicon, OG images)
-- `/content` - Create content (threads, posts, articles, one-pagers)
-- `/video` - Founder video scripts (viral short-form)
-- `/startup` - Startup journey guidance (idea to scale)
+| Skill | Description |
+|-------|-------------|
+| `/hud` | Campaign dashboard with countdown and tasks |
+| `/brand-architect` | Generate brand identity (marks, colors, typography) |
+| `/web-architect` | Implement assets (SVG, favicon, OG images) |
+| `/content` | Create content (threads, posts, articles, one-pagers) |
+| `/video` | Founder video scripts (viral short-form) |
+| `/startup` | Startup journey guidance (idea to scale) |
+| `/agent-browser` | Headless browser automation - navigate, screenshot, scrape |
+| `/search` | Semantic search across GTM knowledge base using qmd |
+| `/spec` | Multi-agent adversarial spec refinement |
+| `/react-best-practices` | React/Next.js performance optimization |
+| `/remotion-best-practices` | Remotion video creation in React |
 
 Run these in Claude Code after initializing your project. Easy to add more skills, it has a sklls factory just ask it or copy your favorite skills repos
 
