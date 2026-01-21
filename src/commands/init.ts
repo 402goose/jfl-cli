@@ -7,7 +7,7 @@ import { join } from "path"
 import { tmpdir } from "os"
 import { isAuthenticated, getUser, getAuthMethod, getX402Address } from "./login.js"
 
-const TEMPLATE_REPO = "https://github.com/402goose/jfl-platform.git"
+const TEMPLATE_REPO = "https://github.com/402goose/jfl-cli.git"
 
 export async function initCommand(options?: { name?: string }) {
   console.log(chalk.bold("\n🚀 JFL - Initialize GTM Workspace\n"))
