@@ -17,6 +17,7 @@ import { hudCommand } from "./commands/hud.js"
 import { sessionCommand } from "./commands/session.js"
 import { feedbackCommand } from "./commands/feedback.js"
 import { updateCommand } from "./commands/update.js"
+import { voiceCommand } from "./commands/voice.js"
 import {
   listSkillsCommand,
   installSkillCommand,
@@ -180,6 +181,27 @@ skills
   .action(searchSkillsCommand)
 
 // ============================================================================
+// VOICE INPUT (work offline)
+// ============================================================================
+
+const voice = program.command("voice").description("Voice input for JFL")
+
+voice
+  .command("model")
+  .description("Manage whisper models")
+  .argument("[action]", "list, download, or default")
+  .argument("[name]", "Model name (tiny, base, small, etc.)")
+  .option("-f, --force", "Force re-download")
+  .action(async (action, name, options) => {
+    await voiceCommand("model", action, name, options)
+  })
+
+// Allow running `jfl voice` without subcommand for help
+voice.action(async () => {
+  await voiceCommand()
+})
+
+// ============================================================================
 // SKILL SHORTCUTS (work offline)
 // ============================================================================
 
@@ -222,6 +244,7 @@ program
     console.log("    jfl status            Project status")
     console.log("    jfl brand             Brand architect")
     console.log("    jfl content           Content creator")
+    console.log("    jfl voice             Voice input commands")
 
     console.log(chalk.cyan("\n  Platform (requires login):"))
     console.log("    jfl login             Login to platform")
