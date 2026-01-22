@@ -11,6 +11,9 @@ import { EventEmitter } from "events"
 import WebSocket from "ws"
 import { spawn, ChildProcess, execSync } from "child_process"
 import { Readable } from "stream"
+import * as readline from "readline"
+// @ts-ignore - node-global-key-listener doesn't have type definitions
+import { GlobalKeyboardListener, IGlobalKeyEvent, IGlobalKeyDownMap } from "node-global-key-listener"
 
 // VAD Configuration
 const VAD_SILENCE_THRESHOLD_DB = -40 // dB threshold for silence detection
@@ -34,6 +37,9 @@ export enum VoiceErrorType {
   SOX_NOT_INSTALLED = "SOX_NOT_INSTALLED",
   RECORDING_FAILED = "RECORDING_FAILED",
   TIMEOUT = "TIMEOUT",
+  ACCESSIBILITY_NOT_GRANTED = "ACCESSIBILITY_NOT_GRANTED",
+  PLATFORM_NOT_SUPPORTED = "PLATFORM_NOT_SUPPORTED",
+  WAYLAND_NOT_SUPPORTED = "WAYLAND_NOT_SUPPORTED",
 }
 
 /**
@@ -138,6 +144,30 @@ const VOICE_ERROR_MESSAGES: Record<VoiceErrorType, { message: string; suggestion
       "The server may be overloaded - try again",
       "Check server status: jfl voice server status",
       "For large audio files, the model may need more time",
+    ],
+  },
+  [VoiceErrorType.ACCESSIBILITY_NOT_GRANTED]: {
+    message: "Accessibility permission not granted.",
+    suggestions: [
+      "Open System Settings > Privacy & Security > Accessibility",
+      "Add your terminal app (Terminal, iTerm2, etc.) to the allowed list",
+      "Toggle the permission off and on if already added",
+      "You may need to restart your terminal after granting permission",
+    ],
+  },
+  [VoiceErrorType.PLATFORM_NOT_SUPPORTED]: {
+    message: "Global hotkey is not supported on this platform.",
+    suggestions: [
+      "Use 'jfl voice' for manual recording",
+      "Supported platforms: macOS, Linux (X11), Windows 10/11",
+    ],
+  },
+  [VoiceErrorType.WAYLAND_NOT_SUPPORTED]: {
+    message: "Global hotkey is not supported on Wayland.",
+    suggestions: [
+      "Use 'jfl voice' for manual recording instead",
+      "Switch to an X11 session for hotkey support",
+      "Or use an X11-based desktop environment (GNOME on X11, KDE on X11)",
     ],
   },
 }
@@ -462,6 +492,16 @@ function getVoiceSocketPath(): string {
 // Get voice server token path
 function getVoiceTokenPath(): string {
   return join(getJflDir(), "voice-server.token")
+}
+
+// Get voice daemon PID file path
+function getVoiceDaemonPidPath(): string {
+  return join(getJflDir(), "voice-daemon.pid")
+}
+
+// Get voice daemon log file path
+function getVoiceDaemonLogPath(): string {
+  return join(getJflDir(), "voice-daemon.log")
 }
 
 // Read auth token from file
@@ -2316,12 +2356,52 @@ export async function testRecordingCommand(options?: { device?: string, duration
   }
 }
 
+// Hotkey mode type
+type HotkeyMode = "auto" | "tap" | "hold"
+
+// Hotkey configuration
+interface HotkeyConfig {
+  mode: HotkeyMode
+  holdThreshold: number // ms
+}
+
+// Preview configuration for transcript review before sending
+interface PreviewConfig {
+  timeout: number // seconds, 0 = disabled (require explicit Enter)
+}
+
+// Default preview configuration
+const DEFAULT_PREVIEW_CONFIG: PreviewConfig = {
+  timeout: 2.5, // seconds
+}
+
+// Security configuration for clipboard hygiene and recording limits (VS-SEC-3)
+interface SecurityConfig {
+  maxRecordingDuration: number // seconds, max recording time before auto-stop
+  clipboardClearDelay: number  // seconds, time to wait after paste before clearing clipboard
+}
+
+// Default security configuration
+const DEFAULT_SECURITY_CONFIG: SecurityConfig = {
+  maxRecordingDuration: 60, // 60 seconds max recording
+  clipboardClearDelay: 5,   // Clear clipboard 5 seconds after paste
+}
+
 // Voice configuration interface
 interface VoiceConfig {
   model: string
   device: string
   sampleRate: number
   autoStart: boolean
+  hotkey: HotkeyConfig
+  preview: PreviewConfig
+  security: SecurityConfig
+}
+
+// Default hotkey configuration
+const DEFAULT_HOTKEY_CONFIG: HotkeyConfig = {
+  mode: "auto",
+  holdThreshold: 300, // ms
 }
 
 // Read voice config from YAML file
@@ -2338,21 +2418,82 @@ function readVoiceConfig(): VoiceConfig | null {
       device: "default",
       sampleRate: 16000,
       autoStart: false,
+      hotkey: { ...DEFAULT_HOTKEY_CONFIG },
+      preview: { ...DEFAULT_PREVIEW_CONFIG },
+      security: { ...DEFAULT_SECURITY_CONFIG },
     }
 
     // Parse YAML manually (simple key: value format)
+    // Supports nested hotkey, preview, and security sections
     const lines = content.split("\n")
+    let currentSection: "none" | "hotkey" | "preview" | "security" = "none"
+
     for (const line of lines) {
       const trimmed = line.trim()
-      if (trimmed.startsWith("#") || !trimmed.includes(":")) continue
+      if (trimmed.startsWith("#") || trimmed === "") continue
+
+      // Check if entering a section
+      if (trimmed === "hotkey:") {
+        currentSection = "hotkey"
+        continue
+      }
+      if (trimmed === "preview:") {
+        currentSection = "preview"
+        continue
+      }
+      if (trimmed === "security:") {
+        currentSection = "security"
+        continue
+      }
+
+      // Check if leaving section (new top-level key)
+      if (!line.startsWith(" ") && !line.startsWith("\t") && trimmed.includes(":")) {
+        currentSection = "none"
+      }
+
+      if (!trimmed.includes(":")) continue
 
       const [key, ...valueParts] = trimmed.split(":")
       const value = valueParts.join(":").trim()
 
-      if (key === "model") config.model = value
-      else if (key === "device") config.device = value
-      else if (key === "sampleRate") config.sampleRate = parseInt(value, 10) || 16000
-      else if (key === "autoStart") config.autoStart = value === "true"
+      if (currentSection === "hotkey") {
+        // Parse hotkey sub-keys
+        if (key === "mode" && (value === "auto" || value === "tap" || value === "hold")) {
+          config.hotkey.mode = value as HotkeyMode
+        } else if (key === "holdThreshold") {
+          config.hotkey.holdThreshold = parseInt(value, 10) || 300
+        }
+      } else if (currentSection === "preview") {
+        // Parse preview sub-keys
+        if (key === "timeout") {
+          const parsed = parseFloat(value)
+          // Validate: 0 (disabled) or 1-10 seconds
+          if (!isNaN(parsed) && (parsed === 0 || (parsed >= 1 && parsed <= 10))) {
+            config.preview.timeout = parsed
+          }
+        }
+      } else if (currentSection === "security") {
+        // Parse security sub-keys (VS-SEC-3)
+        if (key === "maxRecordingDuration") {
+          const parsed = parseInt(value, 10)
+          // Validate: 10-300 seconds (reasonable bounds)
+          if (!isNaN(parsed) && parsed >= 10 && parsed <= 300) {
+            config.security.maxRecordingDuration = parsed
+          }
+        } else if (key === "clipboardClearDelay") {
+          const parsed = parseInt(value, 10)
+          // Validate: 1-60 seconds
+          if (!isNaN(parsed) && parsed >= 1 && parsed <= 60) {
+            config.security.clipboardClearDelay = parsed
+          }
+        }
+      } else {
+        // Parse top-level keys
+        if (key === "model") config.model = value
+        else if (key === "device") config.device = value
+        else if (key === "sampleRate") config.sampleRate = parseInt(value, 10) || 16000
+        else if (key === "autoStart") config.autoStart = value === "true"
+      }
     }
 
     return config
@@ -2366,6 +2507,11 @@ function writeVoiceConfig(config: VoiceConfig): void {
   ensureDirectories()
   const configPath = getVoiceConfigPath()
 
+  // Ensure config sections have defaults if not provided
+  const hotkeyConfig = config.hotkey || DEFAULT_HOTKEY_CONFIG
+  const previewConfig = config.preview || DEFAULT_PREVIEW_CONFIG
+  const securityConfig = config.security || DEFAULT_SECURITY_CONFIG
+
   const content = `# JFL Voice Configuration
 # Generated by: jfl voice setup
 # Re-run setup to change settings: jfl voice setup
@@ -2374,6 +2520,26 @@ model: ${config.model}
 device: ${config.device}
 sampleRate: ${config.sampleRate}
 autoStart: ${config.autoStart}
+
+# Hotkey settings for voice hotkey mode
+# mode: auto (smart detection), tap (tap-to-toggle), or hold (hold-to-talk)
+# holdThreshold: ms to hold before entering hold-to-talk mode (default: 300)
+hotkey:
+  mode: ${hotkeyConfig.mode}
+  holdThreshold: ${hotkeyConfig.holdThreshold}
+
+# Preview settings for transcript review before sending
+# timeout: seconds to wait before auto-sending (1-10, or 0 to disable auto-send)
+# When preview is shown: Enter=send immediately, Esc=cancel, any other key=edit mode
+preview:
+  timeout: ${previewConfig.timeout}
+
+# Security settings for clipboard hygiene and recording limits (VS-SEC-3)
+# maxRecordingDuration: seconds before auto-stop (10-300, default: 60)
+# clipboardClearDelay: seconds after paste before clearing clipboard (1-60, default: 5)
+security:
+  maxRecordingDuration: ${securityConfig.maxRecordingDuration}
+  clipboardClearDelay: ${securityConfig.clipboardClearDelay}
 `
 
   writeFileSync(configPath, content, { mode: 0o644 })
@@ -2832,12 +2998,16 @@ export async function voiceSetupCommand(): Promise<void> {
     },
   ])
 
-  // Build final config
+  // Build final config (preserve existing hotkey, preview, and security settings if any)
+  const existingVoiceConfig = readVoiceConfig()
   const config: VoiceConfig = {
     model: selectedModel,
     device: selectedDevice,
     sampleRate: 16000,
     autoStart,
+    hotkey: existingVoiceConfig?.hotkey || { ...DEFAULT_HOTKEY_CONFIG },
+    preview: existingVoiceConfig?.preview || { ...DEFAULT_PREVIEW_CONFIG },
+    security: existingVoiceConfig?.security || { ...DEFAULT_SECURITY_CONFIG },
   }
 
   // Save config
@@ -2890,6 +3060,23 @@ function showVoiceHelp(): void {
   console.log("  jfl voice model download <name>   Download a model")
   console.log("  jfl voice model default <name>    Set default model")
 
+  console.log(chalk.cyan("\nHotkey Mode (macOS):"))
+  console.log("  jfl voice hotkey                  Start global hotkey listener")
+  console.log("  jfl voice hotkey --mode <mode>    Set hotkey mode: auto, tap, or hold")
+  console.log(chalk.gray("                                    Ctrl+Shift+Space triggers recording"))
+  console.log(chalk.gray("                                    auto:  Tap to toggle, or hold to talk"))
+  console.log(chalk.gray("                                    tap:   Tap to start/stop recording"))
+  console.log(chalk.gray("                                    hold:  Hold to record, release to stop"))
+  console.log(chalk.gray("                                    Requires Accessibility permission"))
+
+  console.log(chalk.cyan("\nDaemon Mode (macOS):"))
+  console.log("  jfl voice daemon start            Start hotkey listener in background")
+  console.log("  jfl voice daemon stop             Stop the background daemon")
+  console.log("  jfl voice daemon status           Show daemon status and uptime")
+  console.log("  jfl voice daemon start --mode <m> Start daemon with mode: auto, tap, hold")
+  console.log(chalk.gray("                                    Daemon survives terminal close"))
+  console.log(chalk.gray("                                    PID stored in ~/.jfl/voice-daemon.pid"))
+
   console.log(chalk.cyan("\nAudio Input:"))
   console.log("  jfl voice devices                 List audio input devices")
   console.log("  jfl voice test                    Test voice input (record + transcribe)")
@@ -2928,6 +3115,92 @@ function calculatePeakAmplitude(chunk: Buffer): number {
   return peak
 }
 
+// =============================================================================
+// VS-012: Waveform Visualization
+// =============================================================================
+
+/** Unicode block characters for waveform visualization (sorted by height) */
+const WAVEFORM_BLOCKS = ["▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"]
+
+/** Rolling buffer size for waveform display */
+const WAVEFORM_BUFFER_SIZE = 7
+
+/** Rolling buffer to store recent audio levels for waveform display */
+let waveformBuffer: number[] = []
+
+/**
+ * Map a dB level to a waveform character
+ * @param dbLevel - Audio level in dB (typically -60 to 0)
+ * @returns A Unicode block character representing the level
+ */
+function dbToWaveformChar(dbLevel: number): string {
+  // Map dB range (-60 to 0) to character index (0 to 7)
+  // -60 dB or below = lowest bar, 0 dB = highest bar
+  const minDb = -60
+  const maxDb = 0
+  const clampedDb = Math.max(minDb, Math.min(maxDb, dbLevel))
+
+  // Normalize to 0-1 range
+  const normalized = (clampedDb - minDb) / (maxDb - minDb)
+
+  // Map to character index
+  const index = Math.floor(normalized * (WAVEFORM_BLOCKS.length - 1))
+  return WAVEFORM_BLOCKS[index]
+}
+
+/**
+ * Add a level to the waveform buffer
+ * @param dbLevel - Audio level in dB
+ */
+function addToWaveformBuffer(dbLevel: number): void {
+  waveformBuffer.push(dbLevel)
+  if (waveformBuffer.length > WAVEFORM_BUFFER_SIZE) {
+    waveformBuffer.shift()
+  }
+}
+
+/**
+ * Reset the waveform buffer (call at start of new recording)
+ */
+function resetWaveformBuffer(): void {
+  waveformBuffer = []
+}
+
+/**
+ * Render the waveform visualization from the rolling buffer
+ * @returns A string like "▁▃▅▇▅▃▁" representing recent audio levels
+ */
+function renderWaveform(): string {
+  if (waveformBuffer.length === 0) {
+    // Return minimal bars when no data yet
+    return WAVEFORM_BLOCKS[0].repeat(WAVEFORM_BUFFER_SIZE)
+  }
+
+  // Pad with low values if buffer isn't full yet
+  const paddedBuffer = [...waveformBuffer]
+  while (paddedBuffer.length < WAVEFORM_BUFFER_SIZE) {
+    paddedBuffer.unshift(-60) // Pad with silence at the start
+  }
+
+  return paddedBuffer.map(db => dbToWaveformChar(db)).join("")
+}
+
+/**
+ * Check if terminal supports Unicode waveform characters
+ * @returns true if waveform should be displayed
+ */
+function supportsWaveform(): boolean {
+  // Check for dumb terminal
+  if (process.env.TERM === "dumb") {
+    return false
+  }
+  // Check for Windows cmd.exe (not PowerShell or Windows Terminal)
+  if (process.platform === "win32" && !process.env.WT_SESSION && !process.env.TERM_PROGRAM) {
+    return false
+  }
+  return true
+}
+
 /** Copy text to clipboard (cross-platform) */
 function copyToClipboard(text: string): boolean {
   const currentPlatform = platform()
@@ -2956,6 +3229,457 @@ function copyToClipboard(text: string): boolean {
   } catch {
     return false
   }
+}
+
+/**
+ * Clear the clipboard contents (VS-SEC-3: clipboard hygiene)
+ * Uses osascript on macOS to set clipboard to empty string
+ * Returns true on success, false on failure
+ */
+function clearClipboard(): boolean {
+  const currentPlatform = platform()
+  try {
+    if (currentPlatform === "darwin") {
+      // Use osascript to clear clipboard on macOS
+      execSync(
+        `osascript -e 'set the clipboard to ""'`,
+        { stdio: ["pipe", "ignore", "ignore"] }
+      )
+      return true
+    } else if (currentPlatform === "linux") {
+      // Try xclip first, then xsel
+      try {
+        execSync("xclip -selection clipboard", { input: "", stdio: ["pipe", "ignore", "ignore"] })
+        return true
+      } catch {
+        try {
+          execSync("xsel --clipboard --input", { input: "", stdio: ["pipe", "ignore", "ignore"] })
+          return true
+        } catch {
+          return false
+        }
+      }
+    } else if (currentPlatform === "win32") {
+      // Use PowerShell to clear clipboard on Windows
+      execSync("powershell.exe -command \"Set-Clipboard -Value ''\"", { stdio: ["pipe", "ignore", "ignore"] })
+      return true
+    }
+    return false
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Schedule clipboard clearing after a delay (VS-SEC-3)
+ * @param delaySeconds Seconds to wait before clearing (default: 5)
+ * @returns Timer reference for potential cancellation
+ */
+function scheduleClipboardClear(delaySeconds: number = 5): NodeJS.Timeout {
+  return setTimeout(() => {
+    const cleared = clearClipboard()
+    if (process.env.DEBUG && cleared) {
+      console.log(chalk.gray("  [debug] Clipboard cleared for security"))
+    }
+  }, delaySeconds * 1000)
+}
+
+/**
+ * Securely zero out a Buffer's contents (VS-SEC-3: buffer hygiene)
+ * Overwrites the buffer with zeros to prevent sensitive audio data from lingering in memory
+ * @param buffer The Buffer to zero out
+ */
+function zeroBuffer(buffer: Buffer): void {
+  if (buffer && buffer.length > 0) {
+    buffer.fill(0)
+  }
+}
+
+/**
+ * Securely zero out an array of Buffers (VS-SEC-3)
+ * @param buffers Array of Buffers to zero out
+ */
+function zeroBuffers(buffers: Buffer[]): void {
+  for (const buffer of buffers) {
+    zeroBuffer(buffer)
+  }
+  // Clear the array reference
+  buffers.length = 0
+}
+
+/**
+ * Get the name of the currently focused application
+ * - macOS: via osascript
+ * - Linux: via xdotool (X11 only)
+ * - Windows: via PowerShell
+ * VS-010/VS-011: Cross-platform focused app detection
+ * Returns null if unable to determine
+ */
+function getFocusedApp(): string | null {
+  const currentPlatform = platform()
+
+  try {
+    if (currentPlatform === "darwin") {
+      const result = execSync(
+        `osascript -e 'tell application "System Events" to get name of first application process whose frontmost is true'`,
+        { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }
+      )
+      return result.trim()
+    } else if (currentPlatform === "linux") {
+      // VS-010: Get focused window on Linux X11 using xdotool
+      const windowId = execSync(
+        `xdotool getactivewindow`,
+        { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }
+      ).trim()
+      if (windowId) {
+        const windowName = execSync(
+          `xdotool getwindowname ${windowId}`,
+          { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }
+        ).trim()
+        return windowName || null
+      }
+      return null
+    } else if (currentPlatform === "win32") {
+      // VS-011: Get focused window on Windows using PowerShell
+      const result = execSync(
+        `powershell.exe -command "(Get-Process | Where-Object {$_.MainWindowHandle -eq (Add-Type -MemberDefinition '[DllImport(\\\"user32.dll\\\")]public static extern IntPtr GetForegroundWindow();' -Name 'Win32' -Namespace 'Native' -PassThru)::GetForegroundWindow()}).MainWindowTitle"`,
+        { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] }
+      )
+      return result.trim() || null
+    }
+    return null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Get the platform-appropriate paste shortcut string for display
+ * VS-010/VS-011: Cross-platform paste shortcut labels
+ */
+function getPasteShortcut(): string {
+  const currentPlatform = platform()
+  if (currentPlatform === "darwin") {
+    return "Cmd+V"
+  } else if (currentPlatform === "linux") {
+    return "Ctrl+Shift+V"
+  } else {
+    return "Ctrl+V"
+  }
+}
+
+/**
+ * Simulate paste keystroke
+ * - macOS: Cmd+V via osascript
+ * - Linux: Ctrl+Shift+V via xdotool (X11 only)
+ * - Windows: Ctrl+V via PowerShell SendKeys
+ * VS-010/VS-011: Cross-platform paste simulation
+ * Returns true on success, false on failure
+ */
+function simulatePaste(): boolean {
+  const currentPlatform = platform()
+
+  try {
+    if (currentPlatform === "darwin") {
+      execSync(
+        `osascript -e 'tell application "System Events" to keystroke "v" using command down'`,
+        { stdio: ["pipe", "ignore", "ignore"] }
+      )
+      return true
+    } else if (currentPlatform === "linux") {
+      // VS-010: Linux paste via xdotool (X11 only)
+      // Use Ctrl+Shift+V for terminal compatibility
+      execSync(
+        `xdotool key --clearmodifiers ctrl+shift+v`,
+        { stdio: ["pipe", "ignore", "ignore"] }
+      )
+      return true
+    } else if (currentPlatform === "win32") {
+      // VS-011: Windows paste via PowerShell SendKeys
+      // ^v is Ctrl+V in SendKeys notation
+      execSync(
+        `powershell.exe -command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.SendKeys]::SendWait('^v')"`,
+        { stdio: ["pipe", "ignore", "ignore"] }
+      )
+      return true
+    }
+    return false
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Show a desktop notification with title and message
+ * - macOS: via osascript
+ * - Linux: via notify-send (libnotify)
+ * - Windows: via PowerShell toast notification
+ * VS-010/VS-011: Cross-platform notification support
+ * Returns true on success, false on failure
+ */
+function showNotification(title: string, message: string): boolean {
+  const currentPlatform = platform()
+
+  try {
+    if (currentPlatform === "darwin") {
+      // Escape backslashes and double quotes for AppleScript strings
+      const escapedMessage = message.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+      const escapedTitle = title.replace(/\\/g, "\\\\").replace(/"/g, '\\"')
+      execSync(
+        `osascript -e 'display notification "${escapedMessage}" with title "${escapedTitle}"'`,
+        { stdio: ["pipe", "ignore", "ignore"] }
+      )
+      return true
+    } else if (currentPlatform === "linux") {
+      // VS-010: Linux notification via notify-send (part of libnotify)
+      // Escape single quotes for shell
+      const escapedMessage = message.replace(/'/g, "'\\''")
+      const escapedTitle = title.replace(/'/g, "'\\''")
+      execSync(
+        `notify-send '${escapedTitle}' '${escapedMessage}'`,
+        { stdio: ["pipe", "ignore", "ignore"] }
+      )
+      return true
+    } else if (currentPlatform === "win32") {
+      // VS-011: Windows toast notification via PowerShell
+      // Escape for PowerShell string
+      const escapedMessage = message.replace(/'/g, "''").replace(/`/g, "``")
+      const escapedTitle = title.replace(/'/g, "''").replace(/`/g, "``")
+      execSync(
+        `powershell.exe -command "[Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null; $xml = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02); $texts = $xml.GetElementsByTagName('text'); $texts[0].AppendChild($xml.CreateTextNode('${escapedTitle}')); $texts[1].AppendChild($xml.CreateTextNode('${escapedMessage}')); [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('JFL Voice').Show([Windows.UI.Notifications.ToastNotification]::new($xml))"`,
+        { stdio: ["pipe", "ignore", "ignore"] }
+      )
+      return true
+    }
+    return false
+  } catch {
+    return false
+  }
+}
+
+// =============================================================================
+// VS-UX-2: System Recording Indicator
+// =============================================================================
+
+/**
+ * Show system recording indicator via desktop notification
+ * This provides a visual indicator that recording is active, even when terminal is not visible
+ * VS-010/VS-011: Now works on macOS, Linux, and Windows
+ * Returns true on success, false on failure
+ */
+export function showRecordingIndicator(): boolean {
+  return showNotification("Voice Recording", "Recording started... Press Ctrl+Shift+Space to stop")
+}
+
+/**
+ * Hide system recording indicator (show stopped notification)
+ * VS-010/VS-011: Now works on macOS, Linux, and Windows
+ * Returns true on success, false on failure
+ */
+export function hideRecordingIndicator(reason?: "stopped" | "cancelled" | "completed"): boolean {
+  const messages: Record<string, string> = {
+    stopped: "Recording stopped",
+    cancelled: "Recording cancelled",
+    completed: "Recording complete - transcribing...",
+  }
+  const message = messages[reason || "stopped"] || "Recording stopped"
+  return showNotification("Voice Recording", message)
+}
+
+/**
+ * Result of preview transcript interaction
+ */
+type PreviewResult =
+  | { action: "send"; text: string }
+  | { action: "cancel" }
+  | { action: "edit"; text: string }
+
+/**
+ * Preview transcript with configurable auto-send countdown
+ *
+ * Behavior:
+ * - Shows transcript with countdown (if timeout > 0)
+ * - Enter: send immediately
+ * - Esc: cancel entirely
+ * - Any other key: pause countdown and enter edit mode
+ * - In edit mode: user can modify text, Enter to send, Esc to cancel
+ * - If countdown reaches 0: send automatically
+ *
+ * @param transcript - The transcribed text to preview
+ * @param timeoutSeconds - Countdown duration (0 = disabled, require explicit Enter)
+ * @returns PreviewResult indicating user action and final text
+ */
+async function previewTranscript(
+  transcript: string,
+  timeoutSeconds: number
+): Promise<PreviewResult> {
+  return new Promise((resolve) => {
+    // Set up raw mode for immediate key detection
+    const stdin = process.stdin
+    const stdout = process.stdout
+
+    // Store original mode to restore later
+    const wasRaw = stdin.isRaw
+    stdin.setRawMode(true)
+    stdin.resume()
+    stdin.setEncoding("utf8")
+
+    let currentText = transcript
+    let countdownValue = timeoutSeconds
+    let countdownInterval: NodeJS.Timeout | null = null
+    let inEditMode = false
+    let editBuffer = ""
+    let cursorPos = 0
+
+    // Helper to clear the current line and write new content
+    const clearAndWrite = (text: string) => {
+      stdout.write("\r\x1b[K" + text)
+    }
+
+    // Helper to show the preview line
+    const showPreview = () => {
+      if (inEditMode) {
+        // Edit mode: show editable text with cursor
+        const before = editBuffer.slice(0, cursorPos)
+        const cursor = editBuffer[cursorPos] || " "
+        const after = editBuffer.slice(cursorPos + 1)
+        clearAndWrite(
+          chalk.gray("  Edit: ") +
+          chalk.cyan(before) +
+          chalk.bgCyan.black(cursor) +
+          chalk.cyan(after) +
+          chalk.gray(" [Enter=send, Esc=cancel]")
+        )
+      } else if (timeoutSeconds === 0) {
+        // No countdown - require explicit action
+        clearAndWrite(
+          chalk.gray("  ") +
+          chalk.cyan(`"${currentText}"`) +
+          chalk.gray(" [Enter=send, Esc=cancel, any key=edit]")
+        )
+      } else {
+        // Show countdown
+        const countdownDisplay = countdownValue.toFixed(1)
+        clearAndWrite(
+          chalk.gray("  ") +
+          chalk.cyan(`"${currentText}"`) +
+          chalk.yellow(` Sending in ${countdownDisplay}s...`) +
+          chalk.gray(" [Enter=send, Esc=cancel, any key=edit]")
+        )
+      }
+    }
+
+    // Cleanup function
+    const cleanup = () => {
+      if (countdownInterval) {
+        clearInterval(countdownInterval)
+        countdownInterval = null
+      }
+      stdin.setRawMode(wasRaw || false)
+      stdin.removeListener("data", onData)
+      stdout.write("\n")
+    }
+
+    // Start countdown if enabled
+    if (timeoutSeconds > 0) {
+      countdownInterval = setInterval(() => {
+        countdownValue -= 0.1
+        if (countdownValue <= 0) {
+          cleanup()
+          resolve({ action: "send", text: currentText })
+        } else {
+          showPreview()
+        }
+      }, 100)
+    }
+
+    // Handle key input
+    const onData = (key: string) => {
+      // Handle special keys
+      const keyCode = key.charCodeAt(0)
+
+      if (inEditMode) {
+        // Edit mode key handling
+        if (key === "\r" || key === "\n") {
+          // Enter - send the edited text
+          cleanup()
+          resolve({ action: "send", text: editBuffer })
+        } else if (key === "\x1b") {
+          // Check for escape sequences (arrow keys, etc.)
+          // Simple escape = cancel
+          // Arrow keys come as \x1b[A, \x1b[B, \x1b[C, \x1b[D
+          // We'll handle simple escape for now
+          cleanup()
+          resolve({ action: "cancel" })
+        } else if (key === "\x7f" || key === "\b") {
+          // Backspace - delete character before cursor
+          if (cursorPos > 0) {
+            editBuffer = editBuffer.slice(0, cursorPos - 1) + editBuffer.slice(cursorPos)
+            cursorPos--
+            showPreview()
+          }
+        } else if (key === "\x1b[D") {
+          // Left arrow
+          if (cursorPos > 0) {
+            cursorPos--
+            showPreview()
+          }
+        } else if (key === "\x1b[C") {
+          // Right arrow
+          if (cursorPos < editBuffer.length) {
+            cursorPos++
+            showPreview()
+          }
+        } else if (key === "\x03") {
+          // Ctrl+C - cancel
+          cleanup()
+          resolve({ action: "cancel" })
+        } else if (keyCode >= 32 && keyCode < 127) {
+          // Printable character - insert at cursor
+          editBuffer = editBuffer.slice(0, cursorPos) + key + editBuffer.slice(cursorPos)
+          cursorPos++
+          showPreview()
+        }
+      } else {
+        // Preview mode key handling
+        if (key === "\r" || key === "\n") {
+          // Enter - send immediately
+          cleanup()
+          resolve({ action: "send", text: currentText })
+        } else if (key === "\x1b") {
+          // Escape - cancel
+          cleanup()
+          resolve({ action: "cancel" })
+        } else if (key === "\x03") {
+          // Ctrl+C - cancel
+          cleanup()
+          resolve({ action: "cancel" })
+        } else {
+          // Any other key - enter edit mode
+          if (countdownInterval) {
+            clearInterval(countdownInterval)
+            countdownInterval = null
+          }
+          inEditMode = true
+          editBuffer = currentText
+          // If printable character, start with it
+          if (keyCode >= 32 && keyCode < 127) {
+            editBuffer = currentText + key
+            cursorPos = editBuffer.length
+          } else {
+            cursorPos = editBuffer.length
+          }
+          showPreview()
+        }
+      }
+    }
+
+    stdin.on("data", onData)
+
+    // Show initial preview
+    console.log() // New line before preview
+    showPreview()
+  })
 }
 
 /** Voice recording with VAD options */
@@ -3028,6 +3752,10 @@ export async function voiceSlashCommand(options: VoiceRecordOptions = {}): Promi
   let hasVoiceActivity = false
   const startTime = Date.now()
 
+  // VS-012: Reset waveform buffer for new recording
+  resetWaveformBuffer()
+  const useWaveform = supportsWaveform()
+
   // Spinner for recording indicator
   const spinner = ora({
     text: chalk.cyan("Recording...") + chalk.gray(" (waiting for voice)"),
@@ -3059,16 +3787,20 @@ export async function voiceSlashCommand(options: VoiceRecordOptions = {}): Promi
     const peakDb = amplitudeToDb(chunkPeak)
     const isSilent = peakDb < silenceThresholdDb
 
+    // VS-012: Add level to waveform buffer on every chunk
+    addToWaveformBuffer(peakDb)
+
+    // VS-012: Update spinner with waveform on every chunk for real-time feedback
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
+    if (useWaveform) {
+      const waveform = renderWaveform()
+      spinner.text = chalk.cyan("Recording") + chalk.gray(` ${waveform} (${elapsed}s)`)
+    }
+
     if (!isSilent) {
       // Voice activity detected
       hasVoiceActivity = true
       silenceStartTime = null
-
-      // Update spinner to show active recording
-      const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
-      const levelBars = Math.round(chunkPeak * 15)
-      const meter = "█".repeat(levelBars) + "░".repeat(15 - levelBars)
-      spinner.text = chalk.cyan("Recording") + chalk.gray(` [${meter}] ${elapsed}s`)
     } else if (hasVoiceActivity) {
       // Silence detected after voice activity
       if (silenceStartTime === null) {
@@ -3079,7 +3811,12 @@ export async function voiceSlashCommand(options: VoiceRecordOptions = {}): Promi
         // Update spinner to show silence detection
         const remaining = Math.max(0, silenceDurationMs - silenceDuration)
         if (remaining > 0) {
-          spinner.text = chalk.cyan("Recording") + chalk.yellow(` (silence: ${(remaining / 1000).toFixed(1)}s until stop)`)
+          if (useWaveform) {
+            const waveform = renderWaveform()
+            spinner.text = chalk.cyan("Recording") + chalk.gray(` ${waveform}`) + chalk.yellow(` (silence: ${(remaining / 1000).toFixed(1)}s)`)
+          } else {
+            spinner.text = chalk.cyan("Recording") + chalk.yellow(` (silence: ${(remaining / 1000).toFixed(1)}s until stop)`)
+          }
         }
 
         // Stop recording after silence duration
@@ -3090,8 +3827,8 @@ export async function voiceSlashCommand(options: VoiceRecordOptions = {}): Promi
     }
 
     // Check max duration
-    const elapsed = (Date.now() - startTime) / 1000
-    if (elapsed >= maxDurationSecs) {
+    const elapsedSecs = (Date.now() - startTime) / 1000
+    if (elapsedSecs >= maxDurationSecs) {
       recorder.stop()
     }
   })
@@ -3105,6 +3842,8 @@ export async function voiceSlashCommand(options: VoiceRecordOptions = {}): Promi
   try {
     await recorder.start()
     spinner.start()
+    // VS-UX-2: Show system recording indicator (notification on macOS)
+    showRecordingIndicator()
   } catch (error) {
     const voiceError = new VoiceError(VoiceErrorType.RECORDING_FAILED, {
       originalError: error instanceof Error ? error : new Error(String(error)),
@@ -3138,11 +3877,15 @@ export async function voiceSlashCommand(options: VoiceRecordOptions = {}): Promi
 
   // Handle interruption
   if (interrupted) {
+    // VS-UX-2: Show cancelled indicator
+    hideRecordingIndicator("cancelled")
     console.log(chalk.yellow("\n  Recording stopped by user.\n"))
   }
 
   // Handle recording error
   if (recordingError !== null) {
+    // VS-UX-2: Show stopped indicator on error
+    hideRecordingIndicator("stopped")
     const voiceError = new VoiceError(VoiceErrorType.RECORDING_FAILED, {
       originalError: recordingError,
       context: { device: options.device },
@@ -3154,6 +3897,8 @@ export async function voiceSlashCommand(options: VoiceRecordOptions = {}): Promi
   // Check if we got any audio
   const totalBytes = audioChunks.reduce((sum, chunk) => sum + chunk.length, 0)
   if (totalBytes === 0) {
+    // VS-UX-2: Show stopped indicator when no audio
+    hideRecordingIndicator("stopped")
     const voiceError = new VoiceError(VoiceErrorType.MIC_UNAVAILABLE, {
       context: { totalBytes: 0, device: options.device },
     })
@@ -3163,6 +3908,8 @@ export async function voiceSlashCommand(options: VoiceRecordOptions = {}): Promi
 
   // Check if there was any voice activity
   if (!hasVoiceActivity) {
+    // VS-UX-2: Show stopped indicator when no voice detected
+    hideRecordingIndicator("stopped")
     const voiceError = new VoiceError(VoiceErrorType.TRANSCRIPTION_EMPTY, {
       context: { reason: "No voice activity detected", peakLevel },
     })
@@ -3173,6 +3920,9 @@ export async function voiceSlashCommand(options: VoiceRecordOptions = {}): Promi
   // Combine all audio chunks
   const audioBuffer = Buffer.concat(audioChunks)
   const durationSecs = totalBytes / (16000 * 2) // 16kHz, 16-bit
+
+  // VS-UX-2: Show completed indicator when moving to transcription
+  hideRecordingIndicator("completed")
 
   console.log(chalk.gray(`\n  Recorded ${durationSecs.toFixed(1)}s of audio.`))
   console.log(chalk.gray("  Transcribing...\n"))
@@ -3312,12 +4062,1079 @@ export async function voiceSlashCommand(options: VoiceRecordOptions = {}): Promi
   }
 }
 
+// =============================================================================
+// Hotkey Command - Global Keyboard Shortcut for Voice Recording
+// =============================================================================
+
+/**
+ * Check if running on Wayland (Linux only)
+ * VS-010: Wayland detection for Linux hotkey support
+ * @returns true if running on Wayland, false otherwise
+ */
+function isWayland(): boolean {
+  if (platform() !== "linux") {
+    return false
+  }
+  // Check for Wayland indicators
+  // WAYLAND_DISPLAY is set when running under a Wayland compositor
+  // XDG_SESSION_TYPE is set to "wayland" on Wayland sessions
+  return !!(process.env.WAYLAND_DISPLAY || process.env.XDG_SESSION_TYPE === "wayland")
+}
+
+/**
+ * Check if Accessibility/keyboard permission is available
+ * - macOS: Requires Accessibility permission for global hotkey capture
+ * - Linux X11: Uses XGrabKey, no special permissions needed
+ * - Linux Wayland: Not supported (returns false)
+ * - Windows: Uses RegisterHotKey, no admin privileges needed
+ */
+function checkAccessibilityPermission(): boolean {
+  const currentPlatform = platform()
+
+  if (currentPlatform === "darwin") {
+    try {
+      // Use osascript to check if Accessibility permission is granted
+      // This method attempts to list processes, which requires accessibility
+      const result = execSync(
+        `osascript -e 'tell application "System Events" to get name of first process'`,
+        { encoding: "utf-8", timeout: 5000, stdio: ["pipe", "pipe", "pipe"] }
+      )
+      return true
+    } catch (error) {
+      // If the script fails, accessibility permission is likely not granted
+      return false
+    }
+  } else if (currentPlatform === "linux") {
+    // On Linux X11, we just need to verify X11 is available
+    // The node-global-key-listener uses XGrabKey which doesn't need special permissions
+    // Just check that we're not on Wayland (handled separately)
+    return !isWayland()
+  } else if (currentPlatform === "win32") {
+    // On Windows, RegisterHotKey doesn't require special permissions
+    // Works without admin privileges
+    return true
+  }
+
+  return false
+}
+
+/**
+ * Open system settings for keyboard/accessibility permissions
+ * - macOS: Opens Accessibility pane in System Settings
+ * - Linux: Prints instructions (no GUI settings for X11)
+ * - Windows: Prints instructions (no special permissions needed)
+ * VS-010/VS-011: Cross-platform settings guidance
+ */
+function openAccessibilitySettings(): void {
+  const currentPlatform = platform()
+
+  if (currentPlatform === "darwin") {
+    try {
+      // macOS 13+ uses System Settings, older versions use System Preferences
+      execSync(
+        `open "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility"`,
+        { stdio: "ignore" }
+      )
+    } catch {
+      // Fallback for older macOS versions
+      try {
+        execSync(
+          `open "/System/Library/PreferencePanes/Security.prefPane"`,
+          { stdio: "ignore" }
+        )
+      } catch {
+        console.log(chalk.gray("  Could not open System Settings automatically."))
+      }
+    }
+  } else if (currentPlatform === "linux") {
+    // VS-010: Linux doesn't have a system settings pane for X11 keyboard access
+    // Just print helpful information
+    console.log(chalk.gray("  Linux X11 hotkey requirements:"))
+    console.log(chalk.gray("    - Install xdotool: sudo apt-get install xdotool"))
+    console.log(chalk.gray("    - Ensure you're running X11, not Wayland"))
+    console.log(chalk.gray("    - Check session type: echo $XDG_SESSION_TYPE"))
+  } else if (currentPlatform === "win32") {
+    // VS-011: Windows doesn't need special permissions for RegisterHotKey
+    console.log(chalk.gray("  Windows hotkey should work without special permissions."))
+    console.log(chalk.gray("  If you have issues, try running as Administrator."))
+  }
+}
+
+// =============================================================================
+// VS-013: Voice Daemon Commands
+// =============================================================================
+
+/**
+ * Read the daemon PID from the PID file
+ * @returns The PID number or null if not found/invalid
+ */
+function readDaemonPid(): number | null {
+  const pidPath = getVoiceDaemonPidPath()
+  if (!existsSync(pidPath)) {
+    return null
+  }
+  try {
+    const pidStr = readFileSync(pidPath, "utf-8").trim()
+    const pid = parseInt(pidStr, 10)
+    if (isNaN(pid) || pid <= 0) {
+      return null
+    }
+    return pid
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Check if a process with the given PID is running
+ * @param pid - Process ID to check
+ * @returns true if process is running, false otherwise
+ */
+function isProcessRunning(pid: number): boolean {
+  try {
+    // Sending signal 0 doesn't kill the process, just checks if it exists
+    process.kill(pid, 0)
+    return true
+  } catch (error) {
+    return false
+  }
+}
+
+/**
+ * Get daemon uptime if running
+ * @returns Uptime string or null if not running
+ */
+function getDaemonUptime(): string | null {
+  const pidPath = getVoiceDaemonPidPath()
+  if (!existsSync(pidPath)) {
+    return null
+  }
+  try {
+    const stats = statSync(pidPath)
+    const startTime = stats.mtime.getTime()
+    const uptime = Date.now() - startTime
+
+    // Format uptime
+    const seconds = Math.floor(uptime / 1000) % 60
+    const minutes = Math.floor(uptime / (1000 * 60)) % 60
+    const hours = Math.floor(uptime / (1000 * 60 * 60)) % 24
+    const days = Math.floor(uptime / (1000 * 60 * 60 * 24))
+
+    if (days > 0) {
+      return `${days}d ${hours}h ${minutes}m`
+    } else if (hours > 0) {
+      return `${hours}h ${minutes}m ${seconds}s`
+    } else if (minutes > 0) {
+      return `${minutes}m ${seconds}s`
+    } else {
+      return `${seconds}s`
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Daemon Start Command - Launch voice hotkey listener in background
+ *
+ * Spawns a detached child process running the hotkey listener that survives
+ * terminal close. PID is stored in ~/.jfl/voice-daemon.pid
+ */
+export async function daemonStartCommand(options: { mode?: HotkeyMode } = {}): Promise<void> {
+  // Check platform - daemon only supported on macOS for now
+  if (platform() !== "darwin") {
+    const error = new VoiceError(VoiceErrorType.PLATFORM_NOT_SUPPORTED)
+    handleVoiceError(error)
+    return
+  }
+
+  console.log(chalk.bold("\n🎤 Voice Daemon\n"))
+
+  // Check if daemon is already running
+  const existingPid = readDaemonPid()
+  if (existingPid && isProcessRunning(existingPid)) {
+    console.log(chalk.yellow("  Daemon is already running."))
+    console.log(chalk.gray(`  PID: ${existingPid}`))
+    console.log(chalk.gray(`  Uptime: ${getDaemonUptime()}`))
+    console.log()
+    console.log(chalk.gray("  Use 'jfl voice daemon stop' to stop it."))
+    console.log(chalk.gray("  Use 'jfl voice daemon status' to check status."))
+    console.log()
+    return
+  }
+
+  // Check Accessibility permission first
+  console.log(chalk.gray("  Checking Accessibility permission..."))
+  if (!checkAccessibilityPermission()) {
+    console.log()
+    const error = new VoiceError(VoiceErrorType.ACCESSIBILITY_NOT_GRANTED)
+    handleVoiceError(error)
+
+    console.log(chalk.cyan("  Opening System Settings..."))
+    openAccessibilitySettings()
+
+    console.log()
+    console.log(chalk.yellow("  After granting permission:"))
+    console.log(chalk.gray("    1. Add your terminal app to Accessibility"))
+    console.log(chalk.gray("    2. Restart your terminal"))
+    console.log(chalk.gray("    3. Run 'jfl voice daemon start' again"))
+    console.log()
+    return
+  }
+  console.log(chalk.green("  ✓ Accessibility permission granted"))
+
+  // Check other prerequisites (server, auth)
+  const serverError = checkServerRunning()
+  if (serverError) {
+    handleVoiceError(serverError)
+    return
+  }
+
+  const authError = checkAuthToken()
+  if (authError) {
+    handleVoiceError(authError)
+    return
+  }
+
+  console.log(chalk.gray("  Starting daemon..."))
+
+  // Get the path to the current executable (jfl CLI)
+  const jflPath = process.argv[1]
+  const nodePath = process.argv[0]
+
+  // Build the command arguments
+  const args = ["voice", "hotkey"]
+  if (options.mode) {
+    args.push("--mode", options.mode)
+  }
+
+  // Spawn detached process
+  const logPath = getVoiceDaemonLogPath()
+  const pidPath = getVoiceDaemonPidPath()
+
+  ensureDirectories()
+
+  // Create log file for daemon output
+  const logFd = require("fs").openSync(logPath, "a")
+
+  const child = spawn(nodePath, [jflPath, ...args], {
+    detached: true,
+    stdio: ["ignore", logFd, logFd],
+    env: {
+      ...process.env,
+      JFL_VOICE_DAEMON: "1", // Mark this as daemon mode
+    },
+  })
+
+  // Write PID to file
+  if (child.pid) {
+    writeFileSync(pidPath, child.pid.toString(), { mode: 0o644 })
+
+    // Unref so parent can exit independently
+    child.unref()
+
+    // Close the log file descriptor in the parent
+    require("fs").closeSync(logFd)
+
+    // Give it a moment to start and check if it's running
+    await new Promise(resolve => setTimeout(resolve, 500))
+
+    if (isProcessRunning(child.pid)) {
+      console.log(chalk.green("\n  ✓ Daemon started successfully!"))
+      console.log(chalk.gray(`  PID: ${child.pid}`))
+      console.log(chalk.gray(`  Log: ${logPath}`))
+      console.log()
+      console.log(chalk.cyan("  Hotkey: Ctrl+Shift+Space"))
+      console.log(chalk.gray("  The daemon will continue running after you close this terminal."))
+      console.log()
+      console.log(chalk.gray("  Commands:"))
+      console.log(chalk.gray("    jfl voice daemon status   Check daemon status"))
+      console.log(chalk.gray("    jfl voice daemon stop     Stop the daemon"))
+      console.log()
+    } else {
+      // Daemon may have exited immediately - check log for errors
+      console.log(chalk.red("\n  ✗ Daemon failed to start"))
+      console.log(chalk.gray(`  Check log for details: ${logPath}`))
+      // Clean up PID file
+      try {
+        unlinkSync(pidPath)
+      } catch {}
+      console.log()
+    }
+  } else {
+    require("fs").closeSync(logFd)
+    console.log(chalk.red("\n  ✗ Failed to spawn daemon process"))
+    console.log()
+  }
+}
+
+/**
+ * Daemon Stop Command - Stop the voice daemon gracefully
+ *
+ * Reads PID from ~/.jfl/voice-daemon.pid and sends SIGTERM
+ */
+export async function daemonStopCommand(): Promise<void> {
+  console.log(chalk.bold("\n🎤 Voice Daemon\n"))
+
+  const pid = readDaemonPid()
+  const pidPath = getVoiceDaemonPidPath()
+
+  if (!pid) {
+    console.log(chalk.yellow("  Daemon is not running (no PID file)."))
+    console.log()
+    return
+  }
+
+  if (!isProcessRunning(pid)) {
+    console.log(chalk.yellow("  Daemon is not running (stale PID file)."))
+    console.log(chalk.gray("  Cleaning up PID file..."))
+    try {
+      unlinkSync(pidPath)
+    } catch {}
+    console.log(chalk.green("  ✓ Cleaned up"))
+    console.log()
+    return
+  }
+
+  console.log(chalk.gray(`  Stopping daemon (PID: ${pid})...`))
+
+  try {
+    // Send SIGTERM for graceful shutdown
+    process.kill(pid, "SIGTERM")
+
+    // Wait for process to stop (up to 5 seconds)
+    let stopped = false
+    for (let i = 0; i < 50; i++) {
+      await new Promise(resolve => setTimeout(resolve, 100))
+      if (!isProcessRunning(pid)) {
+        stopped = true
+        break
+      }
+    }
+
+    if (stopped) {
+      console.log(chalk.green("  ✓ Daemon stopped successfully"))
+      // Clean up PID file
+      try {
+        unlinkSync(pidPath)
+      } catch {}
+    } else {
+      console.log(chalk.yellow("  Daemon did not stop gracefully, sending SIGKILL..."))
+      try {
+        process.kill(pid, "SIGKILL")
+        await new Promise(resolve => setTimeout(resolve, 500))
+        console.log(chalk.green("  ✓ Daemon killed"))
+        try {
+          unlinkSync(pidPath)
+        } catch {}
+      } catch (error) {
+        console.log(chalk.red("  ✗ Failed to kill daemon"))
+        console.log(chalk.gray(`  You may need to manually kill PID ${pid}`))
+      }
+    }
+  } catch (error) {
+    console.log(chalk.red("  ✗ Failed to stop daemon"))
+    if (error instanceof Error) {
+      console.log(chalk.gray(`  ${error.message}`))
+    }
+    console.log(chalk.gray(`  You may need to manually kill PID ${pid}`))
+  }
+
+  console.log()
+}
+
+/**
+ * Daemon Status Command - Show daemon running status
+ *
+ * Checks if daemon is running based on PID file and process existence
+ */
+export async function daemonStatusCommand(): Promise<void> {
+  console.log(chalk.bold("\n🎤 Voice Daemon Status\n"))
+
+  const pid = readDaemonPid()
+  const pidPath = getVoiceDaemonPidPath()
+  const logPath = getVoiceDaemonLogPath()
+
+  if (!pid) {
+    console.log(chalk.yellow("  Status: stopped"))
+    console.log(chalk.gray("  (no PID file found)"))
+    console.log()
+    console.log(chalk.gray("  Start with: jfl voice daemon start"))
+    console.log()
+    return
+  }
+
+  if (!isProcessRunning(pid)) {
+    console.log(chalk.yellow("  Status: stopped (stale)"))
+    console.log(chalk.gray(`  PID file exists but process ${pid} is not running`))
+    console.log()
+    console.log(chalk.gray("  Cleaning up stale PID file..."))
+    try {
+      unlinkSync(pidPath)
+      console.log(chalk.green("  ✓ Cleaned up"))
+    } catch {}
+    console.log()
+    console.log(chalk.gray("  Start with: jfl voice daemon start"))
+    console.log()
+    return
+  }
+
+  // Daemon is running
+  const uptime = getDaemonUptime()
+
+  console.log(chalk.green("  Status: running"))
+  console.log(chalk.gray(`  PID: ${pid}`))
+  if (uptime) {
+    console.log(chalk.gray(`  Uptime: ${uptime}`))
+  }
+  console.log(chalk.gray(`  Log: ${logPath}`))
+  console.log()
+  console.log(chalk.cyan("  Hotkey: Ctrl+Shift+Space"))
+  console.log()
+  console.log(chalk.gray("  Commands:"))
+  console.log(chalk.gray("    jfl voice daemon stop   Stop the daemon"))
+  console.log()
+
+  // Show last few lines of log if it exists
+  if (existsSync(logPath)) {
+    try {
+      const logContent = readFileSync(logPath, "utf-8")
+      const lines = logContent.trim().split("\n")
+      const lastLines = lines.slice(-5)
+      if (lastLines.length > 0 && lastLines[0]) {
+        console.log(chalk.gray("  Recent log:"))
+        for (const line of lastLines) {
+          console.log(chalk.gray(`    ${line.substring(0, 80)}`))
+        }
+        console.log()
+      }
+    } catch {}
+  }
+}
+
+/**
+ * Hotkey Command - Start global hotkey listener
+ *
+ * Listens for Ctrl+Shift+Space globally (even when other apps have focus).
+ * Supports multiple modes:
+ * - auto: Smart detection - tap to toggle, or hold for hold-to-talk
+ * - tap: Tap to start/stop recording
+ * - hold: Hold to record, release to stop
+ * VS-010/VS-011: Supported on macOS, Linux (X11), and Windows.
+ * Requires Accessibility permission on macOS. On Linux Wayland, hotkeys are not supported.
+ */
+export async function hotkeyCommand(options: { device?: string; mode?: HotkeyMode } = {}): Promise<void> {
+  const currentPlatform = platform()
+
+  // VS-010: Check for Linux Wayland (not supported)
+  if (currentPlatform === "linux" && isWayland()) {
+    const error = new VoiceError(VoiceErrorType.WAYLAND_NOT_SUPPORTED)
+    handleVoiceError(error)
+    return
+  }
+
+  // Check platform - hotkey supported on macOS, Linux (X11), and Windows
+  if (currentPlatform !== "darwin" && currentPlatform !== "linux" && currentPlatform !== "win32") {
+    const error = new VoiceError(VoiceErrorType.PLATFORM_NOT_SUPPORTED)
+    handleVoiceError(error)
+    return
+  }
+
+  // Load hotkey config from voice.yaml, with command-line override
+  const voiceConfig = readVoiceConfig()
+  const hotkeyConfig: HotkeyConfig = voiceConfig?.hotkey || DEFAULT_HOTKEY_CONFIG
+  const securityConfig: SecurityConfig = voiceConfig?.security || DEFAULT_SECURITY_CONFIG
+  const activeMode: HotkeyMode = options.mode || hotkeyConfig.mode
+  const holdThreshold = hotkeyConfig.holdThreshold
+
+  console.log(chalk.bold("\n🎤 Voice Hotkey Mode\n"))
+  console.log(chalk.gray("  Global hotkey: Ctrl+Shift+Space"))
+
+  // Show mode-specific instructions
+  if (activeMode === "tap") {
+    console.log(chalk.gray("  Mode: tap-to-toggle"))
+    console.log(chalk.gray("  First tap starts recording, second tap stops.\n"))
+  } else if (activeMode === "hold") {
+    console.log(chalk.gray("  Mode: hold-to-talk"))
+    console.log(chalk.gray("  Hold to record, release to stop.\n"))
+  } else {
+    console.log(chalk.gray("  Mode: auto (smart detection)"))
+    console.log(chalk.gray(`  Quick tap (<${holdThreshold}ms): toggle recording`))
+    console.log(chalk.gray(`  Hold (>${holdThreshold}ms): hold-to-talk\n`))
+  }
+
+  // Check Accessibility/keyboard permission (platform-specific)
+  if (currentPlatform === "darwin") {
+    console.log(chalk.gray("  Checking Accessibility permission..."))
+  } else if (currentPlatform === "linux") {
+    console.log(chalk.gray("  Checking X11 environment..."))
+  } else if (currentPlatform === "win32") {
+    console.log(chalk.gray("  Checking keyboard access..."))
+  }
+
+  if (!checkAccessibilityPermission()) {
+    console.log()
+    if (currentPlatform === "darwin") {
+      const error = new VoiceError(VoiceErrorType.ACCESSIBILITY_NOT_GRANTED)
+      handleVoiceError(error)
+
+      console.log(chalk.cyan("  Opening System Settings..."))
+      openAccessibilitySettings()
+
+      console.log()
+      console.log(chalk.yellow("  After granting permission:"))
+      console.log(chalk.gray("    1. Add your terminal app to Accessibility"))
+      console.log(chalk.gray("    2. Restart your terminal"))
+      console.log(chalk.gray("    3. Run 'jfl voice hotkey' again"))
+    } else if (currentPlatform === "linux") {
+      // VS-010: Linux X11 requirements
+      console.log(chalk.red("  X11 environment not detected or xdotool not available."))
+      console.log()
+      console.log(chalk.yellow("  Requirements for Linux hotkey support:"))
+      console.log(chalk.gray("    1. Must be running an X11 session (not Wayland)"))
+      console.log(chalk.gray("    2. Install xdotool: sudo apt-get install xdotool"))
+      console.log(chalk.gray("    3. Run 'jfl voice hotkey' again"))
+      console.log()
+      console.log(chalk.gray("  To check your session type: echo $XDG_SESSION_TYPE"))
+    } else if (currentPlatform === "win32") {
+      // VS-011: Windows should work without special permissions
+      console.log(chalk.red("  Keyboard access check failed."))
+      console.log(chalk.gray("  This is unexpected on Windows. Please try restarting your terminal."))
+    }
+    console.log()
+    return
+  }
+
+  if (currentPlatform === "darwin") {
+    console.log(chalk.green("  ✓ Accessibility permission granted\n"))
+  } else if (currentPlatform === "linux") {
+    console.log(chalk.green("  ✓ X11 environment detected\n"))
+  } else if (currentPlatform === "win32") {
+    console.log(chalk.green("  ✓ Keyboard access available\n"))
+  }
+
+  // Check other prerequisites (server, auth, model)
+  const serverError = checkServerRunning()
+  if (serverError) {
+    handleVoiceError(serverError)
+    return
+  }
+
+  const authError = checkAuthToken()
+  if (authError) {
+    handleVoiceError(authError)
+    return
+  }
+
+  // Initialize keyboard listener
+  let keyboardListener: GlobalKeyboardListener
+  try {
+    keyboardListener = new GlobalKeyboardListener()
+  } catch (error) {
+    console.log(chalk.red("\n  Failed to initialize keyboard listener."))
+    if (currentPlatform === "darwin") {
+      console.log(chalk.gray("  This may be due to missing Accessibility permission."))
+      console.log()
+      openAccessibilitySettings()
+    } else if (currentPlatform === "linux") {
+      // VS-010: Linux-specific error guidance
+      console.log(chalk.gray("  On Linux X11, this requires the X11 display server."))
+      console.log(chalk.gray("  Ensure you are running an X11 session and not Wayland."))
+      console.log()
+      console.log(chalk.yellow("  To check your session type:"))
+      console.log(chalk.gray("    echo $XDG_SESSION_TYPE"))
+    } else if (currentPlatform === "win32") {
+      // VS-011: Windows-specific error guidance
+      console.log(chalk.gray("  On Windows, this should work without special permissions."))
+      console.log(chalk.gray("  Try running your terminal as Administrator if the issue persists."))
+    }
+    console.log()
+    return
+  }
+
+  // State management for hotkey
+  let isRecording = false
+  let recordingPromise: Promise<void> | null = null
+  let currentRecorder: AudioRecorder | null = null
+  let audioChunks: Buffer[] = []
+  let hasVoiceActivity = false
+  let silenceStartTime: number | null = null
+  let recordingStartTime: number | null = null
+  let recordingSpinner: Ora | null = null
+  let focusedAppAtStart: string | null = null // Track which app was focused when recording started
+
+  // VAD settings
+  const silenceThresholdDb = VAD_SILENCE_THRESHOLD_DB
+  const silenceDurationMs = VAD_SILENCE_DURATION_MS
+
+  // VS-SEC-3: Configurable max recording duration from security config
+  const maxDurationSecs = securityConfig.maxRecordingDuration
+  const warningThresholdSecs = Math.max(10, maxDurationSecs - 10) // Warning 10 seconds before limit
+  let warningShown = false // Track if warning has been displayed
+
+  // Helper function to start recording
+  const startRecording = async () => {
+    if (isRecording) return
+
+    // Capture the focused app before we start recording (VS-SEC-2)
+    focusedAppAtStart = getFocusedApp()
+    if (process.env.DEBUG && focusedAppAtStart) {
+      console.log(chalk.gray(`  [debug] Recording started in: ${focusedAppAtStart}`))
+    }
+
+    console.log(chalk.cyan("\n  Recording started... (press Ctrl+Shift+Space to stop)\n"))
+    isRecording = true
+    audioChunks = []
+    hasVoiceActivity = false
+    silenceStartTime = null
+    recordingStartTime = Date.now()
+    warningShown = false // VS-SEC-3: Reset warning flag for new recording
+
+    // VS-012: Reset waveform buffer for new recording
+    resetWaveformBuffer()
+    const useWaveform = supportsWaveform()
+
+    try {
+      currentRecorder = new AudioRecorder({
+        device: options.device,
+        sampleRate: 16000,
+      })
+    } catch (error) {
+      console.log(chalk.red("  Failed to initialize recorder"))
+      isRecording = false
+      return
+    }
+
+    recordingSpinner = ora({
+      text: chalk.cyan("Recording...") + chalk.gray(" (waiting for voice)"),
+      prefixText: "  ",
+      spinner: "dots",
+    })
+
+    // Set up recorder event handlers
+    currentRecorder.on("data", (chunk: Buffer) => {
+      audioChunks.push(chunk)
+
+      // Calculate peak level
+      const chunkPeak = calculatePeakAmplitude(chunk)
+      const peakDb = amplitudeToDb(chunkPeak)
+      const isSilent = peakDb < silenceThresholdDb
+
+      // VS-012: Add level to waveform buffer on every chunk
+      addToWaveformBuffer(peakDb)
+
+      // VS-012: Update spinner with waveform on every chunk
+      if (recordingSpinner && recordingStartTime) {
+        const elapsed = ((Date.now() - recordingStartTime) / 1000).toFixed(1)
+        if (useWaveform) {
+          const waveform = renderWaveform()
+          recordingSpinner.text = chalk.cyan("Recording") + chalk.gray(` ${waveform} (${elapsed}s)`)
+        }
+      }
+
+      if (!isSilent) {
+        hasVoiceActivity = true
+        silenceStartTime = null
+      } else if (hasVoiceActivity) {
+        if (silenceStartTime === null) {
+          silenceStartTime = Date.now()
+        } else {
+          const silenceDuration = Date.now() - silenceStartTime
+          if (silenceDuration >= silenceDurationMs) {
+            // Auto-stop on silence
+            stopRecording()
+          }
+        }
+      }
+
+      // Check max duration (VS-SEC-3)
+      if (recordingStartTime) {
+        const elapsed = (Date.now() - recordingStartTime) / 1000
+
+        // Show warning 10 seconds before limit
+        if (elapsed >= warningThresholdSecs && !warningShown) {
+          warningShown = true
+          const remaining = Math.ceil(maxDurationSecs - elapsed)
+          console.log(chalk.yellow(`\n  ⚠ Recording will stop in ${remaining} seconds`))
+        }
+
+        // Auto-stop at max duration
+        if (elapsed >= maxDurationSecs) {
+          console.log(chalk.yellow(`\n  ⚠ Maximum recording duration (${maxDurationSecs}s) reached`))
+          stopRecording()
+        }
+      }
+    })
+
+    currentRecorder.on("error", (error: Error) => {
+      console.log(chalk.red(`\n  Recording error: ${error.message}`))
+      isRecording = false
+    })
+
+    try {
+      await currentRecorder.start()
+      recordingSpinner.start()
+      // VS-UX-2: Show system recording indicator (notification on macOS)
+      showRecordingIndicator()
+    } catch (error) {
+      console.log(chalk.red("  Failed to start recording"))
+      isRecording = false
+    }
+  }
+
+  // Helper function to stop recording and transcribe
+  const stopRecording = async () => {
+    if (!isRecording || !currentRecorder) return
+
+    currentRecorder.stop()
+    isRecording = false
+
+    // Wait for recorder to fully stop
+    await new Promise<void>((resolve) => {
+      const checkStopped = () => {
+        if (!currentRecorder || currentRecorder.getState() === "idle" || currentRecorder.getState() === "error") {
+          resolve()
+        } else {
+          setTimeout(checkStopped, 50)
+        }
+      }
+      setTimeout(checkStopped, 100)
+    })
+
+    if (recordingSpinner) {
+      recordingSpinner.stop()
+      recordingSpinner = null
+    }
+
+    // Check if we have audio
+    const totalBytes = audioChunks.reduce((sum, chunk) => sum + chunk.length, 0)
+    if (totalBytes === 0 || !hasVoiceActivity) {
+      // VS-SEC-3: Zero audio buffers even on early return
+      zeroBuffers(audioChunks)
+      // VS-UX-2: Show stopped indicator when no audio
+      hideRecordingIndicator("stopped")
+      console.log(chalk.yellow("  No audio captured or no voice detected.\n"))
+      console.log(chalk.gray("  Press Ctrl+Shift+Space to try again, or Ctrl+C to quit.\n"))
+      return
+    }
+
+    // VS-UX-2: Show completed indicator when moving to transcription
+    hideRecordingIndicator("completed")
+
+    // Combine audio
+    const audioBuffer = Buffer.concat(audioChunks)
+    // VS-SEC-3: Zero the individual chunks immediately after combining
+    zeroBuffers(audioChunks)
+    const durationSecs = totalBytes / (16000 * 2)
+
+    console.log(chalk.gray(`\n  Recorded ${durationSecs.toFixed(1)}s of audio.`))
+    console.log(chalk.gray("  Transcribing...\n"))
+
+    // Transcribe
+    const transcribeSpinner = ora({
+      text: "Transcribing...",
+      prefixText: "  ",
+    }).start()
+
+    const authToken = readAuthToken()!
+    const socketPath = getVoiceSocketPath()
+
+    const client = new VoiceClient({
+      socketPath,
+      authToken,
+      maxReconnectAttempts: 1,
+    })
+
+    let transcription = ""
+    let transcriptionReceived = false
+    let transcriptionError: Error | null = null
+
+    client.onTranscript((text, isFinal) => {
+      if (isFinal) {
+        transcription = text
+        transcriptionReceived = true
+      }
+    })
+
+    client.onError((error) => {
+      transcriptionError = error
+    })
+
+    try {
+      await client.connect()
+      client.sendAudio(audioBuffer)
+      client.endAudio()
+
+      const timeout = 30000
+      const startTime = Date.now()
+
+      while (!transcriptionReceived && !transcriptionError) {
+        if (Date.now() - startTime > timeout) {
+          transcriptionError = new Error("Transcription timeout")
+          break
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+
+      client.disconnect()
+      // VS-SEC-3: Zero combined audio buffer immediately after transcription
+      zeroBuffer(audioBuffer)
+    } catch (error) {
+      client.disconnect()
+      // VS-SEC-3: Zero combined audio buffer on error
+      zeroBuffer(audioBuffer)
+      transcribeSpinner.fail("Transcription failed")
+      console.log(chalk.red(`  ${error instanceof Error ? error.message : String(error)}\n`))
+      console.log(chalk.gray("  Press Ctrl+Shift+Space to try again, or Ctrl+C to quit.\n"))
+      return
+    }
+
+    if (transcriptionError || !transcription || transcription.trim() === "") {
+      transcribeSpinner.fail("No transcription result")
+      console.log(chalk.gray("  Press Ctrl+Shift+Space to try again, or Ctrl+C to quit.\n"))
+      return
+    }
+
+    transcribeSpinner.succeed("Transcription complete!")
+
+    const trimmedTranscription = transcription.trim()
+
+    // VS-008: Preview transcript with configurable auto-send
+    const previewConfig = voiceConfig?.preview || DEFAULT_PREVIEW_CONFIG
+    const previewResult = await previewTranscript(trimmedTranscription, previewConfig.timeout)
+
+    if (previewResult.action === "cancel") {
+      console.log(chalk.yellow("  Cancelled."))
+      console.log(chalk.gray("  Press Ctrl+Shift+Space to record again, or Ctrl+C to quit.\n"))
+      return
+    }
+
+    // Use the final text (may have been edited by user)
+    const finalText = previewResult.text
+
+    // VS-SEC-2: Focus verification before paste
+    // Check if the same app is still focused
+    const currentFocusedApp = getFocusedApp()
+    const focusUnchanged = focusedAppAtStart && currentFocusedApp && focusedAppAtStart === currentFocusedApp
+
+    if (process.env.DEBUG) {
+      console.log(chalk.gray(`  [debug] Focus at start: ${focusedAppAtStart}`))
+      console.log(chalk.gray(`  [debug] Focus now: ${currentFocusedApp}`))
+      console.log(chalk.gray(`  [debug] Focus unchanged: ${focusUnchanged}`))
+    }
+
+    if (focusUnchanged) {
+      // VS-007: Same app focused - copy to clipboard and simulate paste
+      const copied = copyToClipboard(finalText)
+      if (copied) {
+        // Small delay to ensure clipboard is ready
+        await new Promise(resolve => setTimeout(resolve, 50))
+        const pasted = simulatePaste()
+        if (pasted) {
+          console.log(chalk.green(`\n  ✓ Pasted to ${currentFocusedApp}!`))
+          // VS-SEC-3: Schedule clipboard clear after successful paste
+          scheduleClipboardClear(securityConfig.clipboardClearDelay)
+          if (process.env.DEBUG) {
+            console.log(chalk.gray(`  [debug] Clipboard will be cleared in ${securityConfig.clipboardClearDelay}s`))
+          }
+        } else {
+          console.log(chalk.green("\n  ✓ Copied to clipboard!"))
+          console.log(chalk.yellow(`  ⚠ Could not auto-paste (${getPasteShortcut()}). Text is on clipboard.`))
+          // VS-SEC-3: Still schedule clipboard clear even if paste failed
+          scheduleClipboardClear(securityConfig.clipboardClearDelay)
+        }
+      } else {
+        console.log(chalk.yellow("\n  ⚠ Could not copy to clipboard"))
+        // Display result for manual copy
+        console.log()
+        console.log(chalk.bold("  Transcription:"))
+        console.log()
+        console.log(chalk.cyan(`  "${finalText}"`))
+      }
+    } else {
+      // Focus changed - show notification and don't auto-paste (security measure)
+      console.log()
+      console.log(chalk.yellow("  ⚠ Focus changed during recording"))
+      if (focusedAppAtStart && currentFocusedApp) {
+        console.log(chalk.gray(`    Started in: ${focusedAppAtStart}`))
+        console.log(chalk.gray(`    Now in: ${currentFocusedApp}`))
+      }
+
+      // Copy to clipboard anyway for user convenience
+      const copied = copyToClipboard(finalText)
+
+      // Show notification with transcription
+      const notified = showNotification(
+        "Voice Transcription",
+        finalText.length > 100
+          ? finalText.substring(0, 97) + "..."
+          : finalText
+      )
+
+      if (notified) {
+        console.log(chalk.cyan("\n  📋 Notification shown with transcription"))
+      }
+
+      if (copied) {
+        console.log(chalk.green(`  ✓ Copied to clipboard (${getPasteShortcut()} to paste manually)`))
+        // VS-SEC-3: Schedule clipboard clear after copy
+        scheduleClipboardClear(securityConfig.clipboardClearDelay)
+      }
+
+      // Display result
+      console.log()
+      console.log(chalk.bold("  Transcription:"))
+      console.log()
+      console.log(chalk.cyan(`  "${finalText}"`))
+    }
+
+    console.log()
+    console.log(chalk.gray("  Press Ctrl+Shift+Space to record again, or Ctrl+C to quit.\n"))
+  }
+
+  // Track modifier keys state
+  let ctrlPressed = false
+  let shiftPressed = false
+
+  // Hold-to-talk state tracking
+  let keyDownTime: number | null = null
+  let holdTimer: NodeJS.Timeout | null = null
+  let isInHoldMode = false // True when user has held key past threshold
+
+  // Clear hold timer
+  const clearHoldTimer = () => {
+    if (holdTimer) {
+      clearTimeout(holdTimer)
+      holdTimer = null
+    }
+  }
+
+  // Add keyboard listener
+  keyboardListener.addListener((event: IGlobalKeyEvent, isDown: IGlobalKeyDownMap) => {
+    // Update modifier key states
+    if (event.name === "LEFT CTRL" || event.name === "RIGHT CTRL") {
+      ctrlPressed = event.state === "DOWN"
+    }
+    if (event.name === "LEFT SHIFT" || event.name === "RIGHT SHIFT") {
+      shiftPressed = event.state === "DOWN"
+    }
+
+    // Check for Ctrl+Shift+Space
+    const isHotkeyCombo = event.name === "SPACE" && ctrlPressed && shiftPressed
+
+    if (!isHotkeyCombo) return
+
+    if (event.state === "DOWN") {
+      // Key pressed down
+      if (keyDownTime !== null) {
+        // Already tracking a press, ignore (debounce)
+        return
+      }
+
+      keyDownTime = Date.now()
+
+      if (activeMode === "tap") {
+        // Pure tap mode: toggle on keydown
+        if (isRecording) {
+          stopRecording()
+        } else {
+          startRecording()
+        }
+      } else if (activeMode === "hold") {
+        // Pure hold mode: start recording immediately on keydown
+        if (!isRecording) {
+          isInHoldMode = true
+          startRecording()
+        }
+      } else {
+        // Auto mode: wait for threshold to determine behavior
+        // Start a timer to enter hold mode
+        holdTimer = setTimeout(() => {
+          // Timer fired - we're in hold mode now
+          isInHoldMode = true
+          if (!isRecording) {
+            startRecording()
+          }
+        }, holdThreshold)
+      }
+    } else if (event.state === "UP") {
+      // Key released
+      const pressDuration = keyDownTime !== null ? Date.now() - keyDownTime : 0
+      keyDownTime = null
+      clearHoldTimer()
+
+      if (activeMode === "tap") {
+        // Pure tap mode: already handled on keydown, nothing to do on keyup
+        // Reset state
+        isInHoldMode = false
+      } else if (activeMode === "hold") {
+        // Pure hold mode: stop recording on keyup
+        if (isRecording) {
+          stopRecording()
+        }
+        isInHoldMode = false
+      } else {
+        // Auto mode: check if this was a tap or hold
+        if (isInHoldMode) {
+          // Was holding - stop recording on release
+          if (isRecording) {
+            stopRecording()
+          }
+          isInHoldMode = false
+        } else {
+          // Was a quick tap (released before threshold)
+          // Toggle recording
+          if (isRecording) {
+            stopRecording()
+          } else {
+            startRecording()
+          }
+        }
+      }
+    }
+  })
+
+  console.log(chalk.green("  ✓ Hotkey listener started"))
+  if (activeMode === "tap") {
+    console.log(chalk.gray("  Press Ctrl+Shift+Space to start/stop recording"))
+  } else if (activeMode === "hold") {
+    console.log(chalk.gray("  Hold Ctrl+Shift+Space to record, release to stop"))
+  } else {
+    console.log(chalk.gray("  Tap Ctrl+Shift+Space to toggle, or hold to talk"))
+  }
+  console.log(chalk.gray("  Press Ctrl+C to quit\n"))
+
+  // Handle Ctrl+C to exit
+  const cleanup = () => {
+    console.log(chalk.yellow("\n  Stopping hotkey listener...\n"))
+    clearHoldTimer()
+    keyboardListener.kill()
+    if (currentRecorder) {
+      currentRecorder.stop()
+    }
+    process.exit(0)
+  }
+
+  process.on("SIGINT", cleanup)
+  process.on("SIGTERM", cleanup)
+
+  // Keep the process running
+  await new Promise(() => {
+    // This promise never resolves - we run until Ctrl+C
+  })
+}
+
+// Helper functions used by hotkeyCommand (reference existing functions)
+// calculatePeakAmplitude is already defined elsewhere in this file
+// amplitudeToDb is already defined elsewhere in this file
+// copyToClipboard is already defined elsewhere in this file
+
 // Main voice command handler
 export async function voiceCommand(
   action?: string,
   subaction?: string,
   arg?: string,
-  options?: { force?: boolean, device?: string, duration?: number, help?: boolean }
+  options?: { force?: boolean, device?: string, duration?: number, help?: boolean, mode?: string }
 ): Promise<void> {
   // If no action, run the voice slash command (default behavior)
   if (!action) {
@@ -3385,6 +5202,51 @@ export async function voiceCommand(
 
   if (action === "setup") {
     await voiceSetupCommand()
+    return
+  }
+
+  if (action === "hotkey") {
+    // Validate mode option if provided
+    const validModes: HotkeyMode[] = ["auto", "tap", "hold"]
+    let mode: HotkeyMode | undefined
+    if (options?.mode) {
+      if (validModes.includes(options.mode as HotkeyMode)) {
+        mode = options.mode as HotkeyMode
+      } else {
+        console.log(chalk.red(`Invalid mode: ${options.mode}`))
+        console.log(chalk.gray("Valid modes: auto, tap, hold"))
+        return
+      }
+    }
+    await hotkeyCommand({ device: options?.device, mode })
+    return
+  }
+
+  // VS-013: Daemon commands for background hotkey listening
+  if (action === "daemon") {
+    // Validate mode option if provided
+    const validModes: HotkeyMode[] = ["auto", "tap", "hold"]
+    let mode: HotkeyMode | undefined
+    if (options?.mode) {
+      if (validModes.includes(options.mode as HotkeyMode)) {
+        mode = options.mode as HotkeyMode
+      } else {
+        console.log(chalk.red(`Invalid mode: ${options.mode}`))
+        console.log(chalk.gray("Valid modes: auto, tap, hold"))
+        return
+      }
+    }
+
+    if (!subaction || subaction === "status") {
+      await daemonStatusCommand()
+    } else if (subaction === "start") {
+      await daemonStartCommand({ mode })
+    } else if (subaction === "stop") {
+      await daemonStopCommand()
+    } else {
+      console.log(chalk.red(`Unknown daemon command: ${subaction}`))
+      console.log(chalk.gray("\nAvailable commands: start, stop, status"))
+    }
     return
   }
 

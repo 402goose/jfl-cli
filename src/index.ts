@@ -249,6 +249,52 @@ voice
     await voiceCommand("help")
   })
 
+voice
+  .command("hotkey")
+  .description("Start global hotkey listener (macOS only)")
+  .option("-d, --device <id>", "Device ID to use")
+  .option("-m, --mode <mode>", "Hotkey mode: auto, tap, or hold (default: auto)")
+  .action(async (options) => {
+    await voiceCommand("hotkey", undefined, undefined, {
+      device: options.device,
+      mode: options.mode,
+    })
+  })
+
+// VS-013: Daemon commands for background hotkey listening
+const daemon = voice
+  .command("daemon")
+  .description("Background hotkey listener daemon (macOS only)")
+
+daemon
+  .command("start")
+  .description("Start hotkey listener in background")
+  .option("-m, --mode <mode>", "Hotkey mode: auto, tap, or hold (default: auto)")
+  .action(async (options) => {
+    await voiceCommand("daemon", "start", undefined, {
+      mode: options.mode,
+    })
+  })
+
+daemon
+  .command("stop")
+  .description("Stop the background daemon")
+  .action(async () => {
+    await voiceCommand("daemon", "stop")
+  })
+
+daemon
+  .command("status")
+  .description("Show daemon status and uptime")
+  .action(async () => {
+    await voiceCommand("daemon", "status")
+  })
+
+// Default daemon action (show status)
+daemon.action(async () => {
+  await voiceCommand("daemon", "status")
+})
+
 // Running `jfl voice` without subcommand starts recording with VAD
 voice
   .option("-d, --device <id>", "Device ID to use")
