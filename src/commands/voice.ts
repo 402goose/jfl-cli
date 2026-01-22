@@ -1,7 +1,7 @@
 import chalk from "chalk"
 import ora, { Ora } from "ora"
 import inquirer from "inquirer"
-import { existsSync, mkdirSync, statSync, createWriteStream, unlinkSync, renameSync, readFileSync, writeFileSync } from "fs"
+import { existsSync, mkdirSync, statSync, createWriteStream, unlinkSync, renameSync, readFileSync, writeFileSync, openSync, closeSync } from "fs"
 import { join } from "path"
 import { homedir, platform } from "os"
 import { createHash } from "crypto"
@@ -4315,7 +4315,7 @@ export async function daemonStartCommand(options: { mode?: HotkeyMode } = {}): P
   ensureDirectories()
 
   // Create log file for daemon output
-  const logFd = require("fs").openSync(logPath, "a")
+  const logFd = openSync(logPath, "a")
 
   const child = spawn(nodePath, [jflPath, ...args], {
     detached: true,
@@ -4334,7 +4334,7 @@ export async function daemonStartCommand(options: { mode?: HotkeyMode } = {}): P
     child.unref()
 
     // Close the log file descriptor in the parent
-    require("fs").closeSync(logFd)
+    closeSync(logFd)
 
     // Give it a moment to start and check if it's running
     await new Promise(resolve => setTimeout(resolve, 500))
@@ -4362,7 +4362,7 @@ export async function daemonStartCommand(options: { mode?: HotkeyMode } = {}): P
       console.log()
     }
   } else {
-    require("fs").closeSync(logFd)
+    closeSync(logFd)
     console.log(chalk.red("\n  ✗ Failed to spawn daemon process"))
     console.log()
   }
