@@ -17,7 +17,7 @@ import { hudCommand } from "./commands/hud.js"
 import { sessionCommand } from "./commands/session.js"
 import { feedbackCommand } from "./commands/feedback.js"
 import { updateCommand } from "./commands/update.js"
-import { voiceCommand } from "./commands/voice.js"
+import { voiceCommand, voiceServerConfigCommand } from "./commands/voice.js"
 import {
   listSkillsCommand,
   installSkillCommand,
@@ -195,6 +195,44 @@ voice
   .action(async (action, name, options) => {
     await voiceCommand("model", action, name, options)
   })
+
+const voiceServer = voice.command("server").description("Manage whisper server")
+
+voiceServer
+  .command("start")
+  .description("Start the whisper server")
+  .option("-b, --background", "Run server in background (daemon mode)")
+  .action(async (options) => {
+    await voiceCommand("server", "start", undefined, options)
+  })
+
+voiceServer
+  .command("stop")
+  .description("Stop the whisper server")
+  .action(async () => {
+    await voiceCommand("server", "stop")
+  })
+
+voiceServer
+  .command("status")
+  .description("Show whisper server status")
+  .action(async () => {
+    await voiceCommand("server", "status")
+  })
+
+voiceServer
+  .command("config")
+  .description("Show or update server configuration")
+  .argument("[key]", "Config key to set (model, port, host, contexts, threads, etc.)")
+  .argument("[value]", "Value to set")
+  .action(async (key, value) => {
+    await voiceServerConfigCommand(key, value)
+  })
+
+// Default action for `jfl voice server` without subcommand
+voiceServer.action(async () => {
+  await voiceCommand("server", "status")
+})
 
 // Allow running `jfl voice` without subcommand for help
 voice.action(async () => {
