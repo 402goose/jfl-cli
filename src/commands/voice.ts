@@ -1,10 +1,10 @@
 import chalk from "chalk"
 import ora from "ora"
 import inquirer from "inquirer"
-import { existsSync, mkdirSync, statSync, createWriteStream, unlinkSync, renameSync, readFileSync, writeFileSync } from "fs"
+import { existsSync, mkdirSync, statSync, createWriteStream, unlinkSync, renameSync, readFileSync, writeFileSync, chmodSync } from "fs"
 import { join } from "path"
 import { homedir } from "os"
-import { createHash } from "crypto"
+import { createHash, randomBytes } from "crypto"
 import https from "https"
 import http from "http"
 
@@ -84,6 +84,76 @@ function getModelsDir(): string {
 // Get voice config path
 function getVoiceConfigPath(): string {
   return join(getJflDir(), "voice.yaml")
+}
+
+// Get voice server token path
+function getTokenPath(): string {
+  return join(getJflDir(), "voice-server.token")
+}
+
+// Get voice socket path
+function getSocketPath(): string {
+  return join(getJflDir(), "voice.sock")
+}
+
+// Generate a cryptographically secure 32-byte token
+function generateAuthToken(): string {
+  return randomBytes(32).toString("hex")
+}
+
+// Read auth token from file
+export function readAuthToken(): string | null {
+  const tokenPath = getTokenPath()
+  if (!existsSync(tokenPath)) {
+    return null
+  }
+
+  try {
+    const content = readFileSync(tokenPath, "utf-8")
+    return content.trim()
+  } catch {
+    return null
+  }
+}
+
+// Write auth token to file with restricted permissions (0600)
+function writeAuthToken(token: string): boolean {
+  const tokenPath = getTokenPath()
+  ensureDirectories()
+
+  try {
+    writeFileSync(tokenPath, token + "\n", { mode: 0o600 })
+    // Ensure permissions are correct (in case file existed with different perms)
+    chmodSync(tokenPath, 0o600)
+    return true
+  } catch {
+    return false
+  }
+}
+
+// Ensure auth token exists, generate if needed
+export function ensureAuthToken(): string | null {
+  // Try to read existing token
+  const existing = readAuthToken()
+  if (existing) {
+    return existing
+  }
+
+  // Generate new token
+  const token = generateAuthToken()
+  if (!writeAuthToken(token)) {
+    return null
+  }
+
+  return token
+}
+
+// Get connection info for clients
+export function getVoiceConnectionInfo(): { socketPath: string; token: string | null } {
+  return {
+    socketPath: getSocketPath(),
+    token: readAuthToken(),
+  }
 }
 
 // Ensure directories exist
