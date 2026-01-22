@@ -260,16 +260,18 @@ async function promptChromeMode(cli: DetectedCLI): Promise<boolean> {
 }
 
 function showBanner() {
+  // Modular blocks with gaps - like the reference image
+  const c = chalk.cyan
   const banner = `
-${chalk.bold.cyan("     ██╗███████╗██╗     ")}
-${chalk.bold.cyan("     ██║██╔════╝██║     ")}
-${chalk.bold.cyan("     ██║█████╗  ██║     ")}
-${chalk.bold.cyan("██   ██║██╔══╝  ██║     ")}
-${chalk.bold.cyan("╚█████╔╝██║     ███████╗")}
-${chalk.bold.cyan(" ╚════╝ ╚═╝     ╚══════╝")}
+${c("      ██")}    ${c("████████")}    ${c("██")}
+${c("      ██")}    ${c("██")}          ${c("██")}
+${c("      ██")}    ${c("██████")}      ${c("██")}
+${c("      ██")}    ${c("██")}          ${c("██")}
+${c("██    ██")}    ${c("██")}          ${c("██")}
+${c("████████")}    ${c("██")}          ${c("████████")}
 
 ${chalk.bold("    JUST F*CKING LAUNCH")}
-${chalk.gray("Your context layer for building and launching.")}
+${chalk.gray("  Your context layer for building.")}
 `
   console.log(banner)
 }
