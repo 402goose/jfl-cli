@@ -196,10 +196,67 @@ voice
     await voiceCommand("model", action, name, options)
   })
 
-// Allow running `jfl voice` without subcommand for help
-voice.action(async () => {
-  await voiceCommand()
-})
+voice
+  .command("devices")
+  .description("List audio input devices")
+  .action(async () => {
+    await voiceCommand("devices")
+  })
+
+voice
+  .command("test")
+  .description("Test voice input (record 3s and transcribe)")
+  .option("-d, --device <id>", "Device ID to use")
+  .action(async (options) => {
+    await voiceCommand("test", undefined, undefined, {
+      device: options.device,
+    })
+  })
+
+voice
+  .command("recording")
+  .description("Test recording only (no transcription)")
+  .option("-d, --device <id>", "Device ID to use")
+  .option("-t, --duration <seconds>", "Recording duration in seconds", "5")
+  .action(async (options) => {
+    await voiceCommand("recording", undefined, undefined, {
+      device: options.device,
+      duration: parseInt(options.duration, 10),
+    })
+  })
+
+voice
+  .command("setup")
+  .description("First-time setup wizard for voice input")
+  .action(async () => {
+    await voiceCommand("setup")
+  })
+
+voice
+  .command("record")
+  .description("Record voice with VAD (same as running jfl voice)")
+  .option("-d, --device <id>", "Device ID to use")
+  .action(async (options) => {
+    await voiceCommand("record", undefined, undefined, {
+      device: options.device,
+    })
+  })
+
+voice
+  .command("help")
+  .description("Show voice command help")
+  .action(async () => {
+    await voiceCommand("help")
+  })
+
+// Running `jfl voice` without subcommand starts recording with VAD
+voice
+  .option("-d, --device <id>", "Device ID to use")
+  .action(async (options) => {
+    await voiceCommand(undefined, undefined, undefined, {
+      device: options.device,
+    })
+  })
 
 // ============================================================================
 // SKILL SHORTCUTS (work offline)
