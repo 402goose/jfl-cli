@@ -3630,6 +3630,12 @@ async function previewTranscript(
     const stdin = process.stdin
     const stdout = process.stdout
 
+    // If stdin is not a TTY (e.g., running as daemon), skip preview and auto-send
+    if (!stdin.isTTY) {
+      resolve({ action: "send", text: transcript })
+      return
+    }
+
     // Store original mode to restore later
     const wasRaw = stdin.isRaw
     stdin.setRawMode(true)
