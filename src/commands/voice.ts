@@ -4997,7 +4997,7 @@ export async function hotkeyCommand(options: { device?: string; mode?: HotkeyMod
       await client.connect()
       client.sendAudio(audioBuffer)
       // Wait for audio to be sent before signaling end
-      await new Promise(resolve => setTimeout(resolve, 200))
+      await new Promise(resolve => setTimeout(resolve, 300))
       client.endAudio()
 
       const timeout = 10000 // Reduced from 30s
