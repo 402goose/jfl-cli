@@ -948,13 +948,46 @@ export class VoiceClient extends EventEmitter {
       throw new Error("WebSocket is null")
     }
 
-    if (process.env.JFL_VOICE_DEBUG) {
-      console.log(`[VoiceClient] sendAudio: ${buffer.length} bytes`)
+    // WORKAROUND: Node.js 25 + ws library bug
+    // Buffer.concat() creates buffers that don't send properly via WebSocket
+    // Writing to a temp file and reading back creates a buffer that works
+    // This is a known issue with certain Buffer pooling/sharing behaviors
+    const tempPath = `/tmp/.voice-send-${Date.now()}.tmp`
+    try {
+      if (process.env.JFL_VOICE_DEBUG) {
+        console.log(`[VoiceClient] Writing ${buffer.length} bytes to temp file: ${tempPath}`)
+      }
+      writeFileSync(tempPath, buffer)
+      const sendBuffer = readFileSync(tempPath)
+      unlinkSync(tempPath)
+
+      if (process.env.JFL_VOICE_DEBUG) {
+        console.log(`[VoiceClient] sendAudio: ${sendBuffer.length} bytes (via temp file)`)
+        console.log(`[VoiceClient] Buffer.isBuffer: ${Buffer.isBuffer(sendBuffer)}`)
+        console.log(`[VoiceClient] ws.readyState: ${this.ws.readyState} (OPEN=1)`)
+        console.log(`[VoiceClient] ws.bufferedAmount before: ${this.ws.bufferedAmount}`)
+      }
+
+      // Send binary audio data - Buffer is automatically sent as binary
+      // Use callback to catch send errors
+      this.ws.send(sendBuffer, (err) => {
+        if (err) {
+          console.error(`[VoiceClient] send error:`, err)
+        } else if (process.env.JFL_VOICE_DEBUG) {
+          console.log(`[VoiceClient] send callback: success`)
+          console.log(`[VoiceClient] ws.bufferedAmount after: ${this.ws?.bufferedAmount}`)
+        }
+      })
+    } catch (e) {
+      console.error(`[VoiceClient] Error in temp file workaround:`, e)
+      // Clean up temp file on error
+      try { unlinkSync(tempPath) } catch {}
+      throw e
     }
 
-    // Send binary audio data - Buffer is automatically sent as binary
-    // Note: Do NOT use callback or { binary: true } - they cause issues
-    this.ws.send(buffer)
+    if (process.env.JFL_VOICE_DEBUG) {
+      console.log(`[VoiceClient] ws.bufferedAmount after: ${this.ws.bufferedAmount}`)
+    }
   }
 
   /**
@@ -1029,7 +1062,7 @@ export class VoiceClient extends EventEmitter {
 
       // Debug logging
       if (process.env.JFL_VOICE_DEBUG) {
-        console.log(`[VoiceClient] Received: ${message.type}`)
+        console.log(`[VoiceClient] Received: ${message.type}`, JSON.stringify(message))
       }
 
       if (message.type === "error") {
@@ -1546,21 +1579,24 @@ export class AudioRecorder extends EventEmitter {
       const chunkSize = 3200 // 100ms of 16kHz 16-bit mono audio
 
       stdout.on("data", (chunk: Buffer) => {
-        // Accumulate data
-        audioBuffer = Buffer.concat([audioBuffer, chunk])
+        // Accumulate data - ensure chunk is a proper Buffer (Node may emit Uint8Array)
+        audioBuffer = Buffer.concat([audioBuffer, Buffer.from(chunk)])
 
         // Emit complete chunks
         while (audioBuffer.length >= chunkSize) {
-          const emitChunk = audioBuffer.subarray(0, chunkSize)
+          // IMPORTANT: Use Buffer.from() to create an independent copy, not subarray()
+          // subarray() creates a view that shares the underlying ArrayBuffer
+          // which can cause issues when the buffer is sent over WebSocket
+          const emitChunk = Buffer.from(audioBuffer.subarray(0, chunkSize))
           audioBuffer = audioBuffer.subarray(chunkSize)
           this.emit("data", emitChunk)
         }
       })
 
       stdout.on("end", () => {
-        // Emit any remaining data
+        // Emit any remaining data (as a copy)
         if (audioBuffer.length > 0) {
-          this.emit("data", audioBuffer)
+          this.emit("data", Buffer.from(audioBuffer))
         }
         this.handleProcessEnd()
       })
@@ -2160,7 +2196,50 @@ export async function voiceTestCommand(options?: { device?: string }): Promise<v
   }
 
   // Combine all audio chunks
-  const audioBuffer = Buffer.concat(audioChunks)
+  let audioBuffer = Buffer.concat(audioChunks)
+
+  // Normalize audio to improve transcription quality
+  // Many microphones record at very low levels which causes blank transcriptions
+  // We normalize to target RMS of ~5000 (moderate volume)
+  const samples = audioBuffer.length / 2
+  let sumSquares = 0
+  let maxSample = 0
+  for (let i = 0; i < samples; i++) {
+    const sample = audioBuffer.readInt16LE(i * 2)
+    sumSquares += sample * sample
+    if (Math.abs(sample) > maxSample) maxSample = Math.abs(sample)
+  }
+  const rms = Math.sqrt(sumSquares / samples)
+
+  // Target RMS of 3000 for good whisper recognition
+  // (not too high to avoid distortion, but enough for clear speech)
+  const targetRms = 3000
+  if (rms > 0 && rms < targetRms) {
+    // Calculate gain needed
+    // Allow some clipping for the loudest peaks - it's usually ok for speech
+    const maxGain = 32767 / (maxSample || 1)
+    const desiredGain = targetRms / rms
+    // Allow up to 3x the clipping-safe gain, accepting some peak clipping
+    const gain = Math.min(desiredGain, maxGain * 3)
+
+    if (gain > 1.2) { // Only amplify if gain is meaningful
+      const amplified = Buffer.alloc(audioBuffer.length)
+      for (let i = 0; i < samples; i++) {
+        let sample = audioBuffer.readInt16LE(i * 2)
+        sample = Math.round(Math.max(-32768, Math.min(32767, sample * gain)))
+        amplified.writeInt16LE(sample, i * 2)
+      }
+      audioBuffer = amplified
+
+      if (process.env.JFL_VOICE_DEBUG) {
+        console.log(`[Voice] Audio normalized: gain=${gain.toFixed(2)}x, rms=${rms.toFixed(0)}->${(rms * gain).toFixed(0)}`)
+      }
+    } else if (process.env.JFL_VOICE_DEBUG) {
+      console.log(`[Voice] No normalization needed: rms=${rms.toFixed(0)}, max=${maxSample}`)
+    }
+  } else if (process.env.JFL_VOICE_DEBUG) {
+    console.log(`[Voice] Audio already loud enough: rms=${rms.toFixed(0)}`)
+  }
 
   // Step 5: Connect to whisper server and send audio
   console.log(chalk.gray("  Transcribing..."))
@@ -2176,8 +2255,12 @@ export async function voiceTestCommand(options?: { device?: string }): Promise<v
   let transcriptionError: Error | null = null
 
   client.onTranscript((text, isFinal) => {
-    if (isFinal) {
+    // Store the latest transcription (partial or final)
+    // Filter out blank audio markers
+    if (text && text.trim() && !text.includes("[BLANK_AUDIO]")) {
       transcription = text
+    }
+    if (isFinal) {
       transcriptionReceived = true
     }
   })
@@ -2205,6 +2288,10 @@ export async function voiceTestCommand(options?: { device?: string }): Promise<v
 
     while (!transcriptionReceived && !transcriptionError) {
       if (Date.now() - startTime > timeout) {
+        // If we have a partial transcription, use it instead of erroring
+        if (transcription) {
+          break
+        }
         transcriptionError = new VoiceError(VoiceErrorType.TIMEOUT, {
           context: { timeout, operation: "transcription" },
           recoverable: true,

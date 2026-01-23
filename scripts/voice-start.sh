@@ -67,9 +67,11 @@ if [ ! -f "$PID_FILE" ]; then
     echo -e "${GRAY}  Starting whisper server...${NC}"
 
     # Start server in background
+    # Note: VAD threshold lowered to 0.05 for better sensitivity to quiet speech
     "$WHISPER_SERVER" \
         --model "$WHISPER_MODEL" \
         --vad-model "$VAD_MODEL" \
+        --vad-threshold 0.05 \
         --port 9090 \
         --host 127.0.0.1 \
         --token "$TOKEN" \
