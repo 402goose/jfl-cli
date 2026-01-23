@@ -4997,15 +4997,15 @@ export async function hotkeyCommand(options: { device?: string; mode?: HotkeyMod
       await client.connect()
       client.sendAudio(audioBuffer)
       // Wait for audio to be sent before signaling end
-      await new Promise(resolve => setTimeout(resolve, 500))
+      await new Promise(resolve => setTimeout(resolve, 200))
       client.endAudio()
 
       const timeout = 10000 // Reduced from 30s
       const startTime = Date.now()
 
       while (!transcriptionReceived && !transcriptionError) {
-        // If we have a transcription, accept it even without final flag (wait 2s for final)
-        if (transcription && Date.now() - startTime > 2000) {
+        // If we have a transcription, accept it even without final flag (wait 1s for final)
+        if (transcription && Date.now() - startTime > 1000) {
           break
         }
         if (Date.now() - startTime > timeout) {
