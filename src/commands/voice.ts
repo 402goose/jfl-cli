@@ -371,13 +371,29 @@ export function createVoiceError(
 
 /**
  * Check if server is running and return appropriate error if not
+ * Checks both TCP port 9090 and Unix socket for backwards compatibility
  */
 export function checkServerRunning(): VoiceError | null {
-  const socketPath = getVoiceSocketPath()
-  if (!existsSync(socketPath)) {
-    return new VoiceError(VoiceErrorType.SERVER_NOT_RUNNING)
+  // Check if server PID file exists and process is running
+  const pidPath = join(getJflDir(), "voice-server.pid")
+  if (existsSync(pidPath)) {
+    try {
+      const pid = parseInt(readFileSync(pidPath, "utf-8").trim(), 10)
+      // Check if process is running by sending signal 0
+      process.kill(pid, 0)
+      return null // Server is running
+    } catch {
+      // PID file exists but process not running
+    }
   }
-  return null
+
+  // Fallback: check Unix socket for backwards compatibility
+  const socketPath = getVoiceSocketPath()
+  if (existsSync(socketPath)) {
+    return null
+  }
+
+  return new VoiceError(VoiceErrorType.SERVER_NOT_RUNNING)
 }
 
 /**
@@ -722,8 +738,10 @@ type ConnectionState = "disconnected" | "connecting" | "connected" | "reconnecti
 
 /** Options for VoiceClient */
 export interface VoiceClientOptions {
-  /** Path to the Unix socket (default: ~/.jfl/voice.sock) */
+  /** Path to the Unix socket (default: ~/.jfl/voice.sock) - deprecated, use serverUrl */
   socketPath?: string
+  /** Server URL for direct TCP connection (default: ws://127.0.0.1:9090) */
+  serverUrl?: string
   /** Auth token (default: read from ~/.jfl/voice-server.token) */
   authToken?: string
   /** Maximum reconnection attempts (default: 5) */
@@ -768,7 +786,7 @@ export interface VoiceClientOptions {
  */
 export class VoiceClient extends EventEmitter {
   private ws: WebSocket | null = null
-  private socketPath: string
+  private serverUrl: string
   private authToken: string | null
   private state: ConnectionState = "disconnected"
   private reconnectAttempts = 0
@@ -787,7 +805,8 @@ export class VoiceClient extends EventEmitter {
 
   constructor(options: VoiceClientOptions = {}) {
     super()
-    this.socketPath = options.socketPath ?? getVoiceSocketPath()
+    // Prefer direct TCP connection over Unix socket for better binary data handling
+    this.serverUrl = options.serverUrl ?? "ws://127.0.0.1:9090"
     this.authToken = options.authToken ?? null
     this.maxReconnectAttempts = options.maxReconnectAttempts ?? 5
     this.initialReconnectDelay = options.initialReconnectDelay ?? 1000
@@ -811,20 +830,12 @@ export class VoiceClient extends EventEmitter {
   /**
    * Connect to the whisper server
    *
-   * @throws VoiceError if socket file doesn't exist (SERVER_NOT_RUNNING)
    * @throws VoiceError if auth token is missing (AUTH_FAILED)
    * @throws VoiceError if connection fails
    */
   async connect(): Promise<void> {
     if (this.state === "connected" || this.state === "connecting") {
       return
-    }
-
-    // Check if socket file exists
-    if (!existsSync(this.socketPath)) {
-      throw new VoiceError(VoiceErrorType.SERVER_NOT_RUNNING, {
-        context: { socketPath: this.socketPath },
-      })
     }
 
     // Get auth token if not provided
@@ -851,13 +862,10 @@ export class VoiceClient extends EventEmitter {
   private doConnect(): Promise<void> {
     return new Promise((resolve, reject) => {
       try {
-        // Create WebSocket connection over Unix socket
-        // The ws library supports Unix sockets via the socketPath option
-        this.ws = new WebSocket(`ws+unix://${this.socketPath}`, {
-          headers: {
-            Authorization: `Bearer ${this.authToken}`,
-          },
-        })
+        // Create WebSocket connection via TCP
+        // Server expects token as query parameter for WebSocket connections
+        const url = `${this.serverUrl}/?token=${this.authToken}`
+        this.ws = new WebSocket(url)
 
         const connectionTimeout = setTimeout(() => {
           if (this.state === "connecting") {
@@ -940,12 +948,13 @@ export class VoiceClient extends EventEmitter {
       throw new Error("WebSocket is null")
     }
 
-    // Send binary audio data
-    this.ws.send(buffer, { binary: true }, (error) => {
-      if (error) {
-        this.handleError(error)
-      }
-    })
+    if (process.env.JFL_VOICE_DEBUG) {
+      console.log(`[VoiceClient] sendAudio: ${buffer.length} bytes`)
+    }
+
+    // Send binary audio data - Buffer is automatically sent as binary
+    // Note: Do NOT use callback or { binary: true } - they cause issues
+    this.ws.send(buffer)
   }
 
   /**
@@ -1018,6 +1027,11 @@ export class VoiceClient extends EventEmitter {
       // Parse JSON message
       const message: ServerMessage = JSON.parse(data.toString())
 
+      // Debug logging
+      if (process.env.JFL_VOICE_DEBUG) {
+        console.log(`[VoiceClient] Received: ${message.type}`)
+      }
+
       if (message.type === "error") {
         const errorMsg = message as ErrorMessage
         const error = new Error(errorMsg.error)
@@ -1042,8 +1056,7 @@ export class VoiceClient extends EventEmitter {
 
     } catch (e) {
       // Failed to parse message - could be binary data or malformed JSON
-      // Log but don't treat as error
-      if (process.env.DEBUG) {
+      if (process.env.JFL_VOICE_DEBUG) {
         console.error("Failed to parse server message:", e)
       }
     }
@@ -1661,15 +1674,17 @@ export class AudioRecorder extends EventEmitter {
       }
     } else if (this.recorderBackend === "sox" || this.recorderBackend === "rec") {
       // sox/rec arguments for recording
-      // Format: rec [options] output-file
+      // Format: rec [input-options] output-file [effects]
+      // On macOS, hardware often can't record at 16kHz directly, so we record
+      // at native rate and use sox's 'rate' effect to resample to target
       args.push(
         "-q",                     // Quiet
-        "-r", String(this.targetSampleRate),
         "-c", "1",                // Mono
         "-b", "16",               // 16-bit
         "-e", "signed-integer",   // Signed integer encoding
         "-t", "raw",              // Raw PCM output
-        "-"                       // Output to stdout
+        "-",                      // Output to stdout
+        "rate", String(this.targetSampleRate)  // Resample to target rate
       )
 
       if (this.device) {
@@ -1685,15 +1700,14 @@ export class AudioRecorder extends EventEmitter {
           args.unshift("-t", "waveaudio", this.device)
         }
       } else {
-        // Default device
-        if (this.currentPlatform === "darwin") {
-          args.unshift("-d", "coreaudio", "default")
-        } else if (this.currentPlatform === "linux") {
+        // Default device - rec uses system default automatically on macOS
+        if (this.currentPlatform === "linux") {
           // Linux: pulseaudio or alsa default
           args.unshift("-d")
         } else if (this.currentPlatform === "win32") {
           args.unshift("-t", "waveaudio", "-1")
         }
+        // macOS: no flag needed, rec uses coreaudio default automatically
       }
     }
 
@@ -2175,8 +2189,12 @@ export async function voiceTestCommand(options?: { device?: string }): Promise<v
   try {
     await client.connect()
 
-    // Send audio data
+    // Send audio data and wait for it to be sent
     client.sendAudio(audioBuffer)
+
+    // Wait for data to fully transmit before sending end signal
+    // WebSocket bufferedAmount=0 doesn't guarantee the server received it
+    await new Promise((resolve) => setTimeout(resolve, 500))
 
     // Signal end of audio
     client.endAudio()
@@ -3957,7 +3975,7 @@ export async function voiceSlashCommand(options: VoiceRecordOptions = {}): Promi
   try {
     await client.connect()
 
-    // Send audio data
+    // Send audio data and wait for it to be sent
     client.sendAudio(audioBuffer)
 
     // Signal end of audio
