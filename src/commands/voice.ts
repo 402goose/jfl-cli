@@ -4807,8 +4807,10 @@ export async function hotkeyCommand(options: { device?: string; mode?: HotkeyMod
     }
 
     console.log(chalk.cyan("\n  Recording started... (press Ctrl+Shift+Space to stop)\n"))
-    // Show notification for daemon mode (when user can't see console)
+    // Play sound and show notification for daemon mode feedback
     if (!process.stdin.isTTY) {
+      // Play start sound
+      try { execSync('afplay /System/Library/Sounds/Tink.aiff &', { stdio: 'ignore' }) } catch {}
       showNotification("🎤 Recording", "Speak now... Press Ctrl+Shift+Space to stop")
     }
     isRecording = true
@@ -4998,12 +5000,12 @@ export async function hotkeyCommand(options: { device?: string; mode?: HotkeyMod
       await new Promise(resolve => setTimeout(resolve, 500))
       client.endAudio()
 
-      const timeout = 30000
+      const timeout = 10000 // Reduced from 30s
       const startTime = Date.now()
 
       while (!transcriptionReceived && !transcriptionError) {
-        // If we have a transcription, accept it even without final flag
-        if (transcription && Date.now() - startTime > 5000) {
+        // If we have a transcription, accept it even without final flag (wait 2s for final)
+        if (transcription && Date.now() - startTime > 2000) {
           break
         }
         if (Date.now() - startTime > timeout) {
@@ -5069,8 +5071,9 @@ export async function hotkeyCommand(options: { device?: string; mode?: HotkeyMod
         const pasted = simulatePaste()
         if (pasted) {
           console.log(chalk.green(`\n  ✓ Pasted to ${currentFocusedApp}!`))
-          // Show notification for daemon mode
+          // Play success sound and show notification for daemon mode
           if (!process.stdin.isTTY) {
+            try { execSync('afplay /System/Library/Sounds/Glass.aiff &', { stdio: 'ignore' }) } catch {}
             const preview = finalText.length > 50 ? finalText.slice(0, 47) + "..." : finalText
             showNotification("✓ Pasted", preview)
           }
