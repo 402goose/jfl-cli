@@ -2195,51 +2195,8 @@ export async function voiceTestCommand(options?: { device?: string }): Promise<v
     console.log()
   }
 
-  // Combine all audio chunks
-  let audioBuffer = Buffer.concat(audioChunks)
-
-  // Normalize audio to improve transcription quality
-  // Many microphones record at very low levels which causes blank transcriptions
-  // We normalize to target RMS of ~5000 (moderate volume)
-  const samples = audioBuffer.length / 2
-  let sumSquares = 0
-  let maxSample = 0
-  for (let i = 0; i < samples; i++) {
-    const sample = audioBuffer.readInt16LE(i * 2)
-    sumSquares += sample * sample
-    if (Math.abs(sample) > maxSample) maxSample = Math.abs(sample)
-  }
-  const rms = Math.sqrt(sumSquares / samples)
-
-  // Target RMS of 3000 for good whisper recognition
-  // (not too high to avoid distortion, but enough for clear speech)
-  const targetRms = 3000
-  if (rms > 0 && rms < targetRms) {
-    // Calculate gain needed
-    // Allow some clipping for the loudest peaks - it's usually ok for speech
-    const maxGain = 32767 / (maxSample || 1)
-    const desiredGain = targetRms / rms
-    // Allow up to 3x the clipping-safe gain, accepting some peak clipping
-    const gain = Math.min(desiredGain, maxGain * 3)
-
-    if (gain > 1.2) { // Only amplify if gain is meaningful
-      const amplified = Buffer.alloc(audioBuffer.length)
-      for (let i = 0; i < samples; i++) {
-        let sample = audioBuffer.readInt16LE(i * 2)
-        sample = Math.round(Math.max(-32768, Math.min(32767, sample * gain)))
-        amplified.writeInt16LE(sample, i * 2)
-      }
-      audioBuffer = amplified
-
-      if (process.env.JFL_VOICE_DEBUG) {
-        console.log(`[Voice] Audio normalized: gain=${gain.toFixed(2)}x, rms=${rms.toFixed(0)}->${(rms * gain).toFixed(0)}`)
-      }
-    } else if (process.env.JFL_VOICE_DEBUG) {
-      console.log(`[Voice] No normalization needed: rms=${rms.toFixed(0)}, max=${maxSample}`)
-    }
-  } else if (process.env.JFL_VOICE_DEBUG) {
-    console.log(`[Voice] Audio already loud enough: rms=${rms.toFixed(0)}`)
-  }
+  // Combine all audio chunks and normalize
+  const audioBuffer = normalizeAudio(Buffer.concat(audioChunks))
 
   // Step 5: Connect to whisper server and send audio
   console.log(chalk.gray("  Transcribing..."))
@@ -3410,6 +3367,56 @@ function zeroBuffers(buffers: Buffer[]): void {
   }
   // Clear the array reference
   buffers.length = 0
+}
+
+/**
+ * Normalize audio buffer to improve transcription quality.
+ * Many microphones record at very low levels which causes blank transcriptions.
+ * This normalizes to a target RMS for better whisper recognition.
+ *
+ * @param audioBuffer - 16-bit PCM audio buffer
+ * @returns Normalized buffer (may be the same buffer if no normalization needed)
+ */
+function normalizeAudio(audioBuffer: Buffer): Buffer {
+  const samples = audioBuffer.length / 2
+  let sumSquares = 0
+  let maxSample = 0
+
+  for (let i = 0; i < samples; i++) {
+    const sample = audioBuffer.readInt16LE(i * 2)
+    sumSquares += sample * sample
+    if (Math.abs(sample) > maxSample) maxSample = Math.abs(sample)
+  }
+
+  const rms = Math.sqrt(sumSquares / samples)
+
+  // Target RMS of 3000 for good whisper recognition
+  const targetRms = 3000
+  if (rms > 0 && rms < targetRms) {
+    const maxGain = 32767 / (maxSample || 1)
+    const desiredGain = targetRms / rms
+    // Allow up to 3x the clipping-safe gain, accepting some peak clipping
+    const gain = Math.min(desiredGain, maxGain * 3)
+
+    if (gain > 1.2) {
+      const amplified = Buffer.alloc(audioBuffer.length)
+      for (let i = 0; i < samples; i++) {
+        let sample = audioBuffer.readInt16LE(i * 2)
+        sample = Math.round(Math.max(-32768, Math.min(32767, sample * gain)))
+        amplified.writeInt16LE(sample, i * 2)
+      }
+
+      if (process.env.JFL_VOICE_DEBUG) {
+        console.log(`[Voice] Audio normalized: gain=${gain.toFixed(2)}x, rms=${rms.toFixed(0)}->${(rms * gain).toFixed(0)}`)
+      }
+      return amplified
+    }
+  }
+
+  if (process.env.JFL_VOICE_DEBUG && rms > 0) {
+    console.log(`[Voice] Audio level ok: rms=${rms.toFixed(0)}, max=${maxSample}`)
+  }
+  return audioBuffer
 }
 
 /**
