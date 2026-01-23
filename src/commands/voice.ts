@@ -4809,8 +4809,8 @@ export async function hotkeyCommand(options: { device?: string; mode?: HotkeyMod
     console.log(chalk.cyan("\n  Recording started... (press Ctrl+Shift+Space to stop)\n"))
     // Play sound and show notification for daemon mode feedback
     if (!process.stdin.isTTY) {
-      // Play start sound
-      try { execSync('afplay /System/Library/Sounds/Tink.aiff &', { stdio: 'ignore' }) } catch {}
+      // Play start sound (Pop = friendly "go" sound)
+      try { execSync('afplay /System/Library/Sounds/Pop.aiff &', { stdio: 'ignore' }) } catch {}
       showNotification("🎤 Recording", "Speak now... Press Ctrl+Shift+Space to stop")
     }
     isRecording = true
