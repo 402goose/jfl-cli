@@ -260,18 +260,21 @@ async function promptChromeMode(cli: DetectedCLI): Promise<boolean> {
 }
 
 function showBanner() {
-  // Modular blocks with gaps - like the reference image
+  // Pixel-block style - every block separate with gaps
   const c = chalk.cyan
   const banner = `
-${c("      ██")}    ${c("████████")}    ${c("██")}
-${c("      ██")}    ${c("██")}          ${c("██")}
-${c("      ██")}    ${c("██████")}      ${c("██")}
-${c("      ██")}    ${c("██")}          ${c("██")}
-${c("██    ██")}    ${c("██")}          ${c("██")}
-${c("████████")}    ${c("██")}          ${c("████████")}
+${c("          ┌──┐")}   ${c("┌──┐ ┌──┐ ┌──┐")}   ${c("┌──┐")}
+${c("          └──┘")}   ${c("└──┘ └──┘ └──┘")}   ${c("└──┘")}
+${c("          ┌──┐")}   ${c("┌──┐ ┌──┐")}        ${c("┌──┐")}
+${c("          └──┘")}   ${c("└──┘ └──┘")}        ${c("└──┘")}
+${c("          ┌──┐")}   ${c("┌──┐")}             ${c("┌──┐")}
+${c("          └──┘")}   ${c("└──┘")}             ${c("└──┘")}
+${c("┌──┐      ┌──┐")}   ${c("┌──┐")}             ${c("┌──┐ ┌──┐ ┌──┐")}
+${c("└──┘ ┌──┐ └──┘")}   ${c("└──┘")}             ${c("└──┘ └──┘ └──┘")}
+${c("     └──┘")}
 
-${chalk.bold("    JUST F*CKING LAUNCH")}
-${chalk.gray("  Your context layer for building.")}
+${chalk.bold("           JUST F*CKING LAUNCH")}
+${chalk.gray("        Your context layer for building.")}
 `
   console.log(banner)
 }
