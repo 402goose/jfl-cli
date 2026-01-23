@@ -260,16 +260,15 @@ async function promptChromeMode(cli: DetectedCLI): Promise<boolean> {
 }
 
 function showBanner() {
-  // Same style as GSD - ██╗ with ╔═╝ corners
+  // Same style as GSD - aligned baseline
   const c = chalk.cyan
   const banner = `
-${c("       ██╗")} ${c("███████╗")} ${c("██╗")}
-${c("       ██║")} ${c("██╔════╝")} ${c("██║")}
-${c("       ██║")} ${c("█████╗  ")} ${c("██║")}
-${c("       ██║")} ${c("██╔══╝  ")} ${c("██║")}
-${c("  ██   ██║")} ${c("██║     ")} ${c("███████╗")}
-${c("  ╚█████╔╝")} ${c("╚═╝     ")} ${c("╚══════╝")}
-${c("   ╚════╝ ")}
+${c("     ██╗")} ${c("███████╗")} ${c("██╗     ")}
+${c("     ██║")} ${c("██╔════╝")} ${c("██║     ")}
+${c("     ██║")} ${c("█████╗  ")} ${c("██║     ")}
+${c("██╗  ██║")} ${c("██╔══╝  ")} ${c("██║     ")}
+${c("╚█████╔╝")} ${c("██║     ")} ${c("███████╗")}
+${c(" ╚════╝ ")} ${c("╚═╝     ")} ${c("╚══════╝")}
 
 ${chalk.bold("  JUST F*CKING LAUNCH")}
 ${chalk.gray("Your context layer for building.")}
