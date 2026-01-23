@@ -5118,7 +5118,11 @@ export async function hotkeyCommand(options: { device?: string; mode?: HotkeyMod
   process.on("SIGINT", cleanup)
   process.on("SIGTERM", cleanup)
 
-  // Keep the process running
+  // Keep the process running with an interval (needed for detached daemon mode)
+  const keepAlive = setInterval(() => {
+    // Keepalive - prevents Node from exiting when detached
+  }, 60000)
+
   await new Promise(() => {
     // This promise never resolves - we run until Ctrl+C
   })
