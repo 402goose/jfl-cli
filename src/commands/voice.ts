@@ -4029,8 +4029,8 @@ export async function voiceSlashCommand(options: VoiceRecordOptions = {}): Promi
     return
   }
 
-  // Combine all audio chunks
-  const audioBuffer = Buffer.concat(audioChunks)
+  // Combine all audio chunks and normalize for better transcription
+  const audioBuffer = normalizeAudio(Buffer.concat(audioChunks))
   const durationSecs = totalBytes / (16000 * 2) // 16kHz, 16-bit
 
   // VS-UX-2: Show completed indicator when moving to transcription
@@ -4056,8 +4056,11 @@ export async function voiceSlashCommand(options: VoiceRecordOptions = {}): Promi
   let transcriptionError: Error | null = null
 
   client.onTranscript((text, isFinal) => {
-    if (isFinal) {
+    // Accept partial transcriptions too (in case final never arrives)
+    if (text && text.trim() && !text.includes("[BLANK_AUDIO]")) {
       transcription = text
+    }
+    if (isFinal) {
       transcriptionReceived = true
     }
   })
@@ -4933,8 +4936,8 @@ export async function hotkeyCommand(options: { device?: string; mode?: HotkeyMod
     // VS-UX-2: Show completed indicator when moving to transcription
     hideRecordingIndicator("completed")
 
-    // Combine audio
-    const audioBuffer = Buffer.concat(audioChunks)
+    // Combine audio and normalize for better transcription
+    const audioBuffer = normalizeAudio(Buffer.concat(audioChunks))
     // VS-SEC-3: Zero the individual chunks immediately after combining
     zeroBuffers(audioChunks)
     const durationSecs = totalBytes / (16000 * 2)
@@ -4962,8 +4965,11 @@ export async function hotkeyCommand(options: { device?: string; mode?: HotkeyMod
     let transcriptionError: Error | null = null
 
     client.onTranscript((text, isFinal) => {
-      if (isFinal) {
+      // Accept partial transcriptions too (in case final never arrives)
+      if (text && text.trim() && !text.includes("[BLANK_AUDIO]")) {
         transcription = text
+      }
+      if (isFinal) {
         transcriptionReceived = true
       }
     })
@@ -4981,6 +4987,10 @@ export async function hotkeyCommand(options: { device?: string; mode?: HotkeyMod
       const startTime = Date.now()
 
       while (!transcriptionReceived && !transcriptionError) {
+        // If we have a transcription, accept it even without final flag
+        if (transcription && Date.now() - startTime > 5000) {
+          break
+        }
         if (Date.now() - startTime > timeout) {
           transcriptionError = new Error("Transcription timeout")
           break
