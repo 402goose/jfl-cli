@@ -4081,6 +4081,9 @@ export async function voiceSlashCommand(options: VoiceRecordOptions = {}): Promi
     // Send audio data and wait for it to be sent
     client.sendAudio(audioBuffer)
 
+    // Wait for audio to be sent before signaling end
+    await new Promise(resolve => setTimeout(resolve, 500))
+
     // Signal end of audio
     client.endAudio()
 
@@ -4991,6 +4994,8 @@ export async function hotkeyCommand(options: { device?: string; mode?: HotkeyMod
     try {
       await client.connect()
       client.sendAudio(audioBuffer)
+      // Wait for audio to be sent before signaling end
+      await new Promise(resolve => setTimeout(resolve, 500))
       client.endAudio()
 
       const timeout = 30000
