@@ -4804,6 +4804,10 @@ export async function hotkeyCommand(options: { device?: string; mode?: HotkeyMod
     }
 
     console.log(chalk.cyan("\n  Recording started... (press Ctrl+Shift+Space to stop)\n"))
+    // Show notification for daemon mode (when user can't see console)
+    if (!process.stdin.isTTY) {
+      showNotification("🎤 Recording", "Speak now... Press Ctrl+Shift+Space to stop")
+    }
     isRecording = true
     audioChunks = []
     hasVoiceActivity = false
@@ -5060,6 +5064,11 @@ export async function hotkeyCommand(options: { device?: string; mode?: HotkeyMod
         const pasted = simulatePaste()
         if (pasted) {
           console.log(chalk.green(`\n  ✓ Pasted to ${currentFocusedApp}!`))
+          // Show notification for daemon mode
+          if (!process.stdin.isTTY) {
+            const preview = finalText.length > 50 ? finalText.slice(0, 47) + "..." : finalText
+            showNotification("✓ Pasted", preview)
+          }
           // VS-SEC-3: Schedule clipboard clear after successful paste
           scheduleClipboardClear(securityConfig.clipboardClearDelay)
           if (process.env.DEBUG) {
@@ -5068,6 +5077,11 @@ export async function hotkeyCommand(options: { device?: string; mode?: HotkeyMod
         } else {
           console.log(chalk.green("\n  ✓ Copied to clipboard!"))
           console.log(chalk.yellow(`  ⚠ Could not auto-paste (${getPasteShortcut()}). Text is on clipboard.`))
+          // Show notification for daemon mode
+          if (!process.stdin.isTTY) {
+            const preview = finalText.length > 50 ? finalText.slice(0, 47) + "..." : finalText
+            showNotification("📋 Copied", `${preview}\n\nPress ${getPasteShortcut()} to paste`)
+          }
           // VS-SEC-3: Still schedule clipboard clear even if paste failed
           scheduleClipboardClear(securityConfig.clipboardClearDelay)
         }
