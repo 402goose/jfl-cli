@@ -3,6 +3,7 @@ import ora from "ora"
 import inquirer from "inquirer"
 import { getAuthMethod, getToken, getX402Address, getUser, isAuthenticated } from "./login.js"
 import { ensureDayPass } from "../utils/auth-guard.js"
+import { getPlatformAuthHeaders } from "../utils/platform-auth.js"
 
 const PLATFORM_URL = process.env.JFL_PLATFORM_URL || "https://jfl.run"
 const X402_URL = process.env.X402_URL || "https://agent-main.402.cat"
@@ -211,11 +212,17 @@ async function createAgent(name?: string, task?: string) {
       spinner.succeed(`Agent created: ${agent.name}`)
     } else {
       const token = getToken()
+      const platformAuthHeaders = getPlatformAuthHeaders()
+
+      // Use platform auth if available, otherwise use legacy GitHub token
+      const authHeaders = Object.keys(platformAuthHeaders).length > 0
+        ? platformAuthHeaders
+        : { Authorization: `Bearer ${token}` }
 
       const res = await fetch(`${PLATFORM_URL}/api/agents`, {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${token}`,
+          ...authHeaders,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
@@ -373,10 +380,15 @@ async function fetchAgents(): Promise<Agent[]> {
     return data.agents || []
   } else {
     const token = getToken()
+    const platformAuthHeaders = getPlatformAuthHeaders()
+
+    // Use platform auth if available, otherwise use legacy GitHub token
+    const authHeaders = Object.keys(platformAuthHeaders).length > 0
+      ? platformAuthHeaders
+      : { Authorization: `Bearer ${token}` }
+
     const res = await fetch(`${PLATFORM_URL}/api/agents`, {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
+      headers: authHeaders,
     })
 
     if (!res.ok) {
@@ -419,13 +431,17 @@ async function agentAction(agentId: string, action: "start" | "stop" | "destroy"
     }
   } else {
     const token = getToken()
+    const platformAuthHeaders = getPlatformAuthHeaders()
+
+    // Use platform auth if available, otherwise use legacy GitHub token
+    const authHeaders = Object.keys(platformAuthHeaders).length > 0
+      ? platformAuthHeaders
+      : { Authorization: `Bearer ${token}` }
 
     if (action === "destroy") {
       const res = await fetch(`${PLATFORM_URL}/api/agents/${agentId}`, {
         method: "DELETE",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        headers: authHeaders,
       })
 
       if (!res.ok) {
@@ -434,9 +450,7 @@ async function agentAction(agentId: string, action: "start" | "stop" | "destroy"
     } else {
       const res = await fetch(`${PLATFORM_URL}/api/agents/${agentId}/${action}`, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        headers: authHeaders,
       })
 
       if (!res.ok) {

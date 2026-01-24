@@ -78,6 +78,7 @@ program
 program
   .command("login")
   .description("Login to JFL platform")
+  .option("--platform", "Use Platform Account (recommended)")
   .option("--x402", "Use x402 Day Pass ($5/day, crypto)")
   .option("--solo", "Use Solo plan ($49/mo)")
   .option("--team", "Use Team plan ($199/mo)")
