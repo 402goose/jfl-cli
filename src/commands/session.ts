@@ -217,15 +217,15 @@ async function promptAutonomousMode(cli: DetectedCLI): Promise<boolean> {
 
 function showBanner() {
   const banner = `
-${chalk.bold.cyan("     ██╗███████╗██╗     ")}
-${chalk.bold.cyan("     ██║██╔════╝██║     ")}
-${chalk.bold.cyan("     ██║█████╗  ██║     ")}
-${chalk.bold.cyan("██   ██║██╔══╝  ██║     ")}
-${chalk.bold.cyan("╚█████╔╝██║     ███████╗")}
-${chalk.bold.cyan(" ╚════╝ ╚═╝     ╚══════╝")}
+${chalk.bold.cyan("     ██╗ ███████╗ ██╗     ")}
+${chalk.bold.cyan("     ██║ ██╔════╝ ██║     ")}
+${chalk.bold.cyan("     ██║ █████╗   ██║     ")}
+${chalk.bold.cyan("██   ██║ ██╔══╝   ██║     ")}
+${chalk.bold.cyan("╚█████╔╝ ██║      ███████╗")}
+${chalk.bold.cyan(" ╚════╝  ╚═╝      ╚══════╝")}
 
-${chalk.bold("    JUST F*CKING LAUNCH")}
-${chalk.gray("Your context layer for building and launching.")}
+${chalk.bold("     JUST F*CKING LAUNCH")}
+${chalk.gray(" Your context layer for building and launching.")}
 `
   console.log(banner)
 }

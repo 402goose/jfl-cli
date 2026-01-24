@@ -24,6 +24,7 @@ import {
   updateSkillsCommand,
   searchSkillsCommand,
 } from "./commands/skills.js"
+import { ralphCommand, showRalphHelp } from "./commands/ralph.js"
 import {
   ensureDayPass,
   showDayPassStatus,
@@ -205,6 +206,24 @@ program
   })
 
 // ============================================================================
+// RALPH TUI (autonomous task execution)
+// ============================================================================
+
+program
+  .command("ralph")
+  .description("AI agent loop orchestrator (ralph-tui)")
+  .argument("[command...]", "ralph-tui command and args")
+  .option("-h, --help", "Show ralph-tui help")
+  .allowUnknownOption()
+  .action(async (args, options) => {
+    if (options.help || args.length === 0) {
+      showRalphHelp()
+      return
+    }
+    await ralphCommand(args)
+  })
+
+// ============================================================================
 // HELP
 // ============================================================================
 
@@ -222,6 +241,7 @@ program
     console.log("    jfl status            Project status")
     console.log("    jfl brand             Brand architect")
     console.log("    jfl content           Content creator")
+    console.log("    jfl ralph             AI agent loop (ralph-tui)")
 
     console.log(chalk.cyan("\n  Platform (requires login):"))
     console.log("    jfl login             Login to platform")
