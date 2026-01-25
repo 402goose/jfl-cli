@@ -11,7 +11,7 @@ import { execSync } from "child_process"
 import * as fs from "fs"
 import * as path from "path"
 
-const PRODUCT_REPO = "https://github.com/402goose/jfl-cli.git"
+const PRODUCT_REPO = "https://github.com/402goose/jfl-platform.git"
 const TEMP_DIR = ".jfl-update-temp"
 
 // Files/folders to sync from template/ folder (not repo root)
