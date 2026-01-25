@@ -9,10 +9,18 @@
 
 import chalk from "chalk"
 import ora from "ora"
+<<<<<<< HEAD
 import { spawn } from "child_process"
 import * as fs from "fs"
 import * as path from "path"
 import * as http from "http"
+=======
+import { execSync, spawn, ChildProcess } from "child_process"
+import * as fs from "fs"
+import * as path from "path"
+import * as http from "http"
+import * as readline from "readline"
+>>>>>>> session-goose-20260125-0541-76de0a
 
 const DEFAULT_PORT = 4242
 const PID_FILE = ".jfl/context-hub.pid"
@@ -214,14 +222,121 @@ function readCodeContext(projectRoot: string, limit = 30): ContextItem[] {
 }
 
 // ============================================================================
+<<<<<<< HEAD
 // Orchestrator
 // ============================================================================
 
 function getUnifiedContext(projectRoot: string, query?: string, _taskType?: string): UnifiedContext {
+=======
+// Search & Scoring (TF-IDF style)
+// ============================================================================
+
+function tokenize(text: string): string[] {
+  return text
+    .toLowerCase()
+    .replace(/[^\w\s]/g, " ")
+    .split(/\s+/)
+    .filter(t => t.length > 2)
+}
+
+function computeTF(tokens: string[]): Map<string, number> {
+  const tf = new Map<string, number>()
+  for (const token of tokens) {
+    tf.set(token, (tf.get(token) || 0) + 1)
+  }
+  // Normalize by document length
+  for (const [term, count] of tf) {
+    tf.set(term, count / tokens.length)
+  }
+  return tf
+}
+
+function computeIDF(documents: string[][]): Map<string, number> {
+  const idf = new Map<string, number>()
+  const N = documents.length
+
+  // Count documents containing each term
+  const docCount = new Map<string, number>()
+  for (const doc of documents) {
+    const uniqueTerms = new Set(doc)
+    for (const term of uniqueTerms) {
+      docCount.set(term, (docCount.get(term) || 0) + 1)
+    }
+  }
+
+  // Compute IDF
+  for (const [term, count] of docCount) {
+    idf.set(term, Math.log((N + 1) / (count + 1)) + 1)
+  }
+
+  return idf
+}
+
+function scoreItem(
+  item: ContextItem,
+  queryTokens: string[],
+  idf: Map<string, number>
+): number {
+  const text = `${item.title} ${item.content}`
+  const tokens = tokenize(text)
+  const tf = computeTF(tokens)
+
+  let score = 0
+  for (const queryTerm of queryTokens) {
+    const termTF = tf.get(queryTerm) || 0
+    const termIDF = idf.get(queryTerm) || 1
+    score += termTF * termIDF
+  }
+
+  // Boost title matches
+  const titleTokens = new Set(tokenize(item.title))
+  for (const queryTerm of queryTokens) {
+    if (titleTokens.has(queryTerm)) {
+      score *= 1.5
+    }
+  }
+
+  // Boost recent items (journal)
+  if (item.source === "journal" && item.timestamp) {
+    const age = Date.now() - new Date(item.timestamp).getTime()
+    const daysSinceUpdate = age / (1000 * 60 * 60 * 24)
+    if (daysSinceUpdate < 7) {
+      score *= 1.3 // Boost recent entries
+    }
+  }
+
+  return score
+}
+
+function semanticSearch(items: ContextItem[], query: string): ContextItem[] {
+  const queryTokens = tokenize(query)
+  if (queryTokens.length === 0) return items
+
+  // Build corpus for IDF
+  const documents = items.map(item => tokenize(`${item.title} ${item.content}`))
+  const idf = computeIDF(documents)
+
+  // Score and sort
+  for (const item of items) {
+    item.relevance = scoreItem(item, queryTokens, idf)
+  }
+
+  return items
+    .filter(item => (item.relevance || 0) > 0)
+    .sort((a, b) => (b.relevance || 0) - (a.relevance || 0))
+}
+
+// ============================================================================
+// Orchestrator
+// ============================================================================
+
+function getUnifiedContext(projectRoot: string, query?: string, taskType?: string): UnifiedContext {
+>>>>>>> session-goose-20260125-0541-76de0a
   const journalItems = readJournalEntries(projectRoot)
   const knowledgeItems = readKnowledgeDocs(projectRoot)
   const codeItems = readCodeContext(projectRoot)
 
+<<<<<<< HEAD
   const items = [...journalItems, ...knowledgeItems, ...codeItems]
 
   // Simple relevance scoring if query provided
@@ -232,6 +347,13 @@ function getUnifiedContext(projectRoot: string, query?: string, _taskType?: stri
       item.relevance = text.includes(queryLower) ? 1 : 0
     }
     items.sort((a, b) => (b.relevance || 0) - (a.relevance || 0))
+=======
+  let items = [...journalItems, ...knowledgeItems, ...codeItems]
+
+  // Apply semantic search if query provided
+  if (query) {
+    items = semanticSearch(items, query)
+>>>>>>> session-goose-20260125-0541-76de0a
   }
 
   return {
@@ -243,7 +365,11 @@ function getUnifiedContext(projectRoot: string, query?: string, _taskType?: stri
       memory: false
     },
     query,
+<<<<<<< HEAD
     taskType: _taskType
+=======
+    taskType
+>>>>>>> session-goose-20260125-0541-76de0a
   }
 }
 
@@ -423,7 +549,11 @@ function stopDaemon(projectRoot: string): boolean {
       fs.unlinkSync(pidFile)
     }
     return true
+<<<<<<< HEAD
   } catch {
+=======
+  } catch (err) {
+>>>>>>> session-goose-20260125-0541-76de0a
     console.error(chalk.red("Failed to stop daemon"))
     return false
   }
@@ -487,7 +617,11 @@ export async function contextHubCommand(
         // Try to get more info from the API
         try {
           const response = await fetch(`http://localhost:${port}/api/context/status`)
+<<<<<<< HEAD
           const data = await response.json() as { sources: Record<string, boolean>; itemCount: number }
+=======
+          const data = await response.json()
+>>>>>>> session-goose-20260125-0541-76de0a
           console.log(chalk.gray(`  Sources: ${Object.entries(data.sources).filter(([,v]) => v).map(([k]) => k).join(", ")}`))
           console.log(chalk.gray(`  Items: ${data.itemCount}`))
         } catch {

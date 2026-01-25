@@ -5,11 +5,13 @@
   "type": "module",
   "main": "dist/index.js",
   "bin": {
-    "jfl": "dist/index.js"
+    "jfl": "dist/index.js",
+    "jfl-context-hub-mcp": "dist/mcp/context-hub-mcp.js"
   },
   "files": [
     "dist",
     "scripts",
+    "template",
     "README.md",
     "LICENSE"
   ],
