@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "mkdir -p .jfl/logs .jfl/journal && BRANCH=$(git branch --show-current 2>/dev/null || echo 'main') && echo \"$BRANCH\" > .jfl/current-session-branch.txt && echo '🚀 JFL starting...'"
+            "command": "./scripts/session/session-init.sh"
           },
           {
             "type": "command",
@@ -69,7 +69,7 @@
           },
           {
             "type": "command",
-            "command": "(git add -A && git diff --cached --quiet || git commit -m 'auto: session save') 2>/dev/null; true"
+            "command": "./scripts/session/session-end.sh 2>&1 || (git add -A && git diff --cached --quiet || git commit -m 'auto: stop save') 2>/dev/null; true"
           }
         ]
       }

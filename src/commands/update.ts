@@ -20,7 +20,8 @@ const SYNC_PATHS = [
   ".claude/",
   ".mcp.json",
   "context-hub",
-  "templates/"
+  "templates/",
+  "scripts/"
 ]
 
 // Files/folders to NEVER overwrite (project-specific)
