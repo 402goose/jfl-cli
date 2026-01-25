@@ -1,0 +1,9 @@
+#!/bin/bash
+#
+# Context Hub CLI Wrapper
+#
+# Wrapper for backwards compatibility. Uses jfl context-hub command.
+#
+# @purpose CLI wrapper for context hub (uses jfl command)
+
+exec jfl context-hub "$@"
