@@ -416,10 +416,10 @@ function getUnifiedContext(projectRoot: string, query?: string, taskType?: strin
 
 function createServer(projectRoot: string, port: number): http.Server {
   const server = http.createServer((req, res) => {
-    // CORS
+    // CORS - include Authorization header
     res.setHeader("Access-Control-Allow-Origin", "*")
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type")
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
     if (req.method === "OPTIONS") {
       res.writeHead(200)
@@ -429,10 +429,21 @@ function createServer(projectRoot: string, port: number): http.Server {
 
     const url = new URL(req.url || "/", `http://localhost:${port}`)
 
-    // Health check
+    // Health check - no auth required (for monitoring)
     if (url.pathname === "/health" && req.method === "GET") {
       res.writeHead(200, { "Content-Type": "application/json" })
       res.end(JSON.stringify({ status: "ok", port }))
+      return
+    }
+
+    // All other endpoints require auth
+    if (!validateAuth(req, projectRoot)) {
+      res.writeHead(401, { "Content-Type": "application/json" })
+      res.end(JSON.stringify({
+        error: "Unauthorized",
+        message: "Provide token via Authorization header: Bearer <token>",
+        tokenFile: ".jfl/context-hub.token"
+      }))
       return
     }
 
