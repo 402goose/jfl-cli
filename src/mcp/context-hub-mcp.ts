@@ -11,6 +11,7 @@
 import * as readline from "readline"
 import * as fs from "fs"
 import * as path from "path"
+import { execSync } from "child_process"
 
 const CONTEXT_HUB_URL = process.env.CONTEXT_HUB_URL || "http://localhost:4242"
 const TOKEN_FILE = ".jfl/context-hub.token"
@@ -201,6 +202,233 @@ function formatContextItems(items: ContextItem[]): string {
   return sections.join("\n\n")
 }
 
+// ============================================================================
+// Cross-Session Tracking
+// ============================================================================
+
+interface SessionInfo {
+  name: string
+  path: string
+  branch: string
+  isActive: boolean
+  recentCommits: string[]
+  journalSummary: string
+  workingOn: string
+}
+
+function findRepoRoot(): string | null {
+  let dir = process.cwd()
+  const root = path.parse(dir).root
+
+  while (dir !== root) {
+    if (fs.existsSync(path.join(dir, '.git')) || fs.existsSync(path.join(dir, '.jfl'))) {
+      return dir
+    }
+    dir = path.dirname(dir)
+  }
+  return null
+}
+
+function getSessionsActivity(hours: number): string {
+  const repoRoot = findRepoRoot()
+  if (!repoRoot) {
+    return "Not in a JFL project directory."
+  }
+
+  const currentBranch = execSync('git branch --show-current', { cwd: repoRoot, encoding: 'utf-8' }).trim()
+  const sessions: SessionInfo[] = []
+
+  try {
+    // Get all worktrees
+    const worktreeOutput = execSync('git worktree list --porcelain', { cwd: repoRoot, encoding: 'utf-8' })
+    const worktrees = parseWorktrees(worktreeOutput)
+
+    // Get journal directory (should be in main repo)
+    const journalDir = path.join(repoRoot, '.jfl', 'journal')
+
+    for (const wt of worktrees) {
+      if (!wt.branch.startsWith('session-')) continue
+
+      const session: SessionInfo = {
+        name: wt.branch,
+        path: wt.path,
+        branch: wt.branch,
+        isActive: checkIfActive(wt.path),
+        recentCommits: getRecentCommits(repoRoot, wt.branch, 3),
+        journalSummary: '',
+        workingOn: ''
+      }
+
+      // Read journal for this session
+      const journalFile = path.join(journalDir, `${wt.branch}.jsonl`)
+      if (fs.existsSync(journalFile)) {
+        const entries = readJournalEntries(journalFile, hours)
+        if (entries.length > 0) {
+          session.journalSummary = entries.map(e => `- ${e.title}`).join('\n')
+          session.workingOn = entries[entries.length - 1].title
+        }
+      }
+
+      sessions.push(session)
+    }
+  } catch (error: any) {
+    return `Error reading sessions: ${error.message}`
+  }
+
+  if (sessions.length === 0) {
+    return "No other sessions found."
+  }
+
+  // Format output
+  const lines: string[] = [`## Active Sessions (last ${hours}h)\n`]
+
+  const activeSessions = sessions.filter(s => s.isActive && s.branch !== currentBranch)
+  const staleSessions = sessions.filter(s => !s.isActive && s.branch !== currentBranch)
+
+  if (activeSessions.length > 0) {
+    lines.push('### Currently Active\n')
+    for (const s of activeSessions) {
+      lines.push(`**${s.name}**`)
+      if (s.workingOn) {
+        lines.push(`  Working on: ${s.workingOn}`)
+      }
+      if (s.recentCommits.length > 0) {
+        lines.push(`  Recent commits:`)
+        for (const c of s.recentCommits) {
+          lines.push(`    - ${c}`)
+        }
+      }
+      lines.push('')
+    }
+  }
+
+  if (staleSessions.length > 0) {
+    lines.push('### Recently Active (stale)\n')
+    for (const s of staleSessions.slice(0, 5)) {
+      lines.push(`**${s.name}**`)
+      if (s.workingOn) {
+        lines.push(`  Last worked on: ${s.workingOn}`)
+      }
+      lines.push('')
+    }
+  }
+
+  // Check for potential overlap
+  const currentJournalFile = path.join(repoRoot, '.jfl', 'journal', `${currentBranch}.jsonl`)
+  if (fs.existsSync(currentJournalFile)) {
+    const currentEntries = readJournalEntries(currentJournalFile, hours)
+    if (currentEntries.length > 0 && activeSessions.length > 0) {
+      const currentWork = currentEntries[currentEntries.length - 1].title.toLowerCase()
+      for (const s of activeSessions) {
+        if (s.workingOn && hasOverlap(currentWork, s.workingOn.toLowerCase())) {
+          lines.push(`\n⚠️  **Potential overlap detected** with ${s.name}`)
+          lines.push(`   They're working on: ${s.workingOn}`)
+        }
+      }
+    }
+  }
+
+  return lines.join('\n')
+}
+
+function parseWorktrees(output: string): { path: string, branch: string }[] {
+  const worktrees: { path: string, branch: string }[] = []
+  const lines = output.split('\n')
+
+  let currentPath = ''
+  for (const line of lines) {
+    if (line.startsWith('worktree ')) {
+      currentPath = line.substring(9)
+    } else if (line.startsWith('branch refs/heads/')) {
+      const branch = line.substring(18)
+      if (currentPath) {
+        worktrees.push({ path: currentPath, branch })
+      }
+    }
+  }
+
+  return worktrees
+}
+
+function checkIfActive(worktreePath: string): boolean {
+  // Check for auto-commit PID
+  const pidFile = path.join(worktreePath, '.jfl', 'auto-commit.pid')
+  if (fs.existsSync(pidFile)) {
+    try {
+      const pid = parseInt(fs.readFileSync(pidFile, 'utf-8').trim(), 10)
+      if (pid > 0) {
+        // Check if process is running
+        try {
+          process.kill(pid, 0) // Doesn't kill, just checks if it exists
+          return true
+        } catch {
+          // Process not running
+        }
+      }
+    } catch {
+      // Ignore read errors
+    }
+  }
+  return false
+}
+
+function getRecentCommits(repoRoot: string, branch: string, count: number): string[] {
+  try {
+    const output = execSync(
+      `git log --oneline -${count} "${branch}" 2>/dev/null`,
+      { cwd: repoRoot, encoding: 'utf-8' }
+    )
+    return output.trim().split('\n').filter(l => l)
+  } catch {
+    return []
+  }
+}
+
+interface JournalEntry {
+  ts: string
+  title: string
+  type: string
+  summary?: string
+}
+
+function readJournalEntries(journalFile: string, hours: number): JournalEntry[] {
+  const entries: JournalEntry[] = []
+  const cutoff = Date.now() - (hours * 60 * 60 * 1000)
+
+  try {
+    const content = fs.readFileSync(journalFile, 'utf-8')
+    for (const line of content.split('\n')) {
+      if (!line.trim()) continue
+      try {
+        const entry = JSON.parse(line) as JournalEntry
+        const entryTime = new Date(entry.ts).getTime()
+        if (entryTime >= cutoff) {
+          entries.push(entry)
+        }
+      } catch {
+        // Skip invalid JSON lines
+      }
+    }
+  } catch {
+    // File doesn't exist or can't be read
+  }
+
+  return entries
+}
+
+function hasOverlap(work1: string, work2: string): boolean {
+  // Simple keyword overlap detection
+  const keywords1 = new Set(work1.split(/\s+/).filter(w => w.length > 4))
+  const keywords2 = new Set(work2.split(/\s+/).filter(w => w.length > 4))
+
+  let overlap = 0
+  for (const kw of keywords1) {
+    if (keywords2.has(kw)) overlap++
+  }
+
+  return overlap >= 2 // At least 2 significant words in common
+}
+
 async function handleToolCall(name: string, args: any): Promise<string> {
   switch (name) {
     case "context_get": {
@@ -238,10 +466,7 @@ async function handleToolCall(name: string, args: any): Promise<string> {
     }
 
     case "context_sessions": {
-      // For now, return a placeholder - cross-session requires reading worktrees
-      return `Cross-session activity (last ${args.hours || 24} hours):
-- Feature: Cross-session tracking not yet implemented
-- Use 'git worktree list' to see other active sessions`
+      return getSessionsActivity(args.hours || 24)
     }
 
     default:
