@@ -1,0 +1,137 @@
+# Brand Architect Skill Configuration
+
+skill:
+  id: brand-architect
+  version: 1.0.0
+  creator: "@402goose"
+  type: internal-workflow
+
+description: |
+  Generate brand identity options from brief - marks, colors, typography.
+
+  Creates complete brand identity systems including:
+  - SVG mark/logo options
+  - Color palettes (dark/light modes)
+  - Typography recommendations
+  - Mark + text compositions
+  - Preview files for decision-making
+
+  Guides through selection process and records final decisions.
+
+pricing:
+  base: 0.00
+  referral_pct: 0.00
+  currency: USD
+
+models:
+  required:
+    - claude-sonnet
+  optional:
+    - claude-opus
+  default: claude-sonnet
+
+triggers:
+  cli:
+    - "/brand-architect"
+  patterns:
+    - "create a brand"
+    - "generate logo options"
+    - "design color palette"
+    - "design brand identity"
+
+inputs:
+  required: []
+  optional:
+    - name: component
+      type: string
+      default: "full"
+      description: "Component to generate: full, marks, colors, typography, compositions, review, or decide"
+
+outputs:
+  primary:
+    - name: brand_options
+      type: svg
+      path: previews/brand/
+      description: SVG brand mark options
+
+  secondary:
+    - name: color_palettes
+      type: markdown
+      path: previews/brand/colors.md
+      description: Color palette options
+
+    - name: typography_recommendations
+      type: markdown
+      path: previews/brand/typography.md
+      description: Typography stack suggestions
+
+    - name: preview_files
+      type: file
+      path: previews/brand/*.html
+      description: Interactive preview files
+
+execution:
+  timeout: 120000
+  streaming: true
+  retries: 0
+  async: false
+
+context_files:
+  required:
+    - knowledge/BRAND_BRIEF.md
+  optional:
+    - knowledge/VISION.md
+    - knowledge/NARRATIVE.md
+    - knowledge/BRAND_DECISIONS.md
+
+validation:
+  - check: brand_brief_exists
+    rule: "BRAND_BRIEF.md must exist with required fields"
+
+  - check: valid_svg_output
+    rule: "Generated SVGs must be valid and well-formed"
+
+  - check: color_accessibility
+    rule: "Color palettes should meet WCAG contrast requirements"
+
+dependencies:
+  skills:
+    - web-architect
+  tools: []
+  mcp_servers: []
+
+metadata:
+  category: brand
+  tags:
+    - brand
+    - design
+    - identity
+    - logo
+    - colors
+    - typography
+  license: MIT
+  repository: https://github.com/402goose/just-fucking-launch
+  documentation: https://github.com/402goose/just-fucking-launch/blob/main/skills/brand-architect/SKILL.md
+
+compatibility:
+  min_claude_code_version: "1.0.0"
+  platforms:
+    - darwin
+    - linux
+    - win32
+
+examples:
+  - name: full_workflow
+    input:
+      component: "full"
+    expected_output_path: null
+
+  - name: marks_only
+    input:
+      component: "marks"
+    expected_output_path: null
+
+  - name: colors_only
+    input:
+      component: "colors"
+    expected_output_path: null

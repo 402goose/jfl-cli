@@ -17,6 +17,7 @@ import { hudCommand } from "./commands/hud.js"
 import { sessionCommand } from "./commands/session.js"
 import { feedbackCommand } from "./commands/feedback.js"
 import { updateCommand } from "./commands/update.js"
+import { contextHubCommand } from "./commands/context-hub.js"
 import {
   listSkillsCommand,
   installSkillCommand,
@@ -145,6 +146,13 @@ program
   .option("--dry", "Show what would be updated without making changes")
   .action(updateCommand)
 
+program
+  .command("context-hub")
+  .description("Manage Context Hub daemon (unified context for AI)")
+  .argument("[action]", "start, stop, restart, status, ensure, query")
+  .option("-p, --port <port>", "Port to run on", "4242")
+  .action((action, options) => contextHubCommand(action, { port: parseInt(options.port) }))
+
 // ============================================================================
 // SKILL MANAGEMENT (work offline)
 // ============================================================================
@@ -237,6 +245,7 @@ program
     console.log(chalk.cyan("  Free Tier (works offline):"))
     console.log("    jfl init              Initialize project")
     console.log("    jfl update            Pull latest JFL updates")
+    console.log("    jfl context-hub       Context Hub (unified AI context)")
     console.log("    jfl hud               Project dashboard")
     console.log("    jfl status            Project status")
     console.log("    jfl brand             Brand architect")
