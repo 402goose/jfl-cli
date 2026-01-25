@@ -1,7 +1,7 @@
 import chalk from "chalk"
 import ora from "ora"
 import inquirer from "inquirer"
-import { execSync } from "child_process"
+import { execSync, spawn } from "child_process"
 import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "fs"
 import { join } from "path"
 import { tmpdir } from "os"
@@ -434,12 +434,6 @@ export async function initCommand(options?: { name?: string }) {
     // Success message
     console.log(chalk.bold.green("\n✅ GTM workspace initialized!\n"))
 
-    // PROMINENT: Tell user to cd into the project
-    console.log(chalk.bgCyan.black.bold(" 👉 NEXT: Enter your project "))
-    console.log()
-    console.log(chalk.cyan.bold(`   cd ${projectName}`))
-    console.log()
-
     console.log(chalk.gray("Structure:"))
     console.log(chalk.gray(`  ${projectName}/`))
     console.log(chalk.gray("  ├── .claude/skills/ ← JFL skills"))
@@ -451,8 +445,64 @@ export async function initCommand(options?: { name?: string }) {
     console.log(chalk.gray("  ├── templates/      ← Doc templates"))
     console.log(chalk.gray("  ├── CLAUDE.md       ← AI instructions"))
     console.log(chalk.gray("  └── product/        ← Your code (add as submodule)"))
+    console.log()
 
-    console.log(chalk.gray("\nThen:"))
+    // Ask about launching Claude Code
+    const launchOptions = await inquirer.prompt([
+      {
+        type: "confirm",
+        name: "launchClaude",
+        message: "Start Claude Code now?",
+        default: true,
+      },
+    ])
+
+    let dangerMode = false
+    if (launchOptions.launchClaude) {
+      const dangerOptions = await inquirer.prompt([
+        {
+          type: "confirm",
+          name: "dangerouslySkip",
+          message: "Skip permission prompts? (dangerously-skip-permissions)",
+          default: true,
+        },
+      ])
+      dangerMode = dangerOptions.dangerouslySkip
+    }
+
+    if (launchOptions.launchClaude) {
+      console.log(chalk.cyan("\n🚀 Launching Claude Code...\n"))
+
+      // Build the command args
+      const claudeArgs: string[] = []
+      if (dangerMode) {
+        claudeArgs.push("--dangerously-skip-permissions")
+      }
+
+      // Spawn claude in the project directory
+      const claude = spawn("claude", claudeArgs, {
+        cwd: projectPath,
+        stdio: "inherit",
+        shell: true,
+      })
+
+      claude.on("error", (err) => {
+        console.log(chalk.red("\n❌ Failed to launch Claude Code"))
+        console.log(chalk.gray("  Make sure claude is installed: npm install -g @anthropic-ai/claude-code"))
+        console.log(chalk.gray(`\n  Then: cd ${projectName} && claude`))
+      })
+
+      // Don't exit - let claude take over
+      return
+    }
+
+    // If not launching, show manual instructions
+    console.log(chalk.bgCyan.black.bold(" 👉 NEXT: Enter your project "))
+    console.log()
+    console.log(chalk.cyan.bold(`   cd ${projectName}`))
+    console.log()
+
+    console.log(chalk.gray("Then:"))
     if (projectSetup.setup === "building-product" && !productRepo) {
       console.log("  git submodule add <your-product-repo> product")
     }
