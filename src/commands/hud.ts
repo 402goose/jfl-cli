@@ -2,6 +2,7 @@ import chalk from "chalk"
 import { existsSync, readFileSync, readdirSync } from "fs"
 import { join } from "path"
 import { isAuthenticated, getAuthMethod, getUser } from "./login.js"
+import { ensureInProject } from "../utils/ensure-project.js"
 
 interface RoadmapPhase {
   name: string
@@ -11,16 +12,13 @@ interface RoadmapPhase {
 }
 
 export async function hudCommand(options?: { compact?: boolean }) {
-  const cwd = process.cwd()
-
-  // Check if in a JFL project
-  const hasJflConfig = existsSync(join(cwd, "CLAUDE.md")) || existsSync(join(cwd, "knowledge"))
-
-  if (!hasJflConfig) {
-    console.log(chalk.yellow("\nNot in a JFL project directory."))
-    console.log(chalk.gray("Run 'jfl init' to create a new project."))
+  // Check if in a JFL project, offer navigation if not
+  const inProject = await ensureInProject()
+  if (!inProject) {
     return
   }
+
+  const cwd = process.cwd()
 
   if (options?.compact) {
     await showCompactHud(cwd)
