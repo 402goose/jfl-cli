@@ -31,12 +31,12 @@ Don't make users fill out forms before they can build. Let them start immediatel
 
 **2. Run session sync:**
 ```bash
-./product/scripts/session/session-sync.sh
+./scripts/session/session-sync.sh
 ```
 
 **3. Run doctor check:**
 ```bash
-./product/scripts/session/jfl-doctor.sh
+./scripts/session/jfl-doctor.sh
 ```
 Note any warnings (orphaned worktrees, unmerged sessions, memory not initialized).
 
@@ -120,7 +120,7 @@ The `product/` directory is a **symlink** to `../jfl-platform`. If jfl-platform 
 ### Verify Context is Intact
 
 ```bash
-./product/scripts/session/test-context-preservation.sh
+./scripts/session/test-context-preservation.sh
 ```
 
 This checks:
@@ -145,10 +145,10 @@ Hooks in `.claude/settings.json` automatically:
 
 ```bash
 # In a separate terminal, run:
-./product/scripts/session/auto-commit.sh start
+./scripts/session/auto-commit.sh start
 
 # Or with custom interval (default 120s):
-./product/scripts/session/auto-commit.sh start 60
+./scripts/session/auto-commit.sh start 60
 ```
 
 This commits every 2 minutes to:
