@@ -9,6 +9,7 @@
 import { Command } from "commander"
 import chalk from "chalk"
 import { initCommand } from "./commands/init.js"
+import { repairCommand } from "./commands/repair.js"
 import { loginCommand, logout, getX402Address } from "./commands/login.js"
 import { statusCommand } from "./commands/status.js"
 import { deployCommand } from "./commands/deploy.js"
@@ -59,6 +60,11 @@ program
   .description("Initialize a new JFL project")
   .option("-n, --name <name>", "Project name")
   .action(initCommand)
+
+program
+  .command("repair")
+  .description("Repair a JFL project missing .jfl directory")
+  .action(repairCommand)
 
 program
   .command("hud")
@@ -343,6 +349,7 @@ program
 
     console.log(chalk.cyan("  Free Tier (works offline):"))
     console.log("    jfl init              Initialize project")
+    console.log("    jfl repair            Repair missing .jfl directory")
     console.log("    jfl update            Pull latest JFL updates")
     console.log("    jfl hud               Project dashboard")
     console.log("    jfl status            Project status")

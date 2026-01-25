@@ -38,7 +38,20 @@ export async function updateCommand(options: { dry?: boolean } = {}) {
 
   // Check if we're in a JFL project
   if (!fs.existsSync(path.join(cwd, ".jfl"))) {
-    console.log(chalk.red("Not in a JFL project. Run this from your project root."))
+    // Check if this LOOKS like a JFL project (has markers)
+    const hasJflMarkers =
+      fs.existsSync(path.join(cwd, "skills")) &&
+      fs.existsSync(path.join(cwd, "templates")) &&
+      fs.existsSync(path.join(cwd, "CLAUDE.md"))
+
+    if (hasJflMarkers) {
+      console.log(chalk.yellow("This looks like a JFL project, but .jfl/ is missing."))
+      console.log(chalk.cyan("\nTo fix this, run:"))
+      console.log(chalk.gray("  jfl repair"))
+      console.log(chalk.gray("\nThis will create .jfl/config.json with your project details."))
+    } else {
+      console.log(chalk.red("Not in a JFL project. Run this from your project root."))
+    }
     return
   }
 
