@@ -1,0 +1,51 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mkdir -p .jfl/logs && echo '🚀 JFL starting...'"
+          },
+          {
+            "type": "command",
+            "command": "./product/scripts/session/worktree-session.sh create 2>&1 | tee .jfl/worktree-path.txt | tail -20"
+          },
+          {
+            "type": "command",
+            "command": "WTPATH=$(grep 'Work in:' .jfl/worktree-path.txt | awk '{print $3}') && if [ -n \"$WTPATH\" ]; then echo \"$WTPATH\" > .jfl/current-worktree.txt && SESS=$(basename \"$WTPATH\") && echo '{\"worktree\": true, \"session_name\": \"'\"$SESS\"'\", \"worktree_path\": \"'\"$WTPATH\"'\"}' > .jfl/current-session.json && echo '' && echo '═══════════════════════════════════════════════════════════' && echo '  CLAUDE: You MUST run: cd '\"$WTPATH\" && echo '═══════════════════════════════════════════════════════════' && echo ''; fi"
+          },
+          {
+            "type": "command",
+            "command": "./product/scripts/context-hub-ensure.sh &",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node product/packages/memory/dist/context-hub/cli.js stop >> .jfl/logs/context-hub.log 2>&1 || true"
+          },
+          {
+            "type": "command",
+            "command": "(git add -A && git diff --cached --quiet || git commit -m 'auto: session save') 2>/dev/null; true"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nohup sh -c 'git add -A && git diff --cached --quiet || git commit -m \"auto: pre-compact save\"' > /dev/null 2>&1 & disown; exit 0"
+          }
+        ]
+      }
+    ]
+  }
+}

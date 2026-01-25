@@ -17,6 +17,9 @@ const TEMP_DIR = ".jfl-update-temp"
 // Files/folders to sync from template/ folder (not repo root)
 const SYNC_PATHS = [
   "CLAUDE.md",
+  ".claude/",
+  ".mcp.json",
+  "context-hub",
   "skills/",
   "templates/"
 ]

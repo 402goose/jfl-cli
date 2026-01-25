@@ -1,0 +1,19 @@
+{
+  "mcpServers": {
+    "jfl-memory": {
+      "command": "node",
+      "args": ["product/packages/memory/dist/mcp/index.js"],
+      "env": {
+        "JFL_MEMORY_DB": ".jfl/memory.db",
+        "JFL_KNOWLEDGE_DIR": "knowledge"
+      }
+    },
+    "jfl-context": {
+      "command": "node",
+      "args": ["product/packages/memory/dist/context-hub/server/mcp.js"],
+      "env": {
+        "CONTEXT_HUB_PROJECT_ROOT": "."
+      }
+    }
+  }
+}

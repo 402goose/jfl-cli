@@ -1,0 +1,28 @@
+#!/bin/bash
+#
+# Context Hub CLI Wrapper
+#
+# Wrapper script so you can run `./context-hub status` from GTM root
+# without needing to know the internal path structure.
+#
+# @purpose CLI wrapper for context hub commands
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Find the context hub CLI
+CLI="$SCRIPT_DIR/product/packages/memory/dist/context-hub/cli.js"
+
+if [ ! -f "$CLI" ]; then
+  echo "Context Hub not built yet."
+  echo ""
+  echo "Building now..."
+  cd "$SCRIPT_DIR/product/packages/memory" && npm install && npm run build
+  cd "$SCRIPT_DIR"
+
+  if [ ! -f "$CLI" ]; then
+    echo "Error: Build failed. Check product/packages/memory/"
+    exit 1
+  fi
+fi
+
+exec node "$CLI" "$@"
