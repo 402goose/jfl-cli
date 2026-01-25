@@ -2,24 +2,21 @@ import chalk from "chalk"
 import { existsSync, readFileSync } from "fs"
 import { join } from "path"
 import { getAuthMethod, getToken, getX402Address, getUser, isAuthenticated } from "./login.js"
+import { ensureInProject } from "../utils/ensure-project.js"
 
 const PLATFORM_URL = process.env.JFL_PLATFORM_URL || "https://jfl.run"
 
 export async function statusCommand() {
   console.log(chalk.bold("\n📊 JFL - Project Status\n"))
 
-  const cwd = process.cwd()
-
-  // Check if in a JFL project
-  const hasJflConfig = existsSync(join(cwd, "CLAUDE.md")) || existsSync(join(cwd, "knowledge"))
-  const hasGit = existsSync(join(cwd, ".git"))
-
-  if (!hasJflConfig) {
-    console.log(chalk.yellow("Not in a JFL project directory."))
-    console.log(chalk.gray("\nTo create a new project:"))
-    console.log("  jfl init")
+  // Check if in a JFL project, offer navigation if not
+  const inProject = await ensureInProject()
+  if (!inProject) {
     return
   }
+
+  const cwd = process.cwd()
+  const hasGit = existsSync(join(cwd, ".git"))
 
   // Project info
   console.log(chalk.cyan("Project"))
