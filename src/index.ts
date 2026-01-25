@@ -382,11 +382,9 @@ program
     console.log("    jfl status            Project status")
     console.log("    jfl brand             Brand architect")
     console.log("    jfl content           Content creator")
-<<<<<<< HEAD
-    console.log("    jfl ralph             AI agent loop (ralph-tui)")
-=======
     console.log("    jfl voice             Voice input commands")
->>>>>>> origin/main
+    console.log("    jfl ralph             AI agent loop (ralph-tui)")
+    console.log("    jfl context-hub       Context Hub (unified AI context)")
 
     console.log(chalk.cyan("\n  Platform (requires login):"))
     console.log("    jfl login             Login to platform")

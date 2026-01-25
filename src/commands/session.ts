@@ -218,19 +218,6 @@ async function promptAutonomousMode(cli: DetectedCLI): Promise<boolean> {
   return autonomous
 }
 
-<<<<<<< HEAD
-function showBanner() {
-  const banner = `
-${chalk.bold.cyan("     ██╗ ███████╗ ██╗     ")}
-${chalk.bold.cyan("     ██║ ██╔════╝ ██║     ")}
-${chalk.bold.cyan("     ██║ █████╗   ██║     ")}
-${chalk.bold.cyan("██   ██║ ██╔══╝   ██║     ")}
-${chalk.bold.cyan("╚█████╔╝ ██║      ███████╗")}
-${chalk.bold.cyan(" ╚════╝  ╚═╝      ╚══════╝")}
-
-${chalk.bold("     JUST F*CKING LAUNCH")}
-${chalk.gray(" Your context layer for building and launching.")}
-=======
 async function promptChromeMode(cli: DetectedCLI): Promise<boolean> {
   // Chrome mode only available for Claude
   if (cli.provider !== "claude") return false
@@ -285,7 +272,6 @@ ${c(" ╚════╝ ")} ${c("╚═╝     ")} ${c("╚══════�
 
 ${chalk.bold("  JUST F*CKING LAUNCH")}
 ${chalk.gray("Your context layer for building.")}
->>>>>>> origin/main
 `
   console.log(banner)
 }
