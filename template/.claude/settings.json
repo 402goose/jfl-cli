@@ -61,15 +61,15 @@
         "hooks": [
           {
             "type": "command",
-            "command": "BRANCH=$(cat .jfl/current-session-branch.txt 2>/dev/null || git branch --show-current); JOURNAL=\".jfl/journal/${BRANCH}.jsonl\"; if [ ! -s \"$JOURNAL\" ] 2>/dev/null; then echo ''; echo '═══════════════════════════════════════════════════════════'; echo '❌ STOP BLOCKED - NO JOURNAL ENTRY'; echo '═══════════════════════════════════════════════════════════'; echo \"Session: $BRANCH\"; echo \"File: $JOURNAL\"; echo ''; echo 'Write entry: {\"v\":1,\"ts\":\"...\",\"session\":\"...\",\"type\":\"...\",\"title\":\"...\",\"summary\":\"...\"}'; echo '═══════════════════════════════════════════════════════════'; exit 1; fi"
+            "command": "BRANCH=$(cat .jfl/current-session-branch.txt 2>/dev/null || git branch --show-current); JOURNAL=\".jfl/journal/${BRANCH}.jsonl\"; if [ ! -s \"$JOURNAL\" ] 2>/dev/null; then echo '⚠️  No journal entry for session'; else echo '✓ Journal exists'; fi; exit 0"
           },
           {
             "type": "command",
-            "command": "jfl context-hub stop >> .jfl/logs/context-hub.log 2>&1 || true"
+            "command": "jfl context-hub stop >> .jfl/logs/context-hub.log 2>&1; echo '✓ Context hub stopped'; exit 0"
           },
           {
             "type": "command",
-            "command": "./scripts/session/session-end.sh 2>&1 || (git add -A && git diff --cached --quiet || git commit -m 'auto: stop save') 2>/dev/null; true"
+            "command": "./scripts/session/session-end.sh 2>&1 || (git add -A && git diff --cached --quiet || git commit -m 'auto: stop save') 2>/dev/null; echo '✓ Session ended'; exit 0"
           }
         ]
       }

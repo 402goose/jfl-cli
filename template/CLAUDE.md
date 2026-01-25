@@ -341,52 +341,6 @@ The memory pipeline indexes `.jfl/journal/` automatically. Entries become search
 
 ---
 
-## CRITICAL: Synopsis Command (What Happened?)
-
-**When anyone asks "what happened?" or "what did X work on?" — use the synopsis command.**
-
-This is the STANDARDIZED way to get work summaries. Don't manually string together git log, journal files, etc. Use this:
-
-```bash
-# From project root:
-cd product/packages/memory && node dist/journal/cli.js synopsis [hours] [author]
-
-# Examples:
-node dist/journal/cli.js synopsis 24           # Last 24 hours, all team
-node dist/journal/cli.js synopsis 8            # Last 8 hours
-node dist/journal/cli.js synopsis 24 hathbanger # What did hath do in 24 hours
-node dist/journal/cli.js synopsis --author "Andrew" # Filter by git author name
-```
-
-### What It Returns
-
-The synopsis aggregates:
-1. **Journal entries** from all sessions/worktrees
-2. **Git commits** from all branches
-3. **File headers** (@purpose, @spec, @decision tags)
-4. **Time audit** with category breakdown and multipliers
-
-Output includes:
-- Summary of work done (features, fixes, decisions)
-- Time audit breakdown (infra vs features vs docs vs content)
-- Per-team-member contribution
-- Health checks (too much infra? not enough outreach?)
-- Next steps from journal entries
-- Incomplete/stubbed items
-
-### When to Use
-
-| Question | Command |
-|----------|---------|
-| "What happened today?" | `synopsis 24` |
-| "What did Hath work on?" | `synopsis 48 hathbanger` |
-| "What happened this week?" | `synopsis 168` |
-| "Give me a status update" | `synopsis 24 --verbose` |
-
-**IMPORTANT:** Every AI should use this exact command. Do NOT try to manually piece together journal + commits + headers yourself. The synopsis command does it correctly every time.
-
----
-
 ## CRITICAL: Immediate Decision Capture
 
 **When a decision is made, update the relevant doc AND journal IMMEDIATELY.**
