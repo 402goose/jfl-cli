@@ -25,6 +25,7 @@ import {
   searchSkillsCommand,
 } from "./commands/skills.js"
 import { ralphCommand, showRalphHelp } from "./commands/ralph.js"
+import { contextHubCommand } from "./commands/context-hub.js"
 import {
   ensureDayPass,
   showDayPassStatus,
