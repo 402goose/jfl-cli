@@ -105,6 +105,12 @@ export async function initCommand(options?: { name?: string }) {
     // Clean up temp directory
     rmSync(tempDir, { recursive: true, force: true })
 
+    // Remove template's .git if it was copied (we want a fresh repo)
+    const templateGit = join(projectPath, ".git")
+    if (existsSync(templateGit)) {
+      rmSync(templateGit, { recursive: true, force: true })
+    }
+
     // Initialize new git repo
     execSync(`git init`, { cwd: projectPath, stdio: "pipe" })
 
