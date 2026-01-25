@@ -19,63 +19,15 @@ Don't make users fill out forms before they can build. Let them start immediatel
 
 ---
 
-## CRITICAL: Session Sync (MUST READ)
+## Session Management
 
-**Context loss is unacceptable.** Before starting ANY work, verify repos are synced.
+JFL uses git worktrees to isolate each session. This means multiple Claude sessions can work in parallel without conflicts.
 
-### At Session Start - ALWAYS Do (BEFORE RESPONDING TO USER):
-
-**Complete ALL steps before saying anything to the user.**
+### At Session Start
 
 **1. CD to worktree** (from hook output)
 
-**2. Run session sync:**
-```bash
-./scripts/session/session-sync.sh
-```
-
-**3. Run doctor check:**
-```bash
-./scripts/session/jfl-doctor.sh
-```
-Note any warnings (orphaned worktrees, unmerged sessions, memory not initialized).
-
-**4. Get unified context via MCP (REQUIRED):**
-```
-Call: mcp__jfl-context__context_get
-```
-
-This single call returns:
-- Recent journal entries (what happened across sessions)
-- Knowledge docs (vision, roadmap, narrative, thesis)
-- Code file headers (@purpose tags)
-
-**DO NOT read individual markdown files.** The context MCP tool aggregates everything. This is why we built Context Hub.
-
-**5. Show recent journal entries:**
-```bash
-cat .jfl/journal/*.jsonl 2>/dev/null | tail -10
-```
-
-**6. Run /hud to show project dashboard:**
-```
-Invoke: /hud skill
-```
-
-This displays the full status, pipeline, tasks, and guides next action.
-
-**ONLY AFTER completing all 6 steps**, respond to the user with the HUD output.
-
-If you need to search for something specific later:
-```
-Call: mcp__jfl-context__context_search with query="your search"
-```
-
-### CRITICAL: CD to Worktree
-
-**After SessionStart hook runs, you MUST cd to the worktree.**
-
-The hook creates a worktree and outputs:
+The SessionStart hook creates a worktree and outputs:
 ```
 ═══════════════════════════════════════════════════════════
   CLAUDE: You MUST run: cd /path/to/worktree
@@ -101,41 +53,27 @@ pwd && git branch --show-current
 
 Should show `/path/worktrees/session-*` and branch `session-*`, NOT `main`.
 
----
-
-This syncs:
-- jfl-gtm (this repo)
-- jfl-platform (product symlink target)
-- All submodules
-
-### Why This Matters
-
-The `product/` directory is a **symlink** to `../jfl-platform`. If jfl-platform gets out of sync with GitHub:
-- Files appear "deleted" when they exist on GitHub
-- Work done in previous sessions is invisible
-- User loses trust in the system
-
-**This has happened multiple times. Do not skip the sync.**
-
-### Verify Context is Intact
-
+**2. Run doctor check (optional):**
 ```bash
-./scripts/session/test-context-preservation.sh
+./scripts/session/jfl-doctor.sh
+```
+Note any warnings (orphaned worktrees, unmerged sessions).
+
+**3. Show recent journal entries:**
+```bash
+cat .jfl/journal/*.jsonl 2>/dev/null | tail -10
 ```
 
-This checks:
-- Critical knowledge files exist (VISION.md, BRAND_DECISIONS.md, etc.)
-- Product specs exist (PLATFORM_SPEC.md, TEMPLATE_SPEC.md, CONTEXT_GRAPH_SPEC.md)
-- Git repos are in sync with remotes
-- No uncommitted changes in knowledge/
+**4. Run /hud to show project dashboard:**
+```
+Invoke: /hud skill
+```
 
-**If tests fail, do not proceed until fixed.**
-
-### Auto-Push on Session End
+### Auto-Commit on Session End
 
 Hooks in `.claude/settings.json` automatically:
 - Commit changes on Stop/PreCompact
-- Push to origin
+- Save work to the session branch
 
 ### Continuous Auto-Commit (RECOMMENDED)
 
