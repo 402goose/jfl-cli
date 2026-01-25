@@ -9,8 +9,31 @@
  */
 
 import * as readline from "readline"
+import * as fs from "fs"
+import * as path from "path"
 
 const CONTEXT_HUB_URL = process.env.CONTEXT_HUB_URL || "http://localhost:4242"
+const TOKEN_FILE = ".jfl/context-hub.token"
+
+// ============================================================================
+// Auth
+// ============================================================================
+
+function getAuthToken(): string | null {
+  // Try to find token file by walking up from cwd
+  let dir = process.cwd()
+  const root = path.parse(dir).root
+
+  while (dir !== root) {
+    const tokenPath = path.join(dir, TOKEN_FILE)
+    if (fs.existsSync(tokenPath)) {
+      return fs.readFileSync(tokenPath, 'utf-8').trim()
+    }
+    dir = path.dirname(dir)
+  }
+
+  return null
+}
 
 // ============================================================================
 // Types
@@ -114,11 +137,25 @@ const TOOLS = [
 async function callContextHub(endpoint: string, body?: any): Promise<any> {
   try {
     const url = `${CONTEXT_HUB_URL}${endpoint}`
+    const token = getAuthToken()
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json"
+    }
+
+    if (token) {
+      headers["Authorization"] = `Bearer ${token}`
+    }
+
     const response = await fetch(url, {
       method: body ? "POST" : "GET",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: body ? JSON.stringify(body) : undefined
     })
+
+    if (response.status === 401) {
+      throw new Error("Unauthorized. Token file may be missing or invalid. Restart Context Hub: jfl context-hub restart")
+    }
 
     if (!response.ok) {
       throw new Error(`Context Hub returned ${response.status}`)

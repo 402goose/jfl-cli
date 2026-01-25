@@ -18,6 +18,74 @@ import * as readline from "readline"
 const DEFAULT_PORT = 4242
 const PID_FILE = ".jfl/context-hub.pid"
 const LOG_FILE = ".jfl/logs/context-hub.log"
+const TOKEN_FILE = ".jfl/context-hub.token"
+
+// ============================================================================
+// Security
+// ============================================================================
+
+function generateToken(): string {
+  return Array.from({ length: 32 }, () =>
+    Math.floor(Math.random() * 16).toString(16)
+  ).join('')
+}
+
+function getTokenFile(projectRoot: string): string {
+  return path.join(projectRoot, TOKEN_FILE)
+}
+
+function getOrCreateToken(projectRoot: string): string {
+  const tokenFile = getTokenFile(projectRoot)
+
+  if (fs.existsSync(tokenFile)) {
+    return fs.readFileSync(tokenFile, 'utf-8').trim()
+  }
+
+  const token = generateToken()
+  fs.writeFileSync(tokenFile, token, { mode: 0o600 }) // Owner read/write only
+  return token
+}
+
+function validateAuth(req: http.IncomingMessage, projectRoot: string): boolean {
+  const tokenFile = getTokenFile(projectRoot)
+
+  // If no token file exists, allow access (backwards compatibility during migration)
+  if (!fs.existsSync(tokenFile)) {
+    return true
+  }
+
+  const expectedToken = fs.readFileSync(tokenFile, 'utf-8').trim()
+  const authHeader = req.headers['authorization']
+
+  if (!authHeader) {
+    return false
+  }
+
+  // Support "Bearer <token>" format
+  const providedToken = authHeader.startsWith('Bearer ')
+    ? authHeader.slice(7)
+    : authHeader
+
+  return providedToken === expectedToken
+}
+
+function isPortInUse(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = http.createServer()
+    server.once('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE') {
+        resolve(true)
+      } else {
+        resolve(false)
+      }
+    })
+    server.once('listening', () => {
+      server.close()
+      resolve(false)
+    })
+    server.listen(port)
+  })
+}
 
 // ============================================================================
 // Types
@@ -348,10 +416,10 @@ function getUnifiedContext(projectRoot: string, query?: string, taskType?: strin
 
 function createServer(projectRoot: string, port: number): http.Server {
   const server = http.createServer((req, res) => {
-    // CORS
+    // CORS - include Authorization header
     res.setHeader("Access-Control-Allow-Origin", "*")
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-    res.setHeader("Access-Control-Allow-Headers", "Content-Type")
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
     if (req.method === "OPTIONS") {
       res.writeHead(200)
@@ -361,10 +429,21 @@ function createServer(projectRoot: string, port: number): http.Server {
 
     const url = new URL(req.url || "/", `http://localhost:${port}`)
 
-    // Health check
+    // Health check - no auth required (for monitoring)
     if (url.pathname === "/health" && req.method === "GET") {
       res.writeHead(200, { "Content-Type": "application/json" })
       res.end(JSON.stringify({ status: "ok", port }))
+      return
+    }
+
+    // All other endpoints require auth
+    if (!validateAuth(req, projectRoot)) {
+      res.writeHead(401, { "Content-Type": "application/json" })
+      res.end(JSON.stringify({
+        error: "Unauthorized",
+        message: "Provide token via Authorization header: Bearer <token>",
+        tokenFile: ".jfl/context-hub.token"
+      }))
       return
     }
 
@@ -476,15 +555,23 @@ function isRunning(projectRoot: string): { running: boolean; pid?: number } {
   }
 }
 
-function startDaemon(projectRoot: string, port: number): boolean {
+async function startDaemon(projectRoot: string, port: number): Promise<{ success: boolean; message: string }> {
   const status = isRunning(projectRoot)
   if (status.running) {
-    console.log(chalk.yellow(`Context Hub already running (PID: ${status.pid})`))
-    return true
+    return { success: true, message: `Context Hub already running (PID: ${status.pid})` }
+  }
+
+  // Check if port is in use by another process
+  const portInUse = await isPortInUse(port)
+  if (portInUse) {
+    return { success: false, message: `Port ${port} is already in use by another process` }
   }
 
   const logFile = getLogFile(projectRoot)
   const pidFile = getPidFile(projectRoot)
+
+  // Generate auth token before starting
+  const token = getOrCreateToken(projectRoot)
 
   // Start as detached process
   const child = spawn(process.execPath, [process.argv[1], "context-hub", "serve", "--port", String(port)], {
@@ -498,29 +585,58 @@ function startDaemon(projectRoot: string, port: number): boolean {
   // Write PID file
   if (child.pid) {
     fs.writeFileSync(pidFile, String(child.pid))
-    return true
+    return { success: true, message: `Started (PID: ${child.pid}). Token: ${token.slice(0, 8)}...` }
   }
 
-  return false
+  return { success: false, message: "Failed to spawn daemon process" }
 }
 
-function stopDaemon(projectRoot: string): boolean {
+async function stopDaemon(projectRoot: string): Promise<{ success: boolean; message: string }> {
   const status = isRunning(projectRoot)
   if (!status.running || !status.pid) {
-    console.log(chalk.gray("Context Hub is not running"))
-    return true
+    return { success: true, message: "Context Hub is not running" }
   }
 
+  const pidFile = getPidFile(projectRoot)
+  const tokenFile = getTokenFile(projectRoot)
+
   try {
+    // Send SIGTERM first (graceful)
     process.kill(status.pid, "SIGTERM")
-    const pidFile = getPidFile(projectRoot)
+
+    // Wait up to 3 seconds for graceful shutdown
+    let attempts = 0
+    while (attempts < 6) {
+      await new Promise(resolve => setTimeout(resolve, 500))
+      try {
+        process.kill(status.pid, 0) // Check if still running
+        attempts++
+      } catch {
+        // Process is gone
+        break
+      }
+    }
+
+    // If still running after 3 seconds, force kill
+    try {
+      process.kill(status.pid, 0)
+      process.kill(status.pid, "SIGKILL")
+      await new Promise(resolve => setTimeout(resolve, 100))
+    } catch {
+      // Process is gone, that's fine
+    }
+
+    // Clean up PID and token files
     if (fs.existsSync(pidFile)) {
       fs.unlinkSync(pidFile)
     }
-    return true
+    if (fs.existsSync(tokenFile)) {
+      fs.unlinkSync(tokenFile)
+    }
+
+    return { success: true, message: "Context Hub stopped" }
   } catch (err) {
-    console.error(chalk.red("Failed to stop daemon"))
-    return false
+    return { success: false, message: `Failed to stop daemon: ${err}` }
   }
 }
 
@@ -544,23 +660,31 @@ export async function contextHubCommand(
   switch (action) {
     case "start": {
       const spinner = ora("Starting Context Hub...").start()
-      if (startDaemon(projectRoot, port)) {
-        // Wait for server to be ready
-        await new Promise(resolve => setTimeout(resolve, 500))
-        const status = isRunning(projectRoot)
-        spinner.succeed(`Context Hub started on port ${port} (PID: ${status.pid})`)
+      const result = await startDaemon(projectRoot, port)
+      if (result.success) {
+        // Check if it was already running
+        if (result.message.includes("already running")) {
+          spinner.info(result.message)
+        } else {
+          // Wait for server to be ready
+          await new Promise(resolve => setTimeout(resolve, 500))
+          const status = isRunning(projectRoot)
+          spinner.succeed(`Context Hub started on port ${port} (PID: ${status.pid})`)
+          console.log(chalk.gray(`  Token file: .jfl/context-hub.token`))
+        }
       } else {
-        spinner.fail("Failed to start Context Hub")
+        spinner.fail(result.message)
       }
       break
     }
 
     case "stop": {
       const spinner = ora("Stopping Context Hub...").start()
-      if (stopDaemon(projectRoot)) {
-        spinner.succeed("Context Hub stopped")
+      const result = await stopDaemon(projectRoot)
+      if (result.success) {
+        spinner.succeed(result.message)
       } else {
-        spinner.fail("Failed to stop Context Hub")
+        spinner.fail(result.message)
       }
       break
     }
@@ -603,7 +727,7 @@ export async function contextHubCommand(
         return
       }
       // Start silently
-      startDaemon(projectRoot, port)
+      await startDaemon(projectRoot, port)
       break
     }
 
