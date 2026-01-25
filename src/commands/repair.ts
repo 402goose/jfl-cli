@@ -13,7 +13,7 @@ import { isAuthenticated, getUser, getAuthMethod, getX402Address } from "./login
 
 // Markers that indicate this is a JFL project
 const JFL_MARKERS = {
-  required: ["skills", "templates", "CLAUDE.md"],
+  required: [".claude/skills", "templates", "CLAUDE.md"],
   optional: ["knowledge", "content", "suggestions", "previews"]
 }
 

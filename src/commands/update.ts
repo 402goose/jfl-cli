@@ -20,7 +20,6 @@ const SYNC_PATHS = [
   ".claude/",
   ".mcp.json",
   "context-hub",
-  "skills/",
   "templates/"
 ]
 
@@ -43,7 +42,7 @@ export async function updateCommand(options: { dry?: boolean } = {}) {
   if (!fs.existsSync(path.join(cwd, ".jfl"))) {
     // Check if this LOOKS like a JFL project (has markers)
     const hasJflMarkers =
-      fs.existsSync(path.join(cwd, "skills")) &&
+      fs.existsSync(path.join(cwd, ".claude", "skills")) &&
       fs.existsSync(path.join(cwd, "templates")) &&
       fs.existsSync(path.join(cwd, "CLAUDE.md"))
 

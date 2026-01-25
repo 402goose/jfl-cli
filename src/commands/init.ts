@@ -103,7 +103,7 @@ export async function initCommand(options?: { name?: string }) {
       execSync(`cp -r ${templatePath}/.[!.]* ${projectPath}/ 2>/dev/null || true`, { stdio: "pipe" })
 
       // Verify we got the expected structure
-      const expectedDirs = ["skills", "templates", "knowledge", "content", "suggestions", "previews", ".jfl"]
+      const expectedDirs = [".claude/skills", "templates", "knowledge", "content", "suggestions", "previews", ".jfl"]
       const missingDirs = expectedDirs.filter(dir => !existsSync(join(projectPath, dir)))
 
       if (missingDirs.length > 0) {
@@ -431,12 +431,12 @@ export async function initCommand(options?: { name?: string }) {
 
     console.log(chalk.gray("Structure:"))
     console.log(chalk.gray(`  ${projectName}/`))
+    console.log(chalk.gray("  ├── .claude/skills/ ← JFL skills"))
     console.log(chalk.gray("  ├── .jfl/           ← Project config"))
     console.log(chalk.gray("  ├── knowledge/      ← Strategy & context"))
     console.log(chalk.gray("  ├── content/        ← Marketing content"))
     console.log(chalk.gray("  ├── suggestions/    ← Contributor work"))
     console.log(chalk.gray("  ├── previews/       ← Generated assets"))
-    console.log(chalk.gray("  ├── skills/         ← JFL skills"))
     console.log(chalk.gray("  ├── templates/      ← Doc templates"))
     console.log(chalk.gray("  ├── CLAUDE.md       ← AI instructions"))
     console.log(chalk.gray("  └── product/        ← Your code (add as submodule)"))
