@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "jfl-memory": {
+      "command": "jfl",
+      "args": ["mcp", "memory"],
+      "env": {
+        "JFL_MEMORY_DB": ".jfl/memory.db",
+        "JFL_KNOWLEDGE_DIR": "knowledge"
+      }
+    }
+  }
+}
