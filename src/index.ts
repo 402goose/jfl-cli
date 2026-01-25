@@ -28,7 +28,6 @@ import {
   searchSkillsCommand,
 } from "./commands/skills.js"
 import { ralphCommand, showRalphHelp } from "./commands/ralph.js"
-import { contextHubCommand } from "./commands/context-hub.js"
 import {
   ensureDayPass,
   showDayPassStatus,
@@ -163,13 +162,6 @@ program
   .description("Pull latest JFL product updates")
   .option("--dry", "Show what would be updated without making changes")
   .action(updateCommand)
-
-program
-  .command("context-hub")
-  .description("Manage Context Hub daemon")
-  .argument("[action]", "start, stop, restart, status, ensure, query")
-  .option("-p, --port <port>", "Port to run on", "4242")
-  .action((action, options) => contextHubCommand(action, { port: parseInt(options.port) }))
 
 // ============================================================================
 // SKILL MANAGEMENT (work offline)
