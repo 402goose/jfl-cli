@@ -1,0 +1,43 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "mkdir -p .jfl/logs && echo '🚀 JFL starting...'"
+          },
+          {
+            "type": "command",
+            "command": "jfl context-hub ensure >> .jfl/logs/context-hub.log 2>&1 &",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "jfl context-hub stop >> .jfl/logs/context-hub.log 2>&1 || true"
+          },
+          {
+            "type": "command",
+            "command": "(git add -A && git diff --cached --quiet || git commit -m 'auto: session save') 2>/dev/null; true"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "nohup sh -c 'git add -A && git diff --cached --quiet || git commit -m \"auto: pre-compact save\"' > /dev/null 2>&1 & disown; exit 0"
+          }
+        ]
+      }
+    ]
+  }
+}
