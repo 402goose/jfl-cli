@@ -107,7 +107,7 @@ export async function updateCommand(options: { dry?: boolean } = {}) {
       fs.rmSync(tempPath, { recursive: true })
     }
 
-    execSync(`git clone --depth 1 ${PRODUCT_REPO} ${TEMP_DIR}`, {
+    execSync(`git clone --depth 1 ${TEMPLATE_REPO} ${TEMP_DIR}`, {
       cwd,
       stdio: "pipe"
     })
@@ -117,8 +117,8 @@ export async function updateCommand(options: { dry?: boolean } = {}) {
     let updated: string[] = []
     let skipped: string[] = []
 
-    // Source from template/ subfolder
-    const templatePath = path.join(tempPath, "template")
+    // Source from root of template repo (jfl-template has files at root)
+    const templatePath = tempPath
 
     for (const syncPath of SYNC_PATHS) {
       const sourcePath = path.join(templatePath, syncPath)

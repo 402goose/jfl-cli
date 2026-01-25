@@ -81,21 +81,10 @@ export async function initCommand(options?: { name?: string }) {
     // Create project directory
     mkdirSync(projectPath, { recursive: true })
 
-    // Look for template in multiple possible locations
-    let templatePath: string | null = null
-    const possiblePaths = [
-      join(tempDir, "product", "template"),  // product/template/ (current structure)
-      join(tempDir, "template"),             // template/ (legacy/future)
-    ]
+    // jfl-template repo has files at root
+    const templatePath = tempDir
 
-    for (const path of possiblePaths) {
-      if (existsSync(path)) {
-        templatePath = path
-        break
-      }
-    }
-
-    if (templatePath) {
+    if (existsSync(join(templatePath, "CLAUDE.md"))) {
       // Copy template contents (files and folders)
       execSync(`cp -r ${templatePath}/* ${projectPath}/`, { stdio: "pipe" })
 
