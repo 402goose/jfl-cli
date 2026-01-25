@@ -662,11 +662,16 @@ export async function contextHubCommand(
       const spinner = ora("Starting Context Hub...").start()
       const result = await startDaemon(projectRoot, port)
       if (result.success) {
-        // Wait for server to be ready
-        await new Promise(resolve => setTimeout(resolve, 500))
-        const status = isRunning(projectRoot)
-        spinner.succeed(`Context Hub started on port ${port} (PID: ${status.pid})`)
-        console.log(chalk.gray(`  Token file: .jfl/context-hub.token`))
+        // Check if it was already running
+        if (result.message.includes("already running")) {
+          spinner.info(result.message)
+        } else {
+          // Wait for server to be ready
+          await new Promise(resolve => setTimeout(resolve, 500))
+          const status = isRunning(projectRoot)
+          spinner.succeed(`Context Hub started on port ${port} (PID: ${status.pid})`)
+          console.log(chalk.gray(`  Token file: .jfl/context-hub.token`))
+        }
       } else {
         spinner.fail(result.message)
       }
