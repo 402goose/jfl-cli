@@ -591,23 +591,52 @@ async function startDaemon(projectRoot: string, port: number): Promise<{ success
   return { success: false, message: "Failed to spawn daemon process" }
 }
 
-function stopDaemon(projectRoot: string): boolean {
+async function stopDaemon(projectRoot: string): Promise<{ success: boolean; message: string }> {
   const status = isRunning(projectRoot)
   if (!status.running || !status.pid) {
-    console.log(chalk.gray("Context Hub is not running"))
-    return true
+    return { success: true, message: "Context Hub is not running" }
   }
 
+  const pidFile = getPidFile(projectRoot)
+  const tokenFile = getTokenFile(projectRoot)
+
   try {
+    // Send SIGTERM first (graceful)
     process.kill(status.pid, "SIGTERM")
-    const pidFile = getPidFile(projectRoot)
+
+    // Wait up to 3 seconds for graceful shutdown
+    let attempts = 0
+    while (attempts < 6) {
+      await new Promise(resolve => setTimeout(resolve, 500))
+      try {
+        process.kill(status.pid, 0) // Check if still running
+        attempts++
+      } catch {
+        // Process is gone
+        break
+      }
+    }
+
+    // If still running after 3 seconds, force kill
+    try {
+      process.kill(status.pid, 0)
+      process.kill(status.pid, "SIGKILL")
+      await new Promise(resolve => setTimeout(resolve, 100))
+    } catch {
+      // Process is gone, that's fine
+    }
+
+    // Clean up PID and token files
     if (fs.existsSync(pidFile)) {
       fs.unlinkSync(pidFile)
     }
-    return true
+    if (fs.existsSync(tokenFile)) {
+      fs.unlinkSync(tokenFile)
+    }
+
+    return { success: true, message: "Context Hub stopped" }
   } catch (err) {
-    console.error(chalk.red("Failed to stop daemon"))
-    return false
+    return { success: false, message: `Failed to stop daemon: ${err}` }
   }
 }
 
