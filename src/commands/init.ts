@@ -92,7 +92,7 @@ export async function initCommand(options?: { name?: string }) {
       execSync(`cp -r ${templatePath}/.[!.]* ${projectPath}/ 2>/dev/null || true`, { stdio: "pipe" })
 
       // Verify we got the expected structure
-      const expectedDirs = [".claude/skills", "templates", "knowledge", "content", "suggestions", "previews", ".jfl"]
+      const expectedDirs = [".claude/skills", "templates", "knowledge", "content", "suggestions", "previews", ".jfl", "scripts/session"]
       const missingDirs = expectedDirs.filter(dir => !existsSync(join(projectPath, dir)))
 
       if (missingDirs.length > 0) {
