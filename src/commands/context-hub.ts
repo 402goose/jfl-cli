@@ -215,6 +215,105 @@ function readCodeContext(projectRoot: string, limit = 30): ContextItem[] {
 }
 
 // ============================================================================
+// Search & Scoring (TF-IDF style)
+// ============================================================================
+
+function tokenize(text: string): string[] {
+  return text
+    .toLowerCase()
+    .replace(/[^\w\s]/g, " ")
+    .split(/\s+/)
+    .filter(t => t.length > 2)
+}
+
+function computeTF(tokens: string[]): Map<string, number> {
+  const tf = new Map<string, number>()
+  for (const token of tokens) {
+    tf.set(token, (tf.get(token) || 0) + 1)
+  }
+  // Normalize by document length
+  for (const [term, count] of tf) {
+    tf.set(term, count / tokens.length)
+  }
+  return tf
+}
+
+function computeIDF(documents: string[][]): Map<string, number> {
+  const idf = new Map<string, number>()
+  const N = documents.length
+
+  // Count documents containing each term
+  const docCount = new Map<string, number>()
+  for (const doc of documents) {
+    const uniqueTerms = new Set(doc)
+    for (const term of uniqueTerms) {
+      docCount.set(term, (docCount.get(term) || 0) + 1)
+    }
+  }
+
+  // Compute IDF
+  for (const [term, count] of docCount) {
+    idf.set(term, Math.log((N + 1) / (count + 1)) + 1)
+  }
+
+  return idf
+}
+
+function scoreItem(
+  item: ContextItem,
+  queryTokens: string[],
+  idf: Map<string, number>
+): number {
+  const text = `${item.title} ${item.content}`
+  const tokens = tokenize(text)
+  const tf = computeTF(tokens)
+
+  let score = 0
+  for (const queryTerm of queryTokens) {
+    const termTF = tf.get(queryTerm) || 0
+    const termIDF = idf.get(queryTerm) || 1
+    score += termTF * termIDF
+  }
+
+  // Boost title matches
+  const titleTokens = new Set(tokenize(item.title))
+  for (const queryTerm of queryTokens) {
+    if (titleTokens.has(queryTerm)) {
+      score *= 1.5
+    }
+  }
+
+  // Boost recent items (journal)
+  if (item.source === "journal" && item.timestamp) {
+    const age = Date.now() - new Date(item.timestamp).getTime()
+    const daysSinceUpdate = age / (1000 * 60 * 60 * 24)
+    if (daysSinceUpdate < 7) {
+      score *= 1.3 // Boost recent entries
+    }
+  }
+
+  return score
+}
+
+function semanticSearch(items: ContextItem[], query: string): ContextItem[] {
+  const queryTokens = tokenize(query)
+  if (queryTokens.length === 0) return items
+
+  // Build corpus for IDF
+  const documents = items.map(item => tokenize(`${item.title} ${item.content}`))
+  const idf = computeIDF(documents)
+
+  // Score and sort
+  for (const item of items) {
+    item.relevance = scoreItem(item, queryTokens, idf)
+  }
+
+  return items
+    .filter(item => (item.relevance || 0) > 0)
+    .sort((a, b) => (b.relevance || 0) - (a.relevance || 0))
+}
+
+// ============================================================================
 // Orchestrator
 // ============================================================================
 
@@ -223,18 +322,11 @@ function getUnifiedContext(projectRoot: string, query?: string, taskType?: strin
   const knowledgeItems = readKnowledgeDocs(projectRoot)
   const codeItems = readCodeContext(projectRoot)
 
-  // TODO: Add memory/embeddings support when available
+  let items = [...journalItems, ...knowledgeItems, ...codeItems]
 
-  const items = [...journalItems, ...knowledgeItems, ...codeItems]
-
-  // Simple relevance scoring if query provided
+  // Apply semantic search if query provided
   if (query) {
-    const queryLower = query.toLowerCase()
-    for (const item of items) {
-      const text = `${item.title} ${item.content}`.toLowerCase()
-      item.relevance = text.includes(queryLower) ? 1 : 0
-    }
-    items.sort((a, b) => (b.relevance || 0) - (a.relevance || 0))
+    items = semanticSearch(items, query)
   }
 
   return {
@@ -243,7 +335,7 @@ function getUnifiedContext(projectRoot: string, query?: string, taskType?: strin
       journal: journalItems.length > 0,
       knowledge: knowledgeItems.length > 0,
       code: codeItems.length > 0,
-      memory: false // TODO: implement
+      memory: false
     },
     query,
     taskType
