@@ -17,6 +17,7 @@ import { hudCommand } from "./commands/hud.js"
 import { sessionCommand } from "./commands/session.js"
 import { feedbackCommand } from "./commands/feedback.js"
 import { updateCommand } from "./commands/update.js"
+import { contextHubCommand } from "./commands/context-hub.js"
 import {
   listSkillsCommand,
   installSkillCommand,
@@ -144,6 +145,13 @@ program
   .description("Pull latest JFL product updates")
   .option("--dry", "Show what would be updated without making changes")
   .action(updateCommand)
+
+program
+  .command("context-hub")
+  .description("Manage Context Hub daemon")
+  .argument("[action]", "start, stop, restart, status, ensure, query")
+  .option("-p, --port <port>", "Port to run on", "4242")
+  .action((action, options) => contextHubCommand(action, { port: parseInt(options.port) }))
 
 // ============================================================================
 // SKILL MANAGEMENT (work offline)
