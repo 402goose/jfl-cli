@@ -1,11 +1,75 @@
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "./scripts/session/session-init.sh"
+          },
+          {
+            "type": "command",
+            "command": "jfl context-hub ensure >> .jfl/logs/context-hub.log 2>&1 &",
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$TOOL_INPUT\" | grep -qE 'git commit'; then BRANCH=$(cat .jfl/current-session-branch.txt 2>/dev/null || git branch --show-current); MSG=$(git log -1 --pretty=%B 2>/dev/null | head -1); FILES=$(git diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null | tr '\\n' ', ' | sed 's/,$//'); echo ''; echo '═══════════════════════════════════════════════════════════'; echo '📝 JOURNAL REQUIRED: Git commit detected'; echo '═══════════════════════════════════════════════════════════'; echo \"Commit: $(git rev-parse --short HEAD 2>/dev/null)\"; echo \"Message: $MSG\"; echo \"Files: $FILES\"; echo ''; echo 'WRITE JOURNAL ENTRY NOW. File: .jfl/journal/'\"${BRANCH}\"'.jsonl'; echo '═══════════════════════════════════════════════════════════'; fi"
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "FILE=$(echo \"$TOOL_INPUT\" | grep -oE '\"file_path\":\\s*\"[^\"]+\"' | head -1 | sed 's/.*\"\\([^\"]*\\)\"/\\1/'); if echo \"$FILE\" | grep -qE '\\.(ts|tsx|js|jsx)$'; then if [ -f \"$FILE\" ] && ! head -20 \"$FILE\" | grep -q '@purpose'; then echo ''; echo '⚠️  MISSING @purpose HEADER'; echo \"   File: $FILE\"; echo '   Add: /** @purpose One-line description */'; fi; fi",
+            "async": true
+          }
+        ]
+      },
+      {
+        "matcher": "TaskUpdate",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$TOOL_INPUT\" | grep -q '\"status\":\\s*\"completed\"'; then BRANCH=$(cat .jfl/current-session-branch.txt 2>/dev/null || git branch --show-current); echo ''; echo '═══════════════════════════════════════════════════════════'; echo '📝 JOURNAL REQUIRED: Task completed'; echo '═══════════════════════════════════════════════════════════'; echo 'WRITE JOURNAL ENTRY NOW. File: .jfl/journal/'\"${BRANCH}\"'.jsonl'; echo '═══════════════════════════════════════════════════════════'; fi"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "done|looks good|ship it|approved|lgtm|perfect|yes do it|go ahead|yeah|yep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "BRANCH=$(cat .jfl/current-session-branch.txt 2>/dev/null || git branch --show-current); echo ''; echo '═══════════════════════════════════════════════════════════'; echo '📝 JOURNAL CHECK: User approved/confirmed something'; echo '═══════════════════════════════════════════════════════════'; echo 'If a decision or feature was just approved, write journal entry.'; echo 'File: .jfl/journal/'\"${BRANCH}\"'.jsonl'; echo '═══════════════════════════════════════════════════════════'"
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "git add -A && git diff --cached --quiet || git commit -m 'auto: session save'; echo '✓ Changes saved'; exit 0"
+            "command": "BRANCH=$(cat .jfl/current-session-branch.txt 2>/dev/null || git branch --show-current); JOURNAL=\".jfl/journal/${BRANCH}.jsonl\"; if [ ! -s \"$JOURNAL\" ] 2>/dev/null; then echo ''; echo '═══════════════════════════════════════════════════════════'; echo '❌ STOP BLOCKED - NO JOURNAL ENTRY'; echo '═══════════════════════════════════════════════════════════'; echo \"Session: $BRANCH\"; echo \"File: $JOURNAL\"; echo ''; echo 'Write entry: {\"v\":1,\"ts\":\"...\",\"session\":\"...\",\"type\":\"...\",\"title\":\"...\",\"summary\":\"...\"}'; echo '═══════════════════════════════════════════════════════════'; exit 1; fi"
+          },
+          {
+            "type": "command",
+            "command": "jfl context-hub stop >> .jfl/logs/context-hub.log 2>&1 || true"
+          },
+          {
+            "type": "command",
+            "command": "./scripts/session/session-end.sh 2>&1 || (git add -A && git diff --cached --quiet || git commit -m 'auto: stop save') 2>/dev/null; true"
           }
         ]
       }
@@ -15,7 +79,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "git add -A && git diff --cached --quiet || git commit -m 'auto: pre-compact save'; echo '✓ Changes saved'; exit 0"
+            "command": "BRANCH=$(cat .jfl/current-session-branch.txt 2>/dev/null || git branch --show-current); JOURNAL=\".jfl/journal/${BRANCH}.jsonl\"; if [ ! -s \"$JOURNAL\" ] 2>/dev/null; then echo ''; echo '🚨 CONTEXT COMPACTING - WRITE JOURNAL NOW'; echo \"File: .jfl/journal/${BRANCH}.jsonl\"; fi"
+          },
+          {
+            "type": "command",
+            "command": "nohup sh -c 'git add -A && git diff --cached --quiet || git commit -m \"auto: pre-compact save\"' > /dev/null 2>&1 & disown; exit 0"
           }
         ]
       }
