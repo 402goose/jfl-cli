@@ -266,9 +266,10 @@ export async function waitForUsdcBalance(
 /**
  * Transfer USDC to another address via x402 facilitator (gasless)
  *
- * Wraps httpcat-cli under the hood:
+ * Uses httpcat-cli (bundled as dependency):
  * - httpcat send usdc <address> <amount>
  * - Uses x402 payment proxy (no ETH needed for gas)
+ * - Automatically installed with jfl via npm
  */
 export async function transferUsdc(
   toAddress: string,
@@ -277,18 +278,10 @@ export async function transferUsdc(
   const { execSync } = require('child_process')
 
   try {
-    // Check if httpcat-cli is installed
-    execSync('which httpcat', { stdio: 'pipe' })
-  } catch {
-    throw new Error(
-      'httpcat-cli not installed. Install with: npm install -g httpcat-cli'
-    )
-  }
-
-  try {
-    // Execute gasless transfer via httpcat
+    // Execute gasless transfer via httpcat (bundled as dependency)
+    // npx will find the binary in node_modules/.bin automatically
     const result = execSync(
-      `httpcat send usdc ${toAddress} ${amount} --no-confirm --wait`,
+      `npx httpcat send usdc ${toAddress} ${amount} --no-confirm --wait`,
       { encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }
     )
 

@@ -1,0 +1,112 @@
+# Campaign HUD Skill Configuration
+
+skill:
+  id: campaign-hud
+  version: 1.0.0
+  creator: "@402goose"
+  type: internal-workflow
+
+description: |
+  Display campaign status dashboard with countdown, phases, and tasks.
+
+  Shows at-a-glance view of:
+  - Days until launch
+  - Current phase and progress
+  - This week's priorities
+  - User's assigned tasks
+  - Key metrics
+
+  Essential for maintaining campaign momentum and visibility.
+
+pricing:
+  base: 0.00
+  referral_pct: 0.00
+  currency: USD
+
+models:
+  required:
+    - claude-sonnet
+  optional: []
+  default: claude-sonnet
+
+triggers:
+  cli:
+    - "/hud"
+  patterns:
+    - "show me the dashboard"
+    - "how many days until launch"
+    - "what's the status"
+    - "show campaign status"
+
+inputs:
+  required: []
+  optional:
+    - name: mode
+      type: string
+      default: "full"
+      description: "Display mode: full, compact, tasks, or metrics"
+
+outputs:
+  primary:
+    - name: dashboard
+      type: markdown
+      path: stdout
+      description: Formatted campaign dashboard
+
+  secondary: []
+
+execution:
+  timeout: 30000
+  streaming: true
+  retries: 0
+  async: false
+
+context_files:
+  required:
+    - knowledge/ROADMAP.md
+  optional:
+    - knowledge/TASKS.md
+    - templates/collaboration/TASKS.md
+    - suggestions/*.md
+
+validation:
+  - check: roadmap_exists
+    rule: "ROADMAP.md must exist with launch date"
+
+  - check: date_format
+    rule: "Launch date must be parseable"
+
+dependencies:
+  skills: []
+  tools:
+    - git
+  mcp_servers: []
+
+metadata:
+  category: strategy
+  tags:
+    - dashboard
+    - campaign
+    - status
+    - tracking
+  license: MIT
+  repository: https://github.com/402goose/just-fucking-launch
+  documentation: https://github.com/402goose/just-fucking-launch/blob/main/skills/campaign-hud/SKILL.md
+
+compatibility:
+  min_claude_code_version: "1.0.0"
+  platforms:
+    - darwin
+    - linux
+    - win32
+
+examples:
+  - name: full_dashboard
+    input:
+      mode: "full"
+    expected_output_path: null
+
+  - name: compact_mode
+    input:
+      mode: "compact"
+    expected_output_path: null

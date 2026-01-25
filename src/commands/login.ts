@@ -15,6 +15,13 @@ import {
 import { getDayPass, getDayPassTimeRemaining } from "../utils/x402-client.js"
 import { markTeammateJoined } from "../utils/auth-guard.js"
 import { getProjectWallet, setProjectWallet, isJflProject } from "../utils/project-config.js"
+import {
+  registerDevice,
+  pollDeviceStatus,
+  savePlatformAuth,
+  getPlatformToken,
+  getPlatformUser,
+} from "../utils/platform-auth.js"
 import type { Hex } from "viem"
 
 const config = new Conf({ projectName: "jfl" })
@@ -30,7 +37,15 @@ async function showAccountStatus(
 ): Promise<void> {
   console.log(chalk.bold("\n💰 JFL Account\n"))
 
-  if (walletAddress) {
+  const platformUser = getPlatformUser()
+
+  if (platformUser && platformToken) {
+    // Platform account mode
+    console.log(chalk.cyan("Platform Account"))
+    console.log(chalk.gray(`  User: ${platformUser.name || platformUser.email || "Unknown"}`))
+    console.log(chalk.gray(`  Tier: ${platformUser.tier || "Unknown"}`))
+    console.log()
+  } else if (walletAddress) {
     // x402 wallet mode
     console.log(chalk.cyan("Wallet"))
     console.log(chalk.gray(`  Address: ${walletAddress}`))
@@ -70,13 +85,6 @@ async function showAccountStatus(
     } catch (error) {
       spinner.fail("Could not check balance")
     }
-  } else if (platformToken) {
-    // Platform account mode
-    const user = config.get("user") as { name?: string; email?: string; tier?: string } | undefined
-    console.log(chalk.cyan("Platform Account"))
-    console.log(chalk.gray(`  User: ${user?.name || user?.email || "Unknown"}`))
-    console.log(chalk.gray(`  Tier: ${user?.tier || "Unknown"}`))
-    console.log()
   }
 
   // Show options
@@ -137,6 +145,7 @@ interface LoginOptions {
   solo?: boolean
   team?: boolean
   free?: boolean
+  platform?: boolean
   force?: boolean
 }
 
@@ -151,15 +160,17 @@ export async function loginCommand(options: LoginOptions = {}) {
   else if (options.solo) plan = "solo"
   else if (options.team) plan = "pro"
   else if (options.free) plan = "free"
+  else if (options.platform) plan = "platform"
 
   // Check if already logged in (with signing capability)
   const existingToken = config.get("token")
+  const existingPlatformToken = getPlatformToken()
   const existingWallet = config.get("x402Address") as string | undefined
   const hasSigningKey = config.get("x402PrivateKey") || config.get("x402SeedPhrase")
 
   // If already authenticated and no specific plan requested, show account status
-  if ((existingToken || (existingWallet && hasSigningKey)) && !options.force && !plan) {
-    await showAccountStatus(existingWallet, existingToken, isInteractive)
+  if ((existingToken || existingPlatformToken || (existingWallet && hasSigningKey)) && !options.force && !plan) {
+    await showAccountStatus(existingWallet, existingToken || existingPlatformToken, isInteractive)
     return
   }
 
@@ -172,41 +183,31 @@ export async function loginCommand(options: LoginOptions = {}) {
     console.log(chalk.bold("\n🔐 JFL - Authenticate\n"))
   }
 
-  // Show pricing options
+  // Show authentication options
   console.log(chalk.bold("┌─────────────────────────────────────────────────────┐"))
-  console.log(chalk.bold("│  Choose your plan                                   │"))
+  console.log(chalk.bold("│  Choose your authentication method                  │"))
   console.log(chalk.bold("├─────────────────────────────────────────────────────┤"))
   console.log(chalk.bold("│                                                     │"))
-  console.log(chalk.cyan("│  Day Pass") + chalk.white("        $5/day per person                 │"))
+  console.log(chalk.cyan("│  Platform Account") + chalk.white(" (Recommended)                    │"))
+  console.log(chalk.gray("│  ├─ Sign in with email or wallet                   │"))
+  console.log(chalk.gray("│  ├─ Manage subscriptions on jfl.run                │"))
+  console.log(chalk.gray("│  ├─ Dashboard + Deploy + Analytics                 │"))
+  console.log(chalk.gray("│  └─ Free trial, then flexible pricing              │"))
+  console.log(chalk.bold("│                                                     │"))
+  console.log(chalk.cyan("│  Day Pass (x402)") + chalk.white("  $5/day per person              │"))
   console.log(chalk.gray("│  ├─ Only pay the days you use it                   │"))
   console.log(chalk.gray("│  ├─ AI included (no API key needed)                │"))
-  console.log(chalk.gray("│  ├─ Chat in Telegram, Slack, Discord               │"))
-  console.log(chalk.gray("│  ├─ Dashboard + Deploy                             │"))
-  console.log(chalk.gray("│  └─ Pay with crypto (x402)                         │"))
-  console.log(chalk.bold("│                                                     │"))
-  console.log(chalk.cyan("│  Solo") + chalk.white("            $49/mo                            │"))
-  console.log(chalk.gray("│  ├─ Just you                                       │"))
-  console.log(chalk.gray("│  ├─ AI included (no API key needed)                │"))
-  console.log(chalk.gray("│  ├─ Chat in Telegram, Slack, Discord               │"))
-  console.log(chalk.gray("│  ├─ Dashboard + Deploy                             │"))
-  console.log(chalk.gray("│  └─ Best if you use it most days                   │"))
-  console.log(chalk.bold("│                                                     │"))
-  console.log(chalk.cyan("│  Team") + chalk.white("            $199/mo                           │"))
-  console.log(chalk.gray("│  ├─ Up to 5 people (+$25/seat after)               │"))
-  console.log(chalk.gray("│  ├─ AI included for everyone                       │"))
-  console.log(chalk.gray("│  ├─ Everything in Solo, plus:                      │"))
-  console.log(chalk.gray("│  ├─ Team dashboard + analytics                     │"))
-  console.log(chalk.gray("│  └─ Parallel agents                                │"))
+  console.log(chalk.gray("│  ├─ Pay with crypto wallet                         │"))
+  console.log(chalk.gray("│  └─ No platform account needed                     │"))
   console.log(chalk.bold("│                                                     │"))
   console.log(chalk.bold("└─────────────────────────────────────────────────────┘"))
 
   // If no plan specified and non-interactive, show commands and exit
   if (!plan && !isInteractive) {
-    console.log(chalk.yellow("\nRunning non-interactively. Specify a plan:\n"))
-    console.log(chalk.white("  jfl login --x402") + chalk.gray("   Day Pass ($5/day, crypto)"))
-    console.log(chalk.white("  jfl login --solo") + chalk.gray("   Solo ($49/mo)"))
-    console.log(chalk.white("  jfl login --team") + chalk.gray("   Team ($199/mo)"))
-    console.log(chalk.white("  jfl login --free") + chalk.gray("   Stay on trial"))
+    console.log(chalk.yellow("\nRunning non-interactively. Specify an auth method:\n"))
+    console.log(chalk.white("  jfl login --platform") + chalk.gray(" Platform account (recommended)"))
+    console.log(chalk.white("  jfl login --x402") + chalk.gray("     Day Pass ($5/day, crypto)"))
+    console.log(chalk.white("  jfl login --free") + chalk.gray("     Stay on trial"))
     console.log()
     return
   }
@@ -217,11 +218,10 @@ export async function loginCommand(options: LoginOptions = {}) {
       {
         type: "list",
         name: "selectedPlan",
-        message: "Which plan?",
+        message: "How do you want to authenticate?",
         choices: [
-          { name: chalk.cyan("Day Pass") + " - $5/day, pay with crypto", value: "x402" },
-          { name: chalk.cyan("Solo") + " - $49/mo, just you", value: "solo" },
-          { name: chalk.cyan("Team") + " - $199/mo, up to 5 people", value: "pro" },
+          { name: chalk.cyan("Platform Account") + " - Email/wallet, manage on jfl.run (recommended)", value: "platform" },
+          { name: chalk.cyan("Day Pass (x402)") + " - $5/day, pay with crypto", value: "x402" },
           new inquirer.Separator(),
           { name: chalk.gray("Stay on trial (local only, BYOAI)"), value: "free" },
         ],
@@ -241,7 +241,9 @@ export async function loginCommand(options: LoginOptions = {}) {
     return
   }
 
-  if (plan === "x402") {
+  if (plan === "platform") {
+    await loginWithPlatform(isInteractive)
+  } else if (plan === "x402") {
     await loginWithX402(isInteractive)
   } else {
     await loginWithGitHub(plan, isInteractive)
@@ -710,6 +712,95 @@ async function loginWithGitHub(plan: string = "solo", isInteractive: boolean = t
   }
 }
 
+async function loginWithPlatform(isInteractive: boolean = true) {
+  console.log(chalk.cyan("\n🔐 Platform Authentication\n"))
+
+  // Non-interactive: show instructions
+  if (!isInteractive) {
+    console.log(chalk.yellow("Running non-interactively.\n"))
+    console.log(chalk.white("To authenticate with the platform:"))
+    console.log(chalk.gray("  Run this command in your terminal:"))
+    console.log(chalk.cyan("    jfl login --platform\n"))
+    console.log(chalk.gray("(Platform login requires an interactive terminal)\n"))
+    return
+  }
+
+  try {
+    // Step 1: Register device and get code
+    console.log(chalk.gray("Registering device...\n"))
+    const { deviceId, deviceCode, verificationUrl, expiresIn } = await registerDevice()
+
+    // Step 2: Show code to user
+    console.log(chalk.bold("🔑 Device Code\n"))
+    console.log(chalk.cyan("┌────────────┐"))
+    console.log(chalk.cyan("│  ") + chalk.bold.white(deviceCode) + chalk.cyan("  │"))
+    console.log(chalk.cyan("└────────────┘"))
+    console.log()
+    console.log(chalk.gray("1. Opening browser to link your device..."))
+    console.log(chalk.gray(`2. Sign in with your email or wallet`))
+    console.log(chalk.gray(`3. Enter the code: ${chalk.yellow(deviceCode)}`))
+    console.log()
+    console.log(chalk.dim(`Code expires in ${expiresIn} seconds`))
+    console.log()
+
+    // Step 3: Open browser
+    try {
+      const openCommand =
+        process.platform === "darwin"
+          ? "open"
+          : process.platform === "win32"
+            ? "start"
+            : "xdg-open"
+
+      execSync(`${openCommand} "${verificationUrl}"`, { stdio: "pipe" })
+    } catch {
+      console.log(chalk.yellow("Could not open browser automatically."))
+      console.log(chalk.gray(`Please visit: ${verificationUrl}`))
+      console.log()
+    }
+
+    // Step 4: Poll for linking
+    const spinner = ora("Waiting for authentication...").start()
+
+    const result = await pollDeviceStatus(deviceId, expiresIn, spinner)
+
+    if (!result.success || !result.jwt || !result.user) {
+      if (result.reason === 'expired') {
+        spinner.fail("Device code expired (5 minute limit)")
+        console.log(chalk.yellow("\nThe device code has expired. Please try again:\n"))
+      } else {
+        spinner.fail("Authentication timed out")
+        console.log(chalk.yellow("\nNo response received. Please try again:\n"))
+      }
+      console.log(chalk.cyan("  jfl login --platform\n"))
+      return
+    }
+
+    // Step 5: Save authentication
+    savePlatformAuth(result.jwt, result.user)
+
+    spinner.succeed(`Authenticated as ${chalk.green(result.user.name || result.user.email)}`)
+
+    console.log(chalk.bold.green("\n✅ Platform account linked!\n"))
+    console.log(chalk.gray(`User: ${result.user.name || result.user.email}`))
+    console.log(chalk.gray(`Tier: ${result.user.tier || "Free"}`))
+    console.log()
+
+    if (result.user.tier === "FREE" || !result.user.tier) {
+      console.log(chalk.cyan("🎉 You're on the free trial!"))
+      console.log(chalk.gray("\nUpgrade anytime at: ") + chalk.cyan(`${PLATFORM_URL}/dashboard/settings`))
+    }
+    console.log()
+
+    // Check if user is joining as a teammate
+    await handleTeammateJoin()
+  } catch (error) {
+    console.error(chalk.red("\n❌ Authentication failed"))
+    console.error(chalk.gray(error instanceof Error ? error.message : String(error)))
+    console.log()
+  }
+}
+
 // ============================================================================
 // PROJECT WALLET
 // ============================================================================
@@ -806,18 +897,31 @@ export function getX402Address(): string | undefined {
   return config.get("x402Address") as string | undefined
 }
 
-export function getAuthMethod(): "github" | "x402" | undefined {
-  return config.get("authMethod") as "github" | "x402" | undefined
+export function getAuthMethod(): "github" | "x402" | "platform" | undefined {
+  return config.get("authMethod") as "github" | "x402" | "platform" | undefined
 }
 
-export function getUser(): { id: string; name: string; email: string; tier: string } | undefined {
-  return config.get("user") as { id: string; name: string; email: string; tier: string } | undefined
+export function getUser(): { id: string; name?: string; email: string; tier?: string } | undefined {
+  // Check for platform user first (newer auth method)
+  const platformUser = getPlatformUser()
+  if (platformUser) {
+    return {
+      id: platformUser.id,
+      name: platformUser.name,
+      email: platformUser.email,
+      tier: platformUser.tier,
+    }
+  }
+
+  // Fall back to legacy GitHub auth user
+  return config.get("user") as { id: string; name?: string; email: string; tier?: string } | undefined
 }
 
 export function isAuthenticated(): boolean {
   // For x402, need signing capability (not just view-only address)
   const hasX402Signing = getX402Address() && (config.get("x402PrivateKey") || config.get("x402SeedPhrase"))
-  return !!(getToken() || hasX402Signing)
+  const hasPlatformAuth = getPlatformToken()
+  return !!(getToken() || hasX402Signing || hasPlatformAuth)
 }
 
 export function isViewOnly(): boolean {
@@ -830,5 +934,7 @@ export function logout() {
   config.delete("x402Address")
   config.delete("x402PrivateKey")
   config.delete("x402SeedPhrase")
+  config.delete("platformToken")
+  config.delete("platformUser")
   config.delete("authMethod")
 }

@@ -19,271 +19,73 @@ Don't make users fill out forms before they can build. Let them start immediatel
 
 ---
 
-## CRITICAL: Worktree Session Isolation
+## CRITICAL: Session Sync (MUST READ)
 
-**Multi-session safety requires worktrees. This is non-negotiable.**
+**Context loss is unacceptable.** Before starting ANY work, verify repos are synced.
 
-When SessionStart hook runs, it creates an isolated worktree for this session. You will see:
-```
-═══════════════════════════════════════════════════════════
-  CLAUDE: You MUST run: cd /path/to/worktrees/session-xxx
-═══════════════════════════════════════════════════════════
-```
-
-### YOU MUST CD TO THAT PATH IMMEDIATELY
-
-If you don't cd to the worktree:
-- You'll work directly on `main` branch
-- Multiple sessions will clobber each other
-- Team members will overwrite each other's work
-- **This breaks everything**
-
-### At Session Start
-
-1. **See the cd instruction** in hook output
-2. **Run the cd command** exactly as shown
-3. **Verify** you're in the worktree:
-   ```bash
-   pwd && git branch --show-current
-   ```
-   Should show `worktrees/session-*` path and `session-*` branch, NOT `main`
-
-### If You Missed the Output
+### At Session Start - ALWAYS Run:
 
 ```bash
-# Find the worktree path
-cat .jfl/current-worktree.txt
-
-# CD to it
-cd $(cat .jfl/current-worktree.txt)
-
-# Verify
-pwd && git branch --show-current
-```
-
-### Why This Matters
-
-Each session gets its own branch (`session-user-date-id`). Changes auto-merge to main periodically. On session end, everything merges cleanly. Without this:
-- Session A edits file X
-- Session B edits file X
-- Both think they're on main
-- Chaos ensues
-
-**Do not skip this step. Ever.**
-
----
-
-## CRITICAL: Journal Protocol
-
-**Write the journal as you go. Don't wait for session end.**
-
-The journal (`journal/YYYY-MM.md`) is the continuous narrative of what's happening. Sessions crash, windows close, context resets — the journal survives.
-
-### When to Write
-
-Append a journal entry when ANY of these happen:
-- **Decision made** (even small ones)
-- **Knowledge doc updated** (BRAND_DECISIONS, SPEC, ROADMAP, etc.)
-- **Something learned** (especially from errors/debugging)
-- **Major feature completed**
-- **External conversation** (CRM contact, investor, customer)
-
-**Don't ask permission. Don't batch. Write immediately.**
-
-### Entry Format
-
-```markdown
-## Jan 23, 14:30 — Short title describing what happened
-
-Narrative paragraph explaining what happened, why it matters,
-and any context someone reading later would need.
-
-Multiple paragraphs if needed for complex decisions.
-
-<!-- refs
-commits:
-  - abc1234: commit message
-  - def5678: another commit
-files:
-  - path/to/file.md
-  - another/file.ts
-decision: decision-slug (if this is a decision)
-learned: what we learned (if this is a learning)
-milestone: milestone-slug (if completing something)
-status: exploring|decided|implemented|shipped
-related_docs:
-  - knowledge/RELEVANT_DOC.md
--->
-```
-
-### Refs Block
-
-The `<!-- refs -->` block is machine-readable metadata. Include:
-- `commits`: git commit hashes with messages
-- `files`: paths to files created/modified
-- `decision`: slug for decision tracking
-- `learned`: key learning (one line)
-- `milestone`: if completing a milestone
-- `status`: current state of this item
-- `related_docs`: links to relevant knowledge docs
-
-**Triggerable anytime.** User can say "journal this" or "write that down" and you should add an entry.
-
----
-
-## CRITICAL: Immediate Decision Capture
-
-**When a decision is made, update the relevant doc IMMEDIATELY.**
-
-Don't ask "should I update the doc?" Don't say "I'll update that later." Just do it.
-
-### Flow
-
-1. Decision made in conversation
-2. Identify the relevant doc:
-   - Naming/brand → `knowledge/BRAND_DECISIONS.md`
-   - Product direction → `product/SPEC.md` or relevant spec
-   - Roadmap/timeline → `knowledge/ROADMAP.md`
-   - Architecture → relevant `*_SPEC.md`
-3. Update the doc immediately (use Edit tool)
-4. Add journal entry
-5. Continue conversation
-
-### Example
-
-```
-User: "Let's go with Option A for the pricing"
-
-Claude: *updates knowledge/PRICING.md*
-        *adds journal entry*
-        "Done — updated PRICING.md with Option A.
-         Ready to implement or want to discuss the tiers?"
-```
-
-### Why This Matters
-
-- Decisions get lost in chat history
-- Docs become stale if we wait
-- Future sessions need current state
-- The journal tracks the narrative, docs track current truth
-
----
-
-## Session Management
-
-**Context loss is unacceptable.** The session hooks handle sync automatically.
-
-### What Happens on Session Start
-
-The `SessionStart` hook in `.claude/settings.json` automatically:
-1. Creates an isolated worktree for this session
-2. Syncs repos in the background (git pull, submodule updates)
-3. Starts auto-commit (every 2 minutes)
-4. Starts auto-merge to main (every 15 minutes)
-
-**You don't need to run sync manually.** The hooks handle it.
-
-### If Something Looks Wrong
-
-If files appear missing or out of sync:
-```bash
-# Check sync status
-git status
-git submodule status
-
-# Manual sync if needed
 ./product/scripts/session/session-sync.sh
 ```
 
-### Auto-Save
+This syncs:
+- jfl-gtm (this repo)
+- jfl-platform (product symlink target)
+- All submodules
 
-The session hooks automatically:
-- **Auto-commit**: Every 2 minutes (in worktree)
-- **Auto-merge**: Every 15 minutes (worktree → main)
-- **On Stop/PreCompact**: Final commit and push
+### Why This Matters
 
-You don't need to manage commits manually. Work is continuously saved.
+The `product/` directory is a **symlink** to `../jfl-platform`. If jfl-platform gets out of sync with GitHub:
+- Files appear "deleted" when they exist on GitHub
+- Work done in previous sessions is invisible
+- User loses trust in the system
 
----
+**This has happened multiple times. Do not skip the sync.**
 
-## CRM Configuration
-
-**CRM is config-driven.** The `./crm` CLI reads from `.jfl/config.json` and routes to the appropriate backend.
-
-### Supported Backends
-
-| Type | Description | Best For |
-|------|-------------|----------|
-| `google-sheets` | Google Sheets via googleapis | Teams, real-time sync |
-| `airtable` | Airtable via API | Rich field types, views |
-| `markdown` | knowledge/CRM.md file | Solo, no external deps |
-
-### Setup
-
-Run the setup wizard:
-```bash
-./crm setup
-```
-
-This will:
-1. Ask which backend you want
-2. Collect required credentials/IDs
-3. Save config to `.jfl/config.json`
-
-### Config Structure
-
-```json
-// .jfl/config.json
-{
-  "crm": {
-    "type": "google-sheets",
-    "config": {
-      "sheet_id": "your-sheet-id"
-    }
-  }
-}
-```
-
-For Airtable:
-```json
-{
-  "crm": {
-    "type": "airtable",
-    "config": {
-      "base_id": "your-base-id",
-      "api_key_env": "AIRTABLE_API_KEY"
-    }
-  }
-}
-```
-
-For markdown:
-```json
-{
-  "crm": {
-    "type": "markdown",
-    "config": {
-      "path": "knowledge/CRM.md"
-    }
-  }
-}
-```
-
-### Environment Variable Fallback
-
-If CRM type is not configured but `CRM_SHEET_ID` env var is set, the CLI automatically uses Google Sheets.
-
-### Commands
+### Verify Context is Intact
 
 ```bash
-./crm                    # Dashboard (if supported by backend)
-./crm list               # List deals/contacts
-./crm prep <name>        # Prep for a call (full context)
-./crm touch <name>       # Log activity
-./crm setup              # Run setup wizard
+./product/scripts/session/test-context-preservation.sh
 ```
 
-Available commands depend on your CRM backend.
+This checks:
+- Critical knowledge files exist (VISION.md, BRAND_DECISIONS.md, etc.)
+- Product specs exist (PLATFORM_SPEC.md, TEMPLATE_SPEC.md, CONTEXT_GRAPH_SPEC.md)
+- Git repos are in sync with remotes
+- No uncommitted changes in knowledge/
+
+**If tests fail, do not proceed until fixed.**
+
+### Auto-Push on Session End
+
+Hooks in `.claude/settings.json` automatically:
+- Commit changes on Stop/PreCompact
+- Push to origin
+
+### Continuous Auto-Commit (RECOMMENDED)
+
+**Problem:** Stop/PreCompact hooks only run if session ends cleanly. If session crashes, terminal closes, or you switch away → files can be lost.
+
+**Solution:** Run continuous auto-commit in background:
+
+```bash
+# In a separate terminal, run:
+./product/scripts/session/auto-commit.sh start
+
+# Or with custom interval (default 120s):
+./product/scripts/session/auto-commit.sh start 60
+```
+
+This commits every 2 minutes to:
+- knowledge/
+- previews/
+- content/
+- suggestions/
+- CLAUDE.md
+- .jfl/
+
+**Start this at every session.** It's the only way to guarantee no work is lost.
 
 ---
 
@@ -1180,41 +982,6 @@ The plan is a draft. Refine it with them before executing. They know things you 
 
 ## On Every Conversation Start
 
-**THIS IS MANDATORY.** Before responding to the user's FIRST message (even if it's just "hey" or a specific task), you MUST complete these steps IN ORDER. Do not skip any step. Do not jump into a task without loading context first.
-
-### 0. Load Full Context (BEFORE RESPONDING)
-
-**This step happens BEFORE you say anything to the user.**
-
-```bash
-# 1. Query memory for recent context
-node product/packages/memory/dist/cli.js context "recent work current phase" --limit 5 2>/dev/null || true
-
-# 2. Read recent journal entries (decisions captured as they happen)
-tail -50 journal/$(date +%Y-%m).md 2>/dev/null || true
-
-# 3. Pull pipeline (if CRM configured - auto-detects backend from .jfl/config.json)
-./crm list 2>/dev/null || echo "CRM not configured - run ./crm setup"
-
-# 4. Key knowledge files to scan:
-# - knowledge/VISION.md
-# - knowledge/ROADMAP.md
-# - knowledge/TASKS.md
-```
-
-**Why this matters:**
-- Memory is the hub - all context comes from memory queries
-- Journal captures decisions as they happen (not at session end)
-- Without pipeline, you miss active conversations that need follow-up
-- User expects you to "just know" the context - don't make them re-explain
-
-**What to extract:**
-- Recent decisions: What did we decide? (from journal)
-- Current focus: What's the priority? (from memory)
-- Pipeline: Any HOT/FOLLOW_UP items? Calls scheduled?
-- Tasks: What's the priority this week?
-- Ship date: How many days until launch?
-
 ### 1. Identify the User
 
 **Authentication is required for owner access.** Git config alone is NOT trusted.
@@ -1254,16 +1021,9 @@ This verifies your identity. Git config alone isn't enough for security.
 | **Contributor** | Has suggestions file | Route to suggestions |
 | **New** | No suggestions file | Onboard first |
 
-### 3. Show Status (via /hud)
+### 3. Show Status
 
-Run `/hud` to show the project dashboard. This displays:
-- Ship date countdown
-- Current phase
-- **Pipeline** (from ./crm list) - active conversations, follow-ups needed
-- This week's priorities
-- Suggested next action
-
-**The HUD is your greeting.** Don't just say "hey what do you want to work on?" - show the full picture and suggest what's next based on context.
+Run `/hud` to show the project dashboard.
 
 ---
 
@@ -1406,7 +1166,7 @@ When someone asks "what is this?", read the living docs and synthesize. The visi
 | Document | Purpose |
 |----------|---------|
 | `knowledge/TASKS.md` | Master task list |
-| `./crm` | Contact database (config-driven, see CRM Configuration section) |
+| `knowledge/CRM.md` | Contact database |
 | `suggestions/{name}.md` | Per-person working space |
 
 ---
@@ -1550,7 +1310,7 @@ Set up strategic docs:
 Configure team:
 1. Edit Team section above with owner/team info
 2. Create `suggestions/{name}.md` for each contributor
-3. Set up CRM: `./crm setup` (choose backend: Google Sheets, Airtable, or markdown)
+3. Set up CRM in `knowledge/CRM.md`
 
 ### Phase 3: Brand
 

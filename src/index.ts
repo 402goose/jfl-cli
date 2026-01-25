@@ -9,6 +9,7 @@
 import { Command } from "commander"
 import chalk from "chalk"
 import { initCommand } from "./commands/init.js"
+import { repairCommand } from "./commands/repair.js"
 import { loginCommand, logout, getX402Address } from "./commands/login.js"
 import { statusCommand } from "./commands/status.js"
 import { deployCommand } from "./commands/deploy.js"
@@ -17,7 +18,11 @@ import { hudCommand } from "./commands/hud.js"
 import { sessionCommand } from "./commands/session.js"
 import { feedbackCommand } from "./commands/feedback.js"
 import { updateCommand } from "./commands/update.js"
+<<<<<<< HEAD
 import { contextHubCommand } from "./commands/context-hub.js"
+=======
+import { voiceCommand } from "./commands/voice.js"
+>>>>>>> origin/main
 import {
   listSkillsCommand,
   installSkillCommand,
@@ -62,6 +67,11 @@ program
   .action(initCommand)
 
 program
+  .command("repair")
+  .description("Repair a JFL project missing .jfl directory")
+  .action(repairCommand)
+
+program
   .command("hud")
   .description("Show campaign dashboard")
   .option("-c, --compact", "Show compact one-line status")
@@ -79,6 +89,7 @@ program
 program
   .command("login")
   .description("Login to JFL platform")
+  .option("--platform", "Use Platform Account (recommended)")
   .option("--x402", "Use x402 Day Pass ($5/day, crypto)")
   .option("--solo", "Use Solo plan ($49/mo)")
   .option("--team", "Use Team plan ($199/mo)")
@@ -189,6 +200,130 @@ skills
   .action(searchSkillsCommand)
 
 // ============================================================================
+// VOICE INPUT (work offline)
+// ============================================================================
+
+const voice = program.command("voice").description("Voice input for JFL")
+
+voice
+  .command("model")
+  .description("Manage whisper models")
+  .argument("[action]", "list, download, or default")
+  .argument("[name]", "Model name (tiny, base, small, etc.)")
+  .option("-f, --force", "Force re-download")
+  .action(async (action, name, options) => {
+    await voiceCommand("model", action, name, options)
+  })
+
+voice
+  .command("devices")
+  .description("List audio input devices")
+  .action(async () => {
+    await voiceCommand("devices")
+  })
+
+voice
+  .command("test")
+  .description("Test voice input (record 3s and transcribe)")
+  .option("-d, --device <id>", "Device ID to use")
+  .action(async (options) => {
+    await voiceCommand("test", undefined, undefined, {
+      device: options.device,
+    })
+  })
+
+voice
+  .command("recording")
+  .description("Test recording only (no transcription)")
+  .option("-d, --device <id>", "Device ID to use")
+  .option("-t, --duration <seconds>", "Recording duration in seconds", "5")
+  .action(async (options) => {
+    await voiceCommand("recording", undefined, undefined, {
+      device: options.device,
+      duration: parseInt(options.duration, 10),
+    })
+  })
+
+voice
+  .command("setup")
+  .description("First-time setup wizard for voice input")
+  .action(async () => {
+    await voiceCommand("setup")
+  })
+
+voice
+  .command("record")
+  .description("Record voice with VAD (same as running jfl voice)")
+  .option("-d, --device <id>", "Device ID to use")
+  .action(async (options) => {
+    await voiceCommand("record", undefined, undefined, {
+      device: options.device,
+    })
+  })
+
+voice
+  .command("help")
+  .description("Show voice command help")
+  .action(async () => {
+    await voiceCommand("help")
+  })
+
+voice
+  .command("hotkey")
+  .description("Start global hotkey listener (macOS only)")
+  .option("-d, --device <id>", "Device ID to use")
+  .option("-m, --mode <mode>", "Hotkey mode: auto, tap, or hold (default: auto)")
+  .action(async (options) => {
+    await voiceCommand("hotkey", undefined, undefined, {
+      device: options.device,
+      mode: options.mode,
+    })
+  })
+
+// VS-013: Daemon commands for background hotkey listening
+const daemon = voice
+  .command("daemon")
+  .description("Background hotkey listener daemon (macOS only)")
+
+daemon
+  .command("start")
+  .description("Start hotkey listener in background")
+  .option("-m, --mode <mode>", "Hotkey mode: auto, tap, or hold (default: auto)")
+  .action(async (options) => {
+    await voiceCommand("daemon", "start", undefined, {
+      mode: options.mode,
+    })
+  })
+
+daemon
+  .command("stop")
+  .description("Stop the background daemon")
+  .action(async () => {
+    await voiceCommand("daemon", "stop")
+  })
+
+daemon
+  .command("status")
+  .description("Show daemon status and uptime")
+  .action(async () => {
+    await voiceCommand("daemon", "status")
+  })
+
+// Default daemon action (show status)
+daemon.action(async () => {
+  await voiceCommand("daemon", "status")
+})
+
+// Running `jfl voice` without subcommand starts recording with VAD
+voice
+  .option("-d, --device <id>", "Device ID to use")
+  .action(async (options) => {
+    await voiceCommand(undefined, undefined, undefined, {
+      device: options.device,
+    })
+  })
+
+// ============================================================================
 // SKILL SHORTCUTS (work offline)
 // ============================================================================
 
@@ -244,12 +379,17 @@ program
 
     console.log(chalk.cyan("  Free Tier (works offline):"))
     console.log("    jfl init              Initialize project")
+    console.log("    jfl repair            Repair missing .jfl directory")
     console.log("    jfl update            Pull latest JFL updates")
     console.log("    jfl hud               Project dashboard")
     console.log("    jfl status            Project status")
     console.log("    jfl brand             Brand architect")
     console.log("    jfl content           Content creator")
+<<<<<<< HEAD
     console.log("    jfl ralph             AI agent loop (ralph-tui)")
+=======
+    console.log("    jfl voice             Voice input commands")
+>>>>>>> origin/main
 
     console.log(chalk.cyan("\n  Platform (requires login):"))
     console.log("    jfl login             Login to platform")

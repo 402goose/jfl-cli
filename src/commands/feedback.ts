@@ -3,6 +3,7 @@ import { existsSync, readFileSync, appendFileSync, mkdirSync } from "fs"
 import { join } from "path"
 import inquirer from "inquirer"
 import { isAuthenticated, getToken, getAuthMethod } from "./login.js"
+import { getPlatformAuthHeaders } from "../utils/platform-auth.js"
 
 const PLATFORM_URL = process.env.JFL_PLATFORM_URL || "https://jfl.run"
 
@@ -155,10 +156,17 @@ async function syncFeedback(feedbackFile: string) {
 
   try {
     const token = getToken()
+    const platformAuthHeaders = getPlatformAuthHeaders()
+
+    // Use platform auth if available, otherwise use legacy GitHub token
+    const authHeaders = Object.keys(platformAuthHeaders).length > 0
+      ? platformAuthHeaders
+      : { Authorization: `Bearer ${token}` }
+
     const res = await fetch(`${PLATFORM_URL}/api/feedback`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${token}`,
+        ...authHeaders,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ entries: unsynced }),
@@ -182,10 +190,17 @@ async function syncFeedback(feedbackFile: string) {
 async function syncSingleEntry(entry: FeedbackEntry) {
   try {
     const token = getToken()
+    const platformAuthHeaders = getPlatformAuthHeaders()
+
+    // Use platform auth if available, otherwise use legacy GitHub token
+    const authHeaders = Object.keys(platformAuthHeaders).length > 0
+      ? platformAuthHeaders
+      : { Authorization: `Bearer ${token}` }
+
     await fetch(`${PLATFORM_URL}/api/feedback`, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${token}`,
+        ...authHeaders,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ entries: [entry] }),

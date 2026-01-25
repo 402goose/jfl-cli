@@ -19,6 +19,10 @@ JFL is a CLI toolkit that powers go-to-market campaigns from zero to launch. It 
 npm install -g jfl
 ```
 
+JFL automatically installs all required dependencies, including:
+- **httpcat-cli** - For gasless USDC transfers via x402 (bundled, no separate install needed)
+- **@x402/evm** - x402 payment protocol for Day Pass payments
+
 ## Quick Start
 
 ```bash
@@ -110,10 +114,15 @@ JFL supports two authentication methods:
 jfl login
 ```
 
-**x402 Crypto Wallet**
+**x402 Crypto Wallet** (with httpcat-cli bundled)
 ```bash
 jfl login --x402
 ```
+
+This enables:
+- Gasless USDC transfers (no ETH needed for gas)
+- $5/day payments via x402 protocol
+- httpcat-cli automatically installed and configured
 
 View your auth status:
 ```bash

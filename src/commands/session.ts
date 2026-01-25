@@ -35,6 +35,9 @@ const AUTONOMOUS_FLAGS: Record<AIProvider, string | undefined> = {
   none: undefined,
 }
 
+// Flag for enabling Chrome/browser capabilities (Claude only)
+const CHROME_FLAG = "--chrome"
+
 export async function sessionCommand() {
   const cwd = process.cwd()
 
@@ -215,6 +218,7 @@ async function promptAutonomousMode(cli: DetectedCLI): Promise<boolean> {
   return autonomous
 }
 
+<<<<<<< HEAD
 function showBanner() {
   const banner = `
 ${chalk.bold.cyan("     ██╗ ███████╗ ██╗     ")}
@@ -226,6 +230,62 @@ ${chalk.bold.cyan(" ╚════╝  ╚═╝      ╚══════╝"
 
 ${chalk.bold("     JUST F*CKING LAUNCH")}
 ${chalk.gray(" Your context layer for building and launching.")}
+=======
+async function promptChromeMode(cli: DetectedCLI): Promise<boolean> {
+  // Chrome mode only available for Claude
+  if (cli.provider !== "claude") return false
+
+  const savedPref = config.get("chrome_claude") as boolean | undefined
+
+  // If they've already set a preference, use it
+  if (savedPref !== undefined) {
+    return savedPref
+  }
+
+  console.log()
+  const { chrome } = await inquirer.prompt([
+    {
+      type: "confirm",
+      name: "chrome",
+      message: `Enable browser capabilities? (${CHROME_FLAG})`,
+      default: false,
+    },
+  ])
+
+  if (chrome) {
+    console.log(chalk.cyan("\n🌐 Chrome mode: Claude can browse and interact with web pages."))
+  }
+
+  const { remember } = await inquirer.prompt([
+    {
+      type: "confirm",
+      name: "remember",
+      message: "Remember this choice?",
+      default: true,
+    },
+  ])
+
+  if (remember) {
+    config.set("chrome_claude", chrome)
+  }
+
+  return chrome
+}
+
+function showBanner() {
+  // Same style as GSD - aligned baseline
+  const c = chalk.cyan
+  const banner = `
+${c("     ██╗")} ${c("███████╗")} ${c("██╗     ")}
+${c("     ██║")} ${c("██╔════╝")} ${c("██║     ")}
+${c("     ██║")} ${c("█████╗  ")} ${c("██║     ")}
+${c("██╗  ██║")} ${c("██╔══╝  ")} ${c("██║     ")}
+${c("╚█████╔╝")} ${c("██║     ")} ${c("███████╗")}
+${c(" ╚════╝ ")} ${c("╚═╝     ")} ${c("╚══════╝")}
+
+${chalk.bold("  JUST F*CKING LAUNCH")}
+${chalk.gray("Your context layer for building.")}
+>>>>>>> origin/main
 `
   console.log(banner)
 }
@@ -239,8 +299,24 @@ async function launchCLI(cli: DetectedCLI, cwd: string, skipAutonomousPrompt = f
     autonomous = (config.get(`autonomous_${cli.provider}`) as boolean) || false
   }
 
-  const flag = autonomous ? AUTONOMOUS_FLAGS[cli.provider] : undefined
-  const args = flag ? [flag] : []
+  // Check for chrome mode (Claude only)
+  let chrome = false
+  if (cli.provider === "claude") {
+    if (!skipAutonomousPrompt) {
+      chrome = await promptChromeMode(cli)
+    } else {
+      chrome = (config.get("chrome_claude") as boolean) || false
+    }
+  }
+
+  // Build args array
+  const args: string[] = []
+  if (autonomous && AUTONOMOUS_FLAGS[cli.provider]) {
+    args.push(AUTONOMOUS_FLAGS[cli.provider]!)
+  }
+  if (chrome) {
+    args.push(CHROME_FLAG)
+  }
 
   showBanner()
 
@@ -252,7 +328,13 @@ async function launchCLI(cli: DetectedCLI, cwd: string, skipAutonomousPrompt = f
     console.log()
   }
 
-  console.log(chalk.cyan(`Launching ${cli.name}${autonomous ? " (autonomous)" : ""}...`))
+  // Build mode indicators
+  const modes: string[] = []
+  if (autonomous) modes.push("autonomous")
+  if (chrome) modes.push("chrome")
+  const modeStr = modes.length > 0 ? ` (${modes.join(", ")})` : ""
+
+  console.log(chalk.cyan(`Launching ${cli.name}${modeStr}...`))
   console.log(chalk.gray("Context loaded from CLAUDE.md + knowledge/\n"))
   console.log(chalk.gray("─".repeat(40)))
   console.log()
@@ -411,7 +493,7 @@ async function onboardNewUser(cwd: string) {
   // Clone template
   const spinner = ora("Creating project...").start()
 
-  const TEMPLATE_REPO = "https://github.com/402goose/just-fucking-launch.git"
+  const TEMPLATE_REPO = "https://github.com/402goose/jfl-cli.git"
 
   try {
     // Ensure parent directory exists
