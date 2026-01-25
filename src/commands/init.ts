@@ -194,6 +194,22 @@ export async function initCommand(options?: { name?: string }) {
               name: "repoName",
               message: "New repo name:",
               default: projectName!.replace(/-gtm$/, ""),
+              validate: (input: string) => {
+                if (!input.trim()) {
+                  return "Please enter a repo name"
+                }
+                if (/\s/.test(input)) {
+                  return "Repo names cannot contain spaces. Use hyphens instead (e.g., 'my-project')"
+                }
+                if (!/^[a-zA-Z0-9._-]+$/.test(input)) {
+                  return "Repo names can only contain letters, numbers, hyphens, underscores, and dots"
+                }
+                return true
+              },
+              filter: (input: string) => {
+                // Auto-convert spaces to hyphens as a convenience
+                return input.trim().replace(/\s+/g, '-')
+              },
             },
             {
               type: "list",
@@ -418,6 +434,12 @@ export async function initCommand(options?: { name?: string }) {
     // Success message
     console.log(chalk.bold.green("\n✅ GTM workspace initialized!\n"))
 
+    // PROMINENT: Tell user to cd into the project
+    console.log(chalk.bgCyan.black.bold(" 👉 NEXT: Enter your project "))
+    console.log()
+    console.log(chalk.cyan.bold(`   cd ${projectName}`))
+    console.log()
+
     console.log(chalk.gray("Structure:"))
     console.log(chalk.gray(`  ${projectName}/`))
     console.log(chalk.gray("  ├── .claude/skills/ ← JFL skills"))
@@ -430,12 +452,12 @@ export async function initCommand(options?: { name?: string }) {
     console.log(chalk.gray("  ├── CLAUDE.md       ← AI instructions"))
     console.log(chalk.gray("  └── product/        ← Your code (add as submodule)"))
 
-    console.log(chalk.gray("\nNext steps:"))
-    console.log(`  cd ${projectName}`)
+    console.log(chalk.gray("\nThen:"))
     if (projectSetup.setup === "building-product" && !productRepo) {
       console.log("  git submodule add <your-product-repo> product")
     }
     console.log("  jfl status           # Check status")
+    console.log("  claude               # Start Claude Code")
     console.log()
     console.log(chalk.gray("In Claude Code:"))
     console.log("  /hud                 # See dashboard")
