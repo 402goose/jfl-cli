@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "mkdir -p .jfl/logs && echo '🚀 JFL starting...'"
+            "command": "mkdir -p .jfl/logs .jfl/journal && echo '🚀 JFL starting...'"
           },
           {
             "type": "command",
@@ -15,9 +15,35 @@
         ]
       }
     ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "FILE=$(echo \"$TOOL_INPUT\" | grep -oE '\"file_path\":\\s*\"[^\"]+\"' | head -1 | sed 's/.*\"\\([^\"]*\\)\"/\\1/'); if echo \"$FILE\" | grep -qE '\\.(ts|tsx|js|jsx)$'; then if [ -f \"$FILE\" ] && ! head -20 \"$FILE\" | grep -q '@purpose'; then echo ''; echo '⚠️  MISSING @purpose HEADER'; echo \"   File: $FILE\"; echo '   Add: /** @purpose One-line description */'; echo ''; fi; fi",
+            "async": true
+          }
+        ]
+      },
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "if echo \"$TOOL_INPUT\" | grep -q 'knowledge/'; then jfl context-hub sync >> .jfl/logs/context-hub.log 2>&1 & fi",
+            "async": true
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
+          {
+            "type": "command",
+            "command": "BRANCH=$(git branch --show-current 2>/dev/null); JOURNAL=\".jfl/journal/${BRANCH}.jsonl\"; if [ ! -s \"$JOURNAL\" ] 2>/dev/null; then echo ''; echo '═══════════════════════════════════════════════════════════'; echo '  ❌ STOP - JOURNAL ENTRY REQUIRED'; echo '═══════════════════════════════════════════════════════════'; echo ''; echo \"  No journal entry found for session: $BRANCH\"; echo ''; echo '  Write a journal entry before ending:'; echo '  {\"v\":1,\"ts\":\"...\",\"session\":\"...\",\"type\":\"feature\",\"title\":\"...\",\"summary\":\"...\"}'; echo ''; echo \"  File: $JOURNAL\"; echo ''; exit 1; fi"
+          },
           {
             "type": "command",
             "command": "jfl context-hub stop >> .jfl/logs/context-hub.log 2>&1 || true"
@@ -34,7 +60,22 @@
         "hooks": [
           {
             "type": "command",
+            "command": "BRANCH=$(git branch --show-current 2>/dev/null); JOURNAL=\".jfl/journal/${BRANCH}.jsonl\"; if [ ! -s \"$JOURNAL\" ] 2>/dev/null; then echo ''; echo '⚠️  JOURNAL REMINDER: Write entry before context compacts'; echo \"   File: $JOURNAL\"; echo ''; fi"
+          },
+          {
+            "type": "command",
             "command": "nohup sh -c 'git add -A && git diff --cached --quiet || git commit -m \"auto: pre-compact save\"' > /dev/null 2>&1 & disown; exit 0"
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "context.*compact|running low",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "BRANCH=$(git branch --show-current 2>/dev/null); JOURNAL=\".jfl/journal/${BRANCH}.jsonl\"; if [ ! -s \"$JOURNAL\" ] 2>/dev/null; then echo ''; echo '🚨 CONTEXT COMPACTING - WRITE JOURNAL NOW'; echo \"   File: $JOURNAL\"; echo ''; fi"
           }
         ]
       }
