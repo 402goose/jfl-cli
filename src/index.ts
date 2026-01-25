@@ -72,6 +72,15 @@ program
   .description("Show project status")
   .action(statusCommand)
 
+program
+  .command("context-hub")
+  .description("Manage Context Hub daemon (unified context for AI agents)")
+  .argument("[action]", "start, stop, restart, status, ensure, query, serve")
+  .option("-p, --port <port>", "Port to run on (default: 4242)", "4242")
+  .action(async (action, options) => {
+    await contextHubCommand(action, { port: parseInt(options.port, 10) })
+  })
+
 // ============================================================================
 // PLATFORM COMMANDS (require login for full features)
 // ============================================================================
