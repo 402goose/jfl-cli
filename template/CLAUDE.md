@@ -19,15 +19,63 @@ Don't make users fill out forms before they can build. Let them start immediatel
 
 ---
 
-## Session Management
+## CRITICAL: Session Sync (MUST READ)
 
-JFL uses git worktrees to isolate each session. This means multiple Claude sessions can work in parallel without conflicts.
+**Context loss is unacceptable.** Before starting ANY work, verify repos are synced.
 
-### At Session Start
+### At Session Start - ALWAYS Do (BEFORE RESPONDING TO USER):
+
+**Complete ALL steps before saying anything to the user.**
 
 **1. CD to worktree** (from hook output)
 
-The SessionStart hook creates a worktree and outputs:
+**2. Run session sync:**
+```bash
+./product/scripts/session/session-sync.sh
+```
+
+**3. Run doctor check:**
+```bash
+./product/scripts/session/jfl-doctor.sh
+```
+Note any warnings (orphaned worktrees, unmerged sessions, memory not initialized).
+
+**4. Get unified context via MCP (REQUIRED):**
+```
+Call: mcp__jfl-context__context_get
+```
+
+This single call returns:
+- Recent journal entries (what happened across sessions)
+- Knowledge docs (vision, roadmap, narrative, thesis)
+- Code file headers (@purpose tags)
+
+**DO NOT read individual markdown files.** The context MCP tool aggregates everything. This is why we built Context Hub.
+
+**5. Show recent journal entries:**
+```bash
+cat .jfl/journal/*.jsonl 2>/dev/null | tail -10
+```
+
+**6. Run /hud to show project dashboard:**
+```
+Invoke: /hud skill
+```
+
+This displays the full status, pipeline, tasks, and guides next action.
+
+**ONLY AFTER completing all 6 steps**, respond to the user with the HUD output.
+
+If you need to search for something specific later:
+```
+Call: mcp__jfl-context__context_search with query="your search"
+```
+
+### CRITICAL: CD to Worktree
+
+**After SessionStart hook runs, you MUST cd to the worktree.**
+
+The hook creates a worktree and outputs:
 ```
 ═══════════════════════════════════════════════════════════
   CLAUDE: You MUST run: cd /path/to/worktree
@@ -53,27 +101,41 @@ pwd && git branch --show-current
 
 Should show `/path/worktrees/session-*` and branch `session-*`, NOT `main`.
 
-**2. Run doctor check (optional):**
+---
+
+This syncs:
+- jfl-gtm (this repo)
+- jfl-platform (product symlink target)
+- All submodules
+
+### Why This Matters
+
+The `product/` directory is a **symlink** to `../jfl-platform`. If jfl-platform gets out of sync with GitHub:
+- Files appear "deleted" when they exist on GitHub
+- Work done in previous sessions is invisible
+- User loses trust in the system
+
+**This has happened multiple times. Do not skip the sync.**
+
+### Verify Context is Intact
+
 ```bash
-./scripts/session/jfl-doctor.sh
-```
-Note any warnings (orphaned worktrees, unmerged sessions).
-
-**3. Show recent journal entries:**
-```bash
-cat .jfl/journal/*.jsonl 2>/dev/null | tail -10
+./product/scripts/session/test-context-preservation.sh
 ```
 
-**4. Run /hud to show project dashboard:**
-```
-Invoke: /hud skill
-```
+This checks:
+- Critical knowledge files exist (VISION.md, BRAND_DECISIONS.md, etc.)
+- Product specs exist (PLATFORM_SPEC.md, TEMPLATE_SPEC.md, CONTEXT_GRAPH_SPEC.md)
+- Git repos are in sync with remotes
+- No uncommitted changes in knowledge/
 
-### Auto-Commit on Session End
+**If tests fail, do not proceed until fixed.**
+
+### Auto-Push on Session End
 
 Hooks in `.claude/settings.json` automatically:
 - Commit changes on Stop/PreCompact
-- Save work to the session branch
+- Push to origin
 
 ### Continuous Auto-Commit (RECOMMENDED)
 
@@ -83,10 +145,10 @@ Hooks in `.claude/settings.json` automatically:
 
 ```bash
 # In a separate terminal, run:
-./scripts/session/auto-commit.sh start
+./product/scripts/session/auto-commit.sh start
 
 # Or with custom interval (default 120s):
-./scripts/session/auto-commit.sh start 60
+./product/scripts/session/auto-commit.sh start 60
 ```
 
 This commits every 2 minutes to:
@@ -276,6 +338,52 @@ The memory pipeline indexes `.jfl/journal/` automatically. Entries become search
 - Memory semantic search
 - PageIndex tree queries ("when did we decide X?")
 - HUD recent work display
+
+---
+
+## CRITICAL: Synopsis Command (What Happened?)
+
+**When anyone asks "what happened?" or "what did X work on?" — use the synopsis command.**
+
+This is the STANDARDIZED way to get work summaries. Don't manually string together git log, journal files, etc. Use this:
+
+```bash
+# From project root:
+cd product/packages/memory && node dist/journal/cli.js synopsis [hours] [author]
+
+# Examples:
+node dist/journal/cli.js synopsis 24           # Last 24 hours, all team
+node dist/journal/cli.js synopsis 8            # Last 8 hours
+node dist/journal/cli.js synopsis 24 hathbanger # What did hath do in 24 hours
+node dist/journal/cli.js synopsis --author "Andrew" # Filter by git author name
+```
+
+### What It Returns
+
+The synopsis aggregates:
+1. **Journal entries** from all sessions/worktrees
+2. **Git commits** from all branches
+3. **File headers** (@purpose, @spec, @decision tags)
+4. **Time audit** with category breakdown and multipliers
+
+Output includes:
+- Summary of work done (features, fixes, decisions)
+- Time audit breakdown (infra vs features vs docs vs content)
+- Per-team-member contribution
+- Health checks (too much infra? not enough outreach?)
+- Next steps from journal entries
+- Incomplete/stubbed items
+
+### When to Use
+
+| Question | Command |
+|----------|---------|
+| "What happened today?" | `synopsis 24` |
+| "What did Hath work on?" | `synopsis 48 hathbanger` |
+| "What happened this week?" | `synopsis 168` |
+| "Give me a status update" | `synopsis 24 --verbose` |
+
+**IMPORTANT:** Every AI should use this exact command. Do NOT try to manually piece together journal + commits + headers yourself. The synopsis command does it correctly every time.
 
 ---
 
