@@ -18,11 +18,8 @@ import { hudCommand } from "./commands/hud.js"
 import { sessionCommand } from "./commands/session.js"
 import { feedbackCommand } from "./commands/feedback.js"
 import { updateCommand } from "./commands/update.js"
-<<<<<<< HEAD
 import { contextHubCommand } from "./commands/context-hub.js"
-=======
 import { voiceCommand } from "./commands/voice.js"
->>>>>>> origin/main
 import {
   listSkillsCommand,
   installSkillCommand,
