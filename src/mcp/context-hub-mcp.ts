@@ -229,10 +229,75 @@ function findRepoRoot(): string | null {
   return null
 }
 
+interface PrivacyConfig {
+  sessionVisibility: 'public' | 'limited' | 'private'
+  showFileDetails: boolean
+  showCommitMessages: boolean
+}
+
+function loadPrivacyConfig(repoRoot: string): PrivacyConfig {
+  const defaultConfig: PrivacyConfig = {
+    sessionVisibility: 'public',
+    showFileDetails: true,
+    showCommitMessages: true
+  }
+
+  try {
+    const configPath = path.join(repoRoot, '.jfl', 'config.json')
+    if (fs.existsSync(configPath)) {
+      const content = fs.readFileSync(configPath, 'utf-8')
+      const config = JSON.parse(content)
+      if (config.privacy) {
+        return {
+          sessionVisibility: config.privacy.sessionVisibility || defaultConfig.sessionVisibility,
+          showFileDetails: config.privacy.showFileDetails ?? defaultConfig.showFileDetails,
+          showCommitMessages: config.privacy.showCommitMessages ?? defaultConfig.showCommitMessages
+        }
+      }
+    }
+  } catch {
+    // Config doesn't exist or is invalid, use defaults
+  }
+
+  return defaultConfig
+}
+
+function formatRelativeTime(timestamp: string): string {
+  const now = Date.now()
+  const then = new Date(timestamp).getTime()
+  const diffMs = now - then
+  const diffMin = Math.floor(diffMs / 60000)
+
+  if (diffMin < 1) return 'just now'
+  if (diffMin < 60) return `${diffMin}m ago`
+
+  const diffHr = Math.floor(diffMin / 60)
+  if (diffHr < 24) return `${diffHr}h ago`
+
+  const diffDay = Math.floor(diffHr / 24)
+  return `${diffDay}d ago`
+}
+
+function getSessionUser(sessionName: string): string {
+  // Extract user from session name: session-username-YYYYMMDD-HHMM-hash
+  const parts = sessionName.split('-')
+  if (parts.length >= 2 && parts[0] === 'session') {
+    return parts[1]
+  }
+  return sessionName
+}
+
 function getSessionsActivity(hours: number): string {
   const repoRoot = findRepoRoot()
   if (!repoRoot) {
     return "Not in a JFL project directory."
+  }
+
+  const privacy = loadPrivacyConfig(repoRoot)
+
+  // If privacy is set to private, don't show any session info
+  if (privacy.sessionVisibility === 'private') {
+    return "Session visibility is set to private."
   }
 
   const currentBranch = execSync('git branch --show-current', { cwd: repoRoot, encoding: 'utf-8' }).trim()
@@ -280,22 +345,27 @@ function getSessionsActivity(hours: number): string {
   }
 
   // Format output
-  const lines: string[] = [`## Active Sessions (last ${hours}h)\n`]
+  const lines: string[] = [`Team Activity (last ${hours}h):\n`]
 
   const activeSessions = sessions.filter(s => s.isActive && s.branch !== currentBranch)
   const staleSessions = sessions.filter(s => !s.isActive && s.branch !== currentBranch)
 
   if (activeSessions.length > 0) {
-    lines.push('### Currently Active\n')
+    lines.push('## Currently Active\n')
     for (const s of activeSessions) {
-      lines.push(`**${s.name}**`)
-      if (s.workingOn) {
-        lines.push(`  Working on: ${s.workingOn}`)
-      }
-      if (s.recentCommits.length > 0) {
-        lines.push(`  Recent commits:`)
-        for (const c of s.recentCommits) {
-          lines.push(`    - ${c}`)
+      const user = getSessionUser(s.name)
+      lines.push(`🟢 **${user}** - active`)
+
+      // Show work details based on privacy settings
+      if (privacy.sessionVisibility !== 'limited') {
+        if (s.workingOn) {
+          lines.push(`   Working on: ${s.workingOn}`)
+        }
+        if (s.recentCommits.length > 0 && privacy.showCommitMessages) {
+          lines.push(`   Recent commits:`)
+          for (const c of s.recentCommits) {
+            lines.push(`     - ${c}`)
+          }
         }
       }
       lines.push('')
@@ -303,11 +373,14 @@ function getSessionsActivity(hours: number): string {
   }
 
   if (staleSessions.length > 0) {
-    lines.push('### Recently Active (stale)\n')
+    lines.push('## Recently Active\n')
     for (const s of staleSessions.slice(0, 5)) {
-      lines.push(`**${s.name}**`)
-      if (s.workingOn) {
-        lines.push(`  Last worked on: ${s.workingOn}`)
+      const user = getSessionUser(s.name)
+      lines.push(`🟡 **${user}** - idle`)
+
+      // Show work details based on privacy settings
+      if (privacy.sessionVisibility !== 'limited' && s.workingOn) {
+        lines.push(`   Last worked on: ${s.workingOn}`)
       }
       lines.push('')
     }
@@ -321,7 +394,8 @@ function getSessionsActivity(hours: number): string {
       const currentWork = currentEntries[currentEntries.length - 1].title.toLowerCase()
       for (const s of activeSessions) {
         if (s.workingOn && hasOverlap(currentWork, s.workingOn.toLowerCase())) {
-          lines.push(`\n⚠️  **Potential overlap detected** with ${s.name}`)
+          const user = getSessionUser(s.name)
+          lines.push(`\n⚠️  **Potential overlap detected** with ${user}`)
           lines.push(`   They're working on: ${s.workingOn}`)
         }
       }
