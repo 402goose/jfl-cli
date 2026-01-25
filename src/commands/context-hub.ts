@@ -9,18 +9,11 @@
 
 import chalk from "chalk"
 import ora from "ora"
-<<<<<<< HEAD
-import { spawn } from "child_process"
-import * as fs from "fs"
-import * as path from "path"
-import * as http from "http"
-=======
 import { execSync, spawn, ChildProcess } from "child_process"
 import * as fs from "fs"
 import * as path from "path"
 import * as http from "http"
 import * as readline from "readline"
->>>>>>> session-goose-20260125-0541-76de0a
 
 const DEFAULT_PORT = 4242
 const PID_FILE = ".jfl/context-hub.pid"
@@ -222,12 +215,6 @@ function readCodeContext(projectRoot: string, limit = 30): ContextItem[] {
 }
 
 // ============================================================================
-<<<<<<< HEAD
-// Orchestrator
-// ============================================================================
-
-function getUnifiedContext(projectRoot: string, query?: string, _taskType?: string): UnifiedContext {
-=======
 // Search & Scoring (TF-IDF style)
 // ============================================================================
 
@@ -331,29 +318,15 @@ function semanticSearch(items: ContextItem[], query: string): ContextItem[] {
 // ============================================================================
 
 function getUnifiedContext(projectRoot: string, query?: string, taskType?: string): UnifiedContext {
->>>>>>> session-goose-20260125-0541-76de0a
   const journalItems = readJournalEntries(projectRoot)
   const knowledgeItems = readKnowledgeDocs(projectRoot)
   const codeItems = readCodeContext(projectRoot)
 
-<<<<<<< HEAD
-  const items = [...journalItems, ...knowledgeItems, ...codeItems]
-
-  // Simple relevance scoring if query provided
-  if (query) {
-    const queryLower = query.toLowerCase()
-    for (const item of items) {
-      const text = `${item.title} ${item.content}`.toLowerCase()
-      item.relevance = text.includes(queryLower) ? 1 : 0
-    }
-    items.sort((a, b) => (b.relevance || 0) - (a.relevance || 0))
-=======
   let items = [...journalItems, ...knowledgeItems, ...codeItems]
 
   // Apply semantic search if query provided
   if (query) {
     items = semanticSearch(items, query)
->>>>>>> session-goose-20260125-0541-76de0a
   }
 
   return {
@@ -365,11 +338,7 @@ function getUnifiedContext(projectRoot: string, query?: string, taskType?: strin
       memory: false
     },
     query,
-<<<<<<< HEAD
-    taskType: _taskType
-=======
     taskType
->>>>>>> session-goose-20260125-0541-76de0a
   }
 }
 
@@ -549,11 +518,7 @@ function stopDaemon(projectRoot: string): boolean {
       fs.unlinkSync(pidFile)
     }
     return true
-<<<<<<< HEAD
-  } catch {
-=======
   } catch (err) {
->>>>>>> session-goose-20260125-0541-76de0a
     console.error(chalk.red("Failed to stop daemon"))
     return false
   }
@@ -617,11 +582,7 @@ export async function contextHubCommand(
         // Try to get more info from the API
         try {
           const response = await fetch(`http://localhost:${port}/api/context/status`)
-<<<<<<< HEAD
-          const data = await response.json() as { sources: Record<string, boolean>; itemCount: number }
-=======
           const data = await response.json()
->>>>>>> session-goose-20260125-0541-76de0a
           console.log(chalk.gray(`  Sources: ${Object.entries(data.sources).filter(([,v]) => v).map(([k]) => k).join(", ")}`))
           console.log(chalk.gray(`  Items: ${data.itemCount}`))
         } catch {

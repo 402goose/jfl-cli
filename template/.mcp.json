@@ -1,7 +1,4 @@
 {
-<<<<<<< HEAD
-  "mcpServers": {}
-=======
   "mcpServers": {
     "jfl-context": {
       "command": "jfl-context-hub-mcp",
@@ -11,5 +8,4 @@
       }
     }
   }
->>>>>>> session-goose-20260125-0541-76de0a
 }
