@@ -555,15 +555,23 @@ function isRunning(projectRoot: string): { running: boolean; pid?: number } {
   }
 }
 
-function startDaemon(projectRoot: string, port: number): boolean {
+async function startDaemon(projectRoot: string, port: number): Promise<{ success: boolean; message: string }> {
   const status = isRunning(projectRoot)
   if (status.running) {
-    console.log(chalk.yellow(`Context Hub already running (PID: ${status.pid})`))
-    return true
+    return { success: true, message: `Context Hub already running (PID: ${status.pid})` }
+  }
+
+  // Check if port is in use by another process
+  const portInUse = await isPortInUse(port)
+  if (portInUse) {
+    return { success: false, message: `Port ${port} is already in use by another process` }
   }
 
   const logFile = getLogFile(projectRoot)
   const pidFile = getPidFile(projectRoot)
+
+  // Generate auth token before starting
+  const token = getOrCreateToken(projectRoot)
 
   // Start as detached process
   const child = spawn(process.execPath, [process.argv[1], "context-hub", "serve", "--port", String(port)], {
@@ -577,10 +585,10 @@ function startDaemon(projectRoot: string, port: number): boolean {
   // Write PID file
   if (child.pid) {
     fs.writeFileSync(pidFile, String(child.pid))
-    return true
+    return { success: true, message: `Started (PID: ${child.pid}). Token: ${token.slice(0, 8)}...` }
   }
 
-  return false
+  return { success: false, message: "Failed to spawn daemon process" }
 }
 
 function stopDaemon(projectRoot: string): boolean {
