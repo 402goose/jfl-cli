@@ -660,23 +660,26 @@ export async function contextHubCommand(
   switch (action) {
     case "start": {
       const spinner = ora("Starting Context Hub...").start()
-      if (startDaemon(projectRoot, port)) {
+      const result = await startDaemon(projectRoot, port)
+      if (result.success) {
         // Wait for server to be ready
         await new Promise(resolve => setTimeout(resolve, 500))
         const status = isRunning(projectRoot)
         spinner.succeed(`Context Hub started on port ${port} (PID: ${status.pid})`)
+        console.log(chalk.gray(`  Token file: .jfl/context-hub.token`))
       } else {
-        spinner.fail("Failed to start Context Hub")
+        spinner.fail(result.message)
       }
       break
     }
 
     case "stop": {
       const spinner = ora("Stopping Context Hub...").start()
-      if (stopDaemon(projectRoot)) {
-        spinner.succeed("Context Hub stopped")
+      const result = await stopDaemon(projectRoot)
+      if (result.success) {
+        spinner.succeed(result.message)
       } else {
-        spinner.fail("Failed to stop Context Hub")
+        spinner.fail(result.message)
       }
       break
     }
@@ -719,7 +722,7 @@ export async function contextHubCommand(
         return
       }
       // Start silently
-      startDaemon(projectRoot, port)
+      await startDaemon(projectRoot, port)
       break
     }
 
