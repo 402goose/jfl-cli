@@ -18,6 +18,74 @@ import * as readline from "readline"
 const DEFAULT_PORT = 4242
 const PID_FILE = ".jfl/context-hub.pid"
 const LOG_FILE = ".jfl/logs/context-hub.log"
+const TOKEN_FILE = ".jfl/context-hub.token"
+
+// ============================================================================
+// Security
+// ============================================================================
+
+function generateToken(): string {
+  return Array.from({ length: 32 }, () =>
+    Math.floor(Math.random() * 16).toString(16)
+  ).join('')
+}
+
+function getTokenFile(projectRoot: string): string {
+  return path.join(projectRoot, TOKEN_FILE)
+}
+
+function getOrCreateToken(projectRoot: string): string {
+  const tokenFile = getTokenFile(projectRoot)
+
+  if (fs.existsSync(tokenFile)) {
+    return fs.readFileSync(tokenFile, 'utf-8').trim()
+  }
+
+  const token = generateToken()
+  fs.writeFileSync(tokenFile, token, { mode: 0o600 }) // Owner read/write only
+  return token
+}
+
+function validateAuth(req: http.IncomingMessage, projectRoot: string): boolean {
+  const tokenFile = getTokenFile(projectRoot)
+
+  // If no token file exists, allow access (backwards compatibility during migration)
+  if (!fs.existsSync(tokenFile)) {
+    return true
+  }
+
+  const expectedToken = fs.readFileSync(tokenFile, 'utf-8').trim()
+  const authHeader = req.headers['authorization']
+
+  if (!authHeader) {
+    return false
+  }
+
+  // Support "Bearer <token>" format
+  const providedToken = authHeader.startsWith('Bearer ')
+    ? authHeader.slice(7)
+    : authHeader
+
+  return providedToken === expectedToken
+}
+
+function isPortInUse(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = http.createServer()
+    server.once('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE') {
+        resolve(true)
+      } else {
+        resolve(false)
+      }
+    })
+    server.once('listening', () => {
+      server.close()
+      resolve(false)
+    })
+    server.listen(port)
+  })
+}
 
 // ============================================================================
 // Types
