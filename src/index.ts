@@ -9,6 +9,8 @@
 import { Command } from "commander"
 import chalk from "chalk"
 import { spawn, execSync } from "child_process"
+import { existsSync, symlinkSync, mkdirSync, unlinkSync } from "fs"
+import { homedir } from "os"
 import { join } from "path"
 import { fileURLToPath } from "url"
 import { initCommand } from "./commands/init.js"
@@ -487,9 +489,6 @@ program
   .command("clawdbot")
   .description("Install JFL skill for Clawdbot")
   .action(() => {
-    const { existsSync, symlinkSync, mkdirSync, unlinkSync } = require("fs")
-    const { homedir } = require("os")
-
     try {
       // Check if clawdbot is installed
       execSync("which clawdbot", { stdio: "pipe" })
@@ -498,6 +497,9 @@ program
       console.log(chalk.gray("   Install Clawdbot first: https://clawd.bot\n"))
       process.exit(1)
     }
+
+    const __filename = fileURLToPath(import.meta.url)
+    const __dirname = join(__filename, "..")
 
     const skillsDir = join(homedir(), ".clawdbot/skills")
     const targetPath = join(skillsDir, "jfl-gtm")
@@ -525,7 +527,7 @@ program
     // Remove existing symlink if present
     if (existsSync(targetPath)) {
       try {
-        require("fs").unlinkSync(targetPath)
+        unlinkSync(targetPath)
       } catch (error) {
         console.log(chalk.yellow("⚠️  Could not remove existing skill (continuing)"))
       }
