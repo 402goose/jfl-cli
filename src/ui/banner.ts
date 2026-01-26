@@ -18,8 +18,8 @@ const BANNER_ART = [
   "   ██║   ██║   ██║   ██║╚██╔╝██║",
   "   ╚██████╔╝   ██║   ██║ ╚═╝ ██║",
   "    ╚═════╝    ╚═╝   ╚═╝     ╚═╝",
-  "       JUST * LAUNCH              ",
-  "   🚀 CONTEXT COMPOUNDS 🚀       ",
+  "                                 ",
+  "     🚀 JUST * LAUNCH 🚀         ",
 ]
 
 // Simpler version for medium terminals
@@ -30,8 +30,8 @@ const BANNER_MEDIUM = [
   "  ██║   ██║   ██║   ██║╚██╔╝██║",
   "  ╚██████╔╝   ██║   ██║ ╚═╝ ██║",
   "   ╚═════╝    ╚═╝   ╚═╝     ╚═╝",
-  "      JUST * LAUNCH             ",
-  "  🚀 CONTEXT COMPOUNDS 🚀      ",
+  "                                ",
+  "   🚀 JUST * LAUNCH 🚀          ",
 ]
 
 // Compact for narrow terminals
@@ -41,8 +41,8 @@ const BANNER_COMPACT = [
   "██║  ███╗   ██║   ██╔████╔██║",
   "╚██████╔╝   ██║   ██║ ╚═╝ ██║",
   " ╚═════╝    ╚═╝   ╚═╝     ╚═╝",
-  "    JUST * LAUNCH            ",
-  "🚀 CONTEXT COMPOUNDS 🚀     ",
+  "                             ",
+  "  🚀 JUST * LAUNCH 🚀        ",
 ]
 
 // Minimal fallback
