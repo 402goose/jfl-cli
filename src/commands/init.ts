@@ -119,28 +119,6 @@ export async function initCommand(options?: { name?: string }) {
 
     spinner.succeed("GTM workspace created!")
 
-    // Explain the architecture with box
-    p.note(
-      "A GTM workspace is a context layer for building/launching.\n" +
-      "Product code lives in its own repo, linked as a submodule.",
-      chalk.hex("#FFA500")("📋 JFL Architecture")
-    )
-
-    // Ask about project setup
-    const setup = await p.select({
-      message: "What's your setup?",
-      options: [
-        { label: "Building a product (I have or need a product repo)", value: "building-product" },
-        { label: "GTM only (team handles code, I do content/marketing)", value: "gtm-only" },
-        { label: "Contributor (working on specific tasks)", value: "contributor" },
-      ],
-    })
-
-    if (p.isCancel(setup)) {
-      p.cancel("Setup cancelled.")
-      process.exit(0)
-    }
-
     const description = await p.text({
       message: "One-line description:",
       placeholder: "My project",
@@ -154,21 +132,22 @@ export async function initCommand(options?: { name?: string }) {
     let productRepo = null
     let productPath = null
 
-    // If building product, handle the product repo
-    if (setup === "building-product") {
-      const productChoice = await p.select({
-        message: "Product repo:",
-        options: [
-          { label: "I have an existing repo (add as submodule)", value: "existing" },
-          { label: "Create a new repo for me", value: "create" },
-          { label: "I'll add it later", value: "later" },
-        ],
-      })
+    // Ask about product repo
+    const productChoice = await p.select({
+      message: "Product repo:",
+      options: [
+        { label: "I have an existing repo (add as submodule)", value: "existing" },
+        { label: "Create a new repo for me", value: "create" },
+        { label: "I'll add it later", value: "later" },
+      ],
+    })
 
-      if (p.isCancel(productChoice)) {
-        p.cancel("Setup cancelled.")
-        process.exit(0)
-      }
+    if (p.isCancel(productChoice)) {
+      p.cancel("Setup cancelled.")
+      process.exit(0)
+    }
+
+    if (productChoice !== "later") {
 
       if (productChoice === "existing") {
         const repoUrl = await p.text({
