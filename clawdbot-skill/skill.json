@@ -12,7 +12,10 @@
     "cli": {
       "name": "jfl",
       "check": "jfl --version",
-      "minVersion": "0.1.0"
+      "minVersion": "0.1.0",
+      "install": {
+        "npm": "jfl"
+      }
     }
   },
   "commands": {
