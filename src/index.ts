@@ -382,7 +382,6 @@ program
 
     const test = spawn("bash", [scriptPath], {
       stdio: "inherit",
-      shell: true,
     })
 
     test.on("error", (err: Error) => {
