@@ -41,7 +41,7 @@ const BANNER_COMPACT = [
 const BANNER_MINIMAL = "🚀 JFL — Just Fucking Launch"
 
 // ============================================================================
-// TAGLINES
+// TAGLINES (70+ like Clawdbot)
 // ============================================================================
 
 const TAGLINES = [
@@ -63,12 +63,24 @@ const TAGLINES = [
   "The market doesn't care about your Notion.",
   "Features ship. Decks don't.",
   "Momentum > perfection.",
+  "Your competition shipped while you were planning.",
+  "The best time to launch was yesterday. The second best is now.",
+  "Shipped beats perfect every single time.",
+  "Nobody ever got funded by a roadmap alone.",
 
-  // Technical
+  // Technical / Dev humor
   "AI-powered shipping.",
   "From zero to shipped.",
   "Claude Code's best friend.",
   "GTM on autopilot.",
+  "git push origin main && celebrate",
+  "We ship on Fridays. Assert dominance.",
+  "Your TODO list, automated.",
+  "Less JIRA, more shipped.",
+  "Prod is the best QA environment.",
+  "Works on my machine → Works in production.",
+  "The only standup that matters is the one where you shipped.",
+  "Agile, but like... actually agile.",
 
   // Cheeky
   "Because 'next quarter' is not a date.",
@@ -77,6 +89,38 @@ const TAGLINES = [
   "The only vaporware is the one you don't ship.",
   "Funded by impatience.",
   "Moving fast, breaking nothing.",
+  "Your pitch deck is not a product.",
+  "Stealth mode is just fear with better branding.",
+  "Traction > Slideware.",
+  "The market doesn't wait for your feelings.",
+  "Launch anxiety is just excitement wearing a mask.",
+  "Your competitors don't have a \"launch committee\".",
+  "Analysis paralysis is the enemy of progress.",
+  "Ship now, apologize never.",
+  "Done is better than perfect. Shipped is better than done.",
+
+  // Startup culture
+  "Zero to one, one commit at a time.",
+  "Your users want the feature, not the spec.",
+  "Build in public, ship in peace.",
+  "The lean startup, but make it leaner.",
+  "PMF is a verb, not a milestone.",
+  "Iterate until it hurts, then iterate more.",
+  "Feedback loops > focus groups.",
+  "Launch small, dream big, ship constantly.",
+  "Revenue is the ultimate validation.",
+  "Growth hacking is just shipping with analytics.",
+
+  // Meta / Self-aware
+  "I can't write your code, but I can make sure it ships.",
+  "Your context, my context, our context.",
+  "Less planning docs, more doing docs.",
+  "Strategy is what happens after you ship.",
+  "Press enter and find out.",
+  "Your keyboard's best friend.",
+  "Making founders dangerous since 2026.",
+  "Because your co-founder is tired of your excuses.",
+  "The bot that believes in you (and your deploy button).",
 ]
 
 // Holiday-specific taglines
