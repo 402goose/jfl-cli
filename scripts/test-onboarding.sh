@@ -48,9 +48,10 @@ cleanup() {
                 cd "$dir" 2>/dev/null || continue
                 REPO_URL=$(git remote get-url origin 2>/dev/null || echo "")
                 if [[ -n "$REPO_URL" ]]; then
-                    # Extract repo name from URL (e.g., github.com:user/repo.git -> repo)
-                    REPO_NAME=$(basename "$REPO_URL" .git)
-                    CREATED_REPOS+=("$REPO_NAME")
+                    # Extract owner/repo from URL
+                    # Handles both SSH (git@github.com:owner/repo.git) and HTTPS (https://github.com/owner/repo.git)
+                    REPO_FULL=$(echo "$REPO_URL" | sed -E 's#^(https://|git@)github\.com[:/]##' | sed 's/\.git$//')
+                    CREATED_REPOS+=("$REPO_FULL")
                 fi
             fi
         done
