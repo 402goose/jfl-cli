@@ -3,7 +3,7 @@
  */
 
 import * as clack from "@clack/prompts"
-import { theme, colors } from "./theme.js"
+import { theme } from "./theme.js"
 import { renderBanner } from "./banner.js"
 
 // ============================================================================
@@ -32,77 +32,48 @@ export function spinner(): ReturnType<typeof clack.spinner> {
 }
 
 // ============================================================================
-// PROMPTS
+// PROMPTS - Re-export with simpler types
 // ============================================================================
 
-interface TextOptions {
+export async function text(opts: {
   message: string
   placeholder?: string
   defaultValue?: string
-  validate?: (value: string) => string | void
+  validate?: (value: string) => string | undefined
+}): Promise<string | symbol> {
+  return clack.text(opts)
 }
 
-export async function text(opts: TextOptions): Promise<string | symbol> {
-  return clack.text({
-    message: opts.message,
-    placeholder: opts.placeholder,
-    defaultValue: opts.defaultValue,
-    validate: opts.validate,
-  })
-}
-
-interface SelectOption<T> {
-  value: T
-  label: string
-  hint?: string
-}
-
-interface SelectOptions<T> {
+export async function select<T>(opts: {
   message: string
-  options: SelectOption<T>[]
+  options: { value: T; label: string; hint?: string }[]
   initialValue?: T
+}): Promise<T | symbol> {
+  return clack.select(opts as Parameters<typeof clack.select>[0]) as Promise<T | symbol>
 }
 
-export async function select<T>(opts: SelectOptions<T>): Promise<T | symbol> {
-  return clack.select({
-    message: opts.message,
-    options: opts.options,
-    initialValue: opts.initialValue,
-  })
-}
-
-interface ConfirmOptions {
+export async function confirm(opts: {
   message: string
   initialValue?: boolean
+}): Promise<boolean | symbol> {
+  return clack.confirm(opts)
 }
 
-export async function confirm(opts: ConfirmOptions): Promise<boolean | symbol> {
-  return clack.confirm({
-    message: opts.message,
-    initialValue: opts.initialValue,
-  })
-}
-
-interface MultiSelectOption<T> {
-  value: T
-  label: string
-  hint?: string
-}
-
-interface MultiSelectOptions<T> {
+export async function multiselect<T>(opts: {
   message: string
-  options: MultiSelectOption<T>[]
+  options: { value: T; label: string; hint?: string }[]
   required?: boolean
   initialValues?: T[]
+}): Promise<T[] | symbol> {
+  return clack.multiselect(opts as Parameters<typeof clack.multiselect>[0]) as Promise<T[] | symbol>
 }
 
-export async function multiselect<T>(opts: MultiSelectOptions<T>): Promise<T[] | symbol> {
-  return clack.multiselect({
-    message: opts.message,
-    options: opts.options,
-    required: opts.required,
-    initialValues: opts.initialValues,
-  })
+export async function password(opts: {
+  message: string
+  mask?: string
+  validate?: (value: string) => string | undefined
+}): Promise<string | symbol> {
+  return clack.password(opts)
 }
 
 // ============================================================================
@@ -138,7 +109,7 @@ export function logInfo(message: string): void {
 }
 
 // ============================================================================
-// RE-EXPORT isCancel for convenience
+// RE-EXPORT clack for advanced usage
 // ============================================================================
 
 export { clack }
