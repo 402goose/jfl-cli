@@ -480,6 +480,71 @@ program
   })
 
 // ============================================================================
+// CLAWDBOT INTEGRATION
+// ============================================================================
+
+program
+  .command("clawdbot")
+  .description("Install JFL skill for Clawdbot")
+  .action(() => {
+    const { existsSync, symlinkSync, mkdirSync } = require("fs")
+    const { homedir } = require("os")
+    const { join } = require("path")
+
+    try {
+      // Check if clawdbot is installed
+      execSync("which clawdbot", { stdio: "pipe" })
+    } catch {
+      console.log(chalk.red("\n❌ Clawdbot not installed"))
+      console.log(chalk.gray("   Install Clawdbot first: https://clawd.bot\n"))
+      process.exit(1)
+    }
+
+    const skillsDir = join(homedir(), ".clawdbot/skills")
+    const targetPath = join(skillsDir, "jfl-gtm")
+
+    // Find the skill source (either in node_modules or local dev)
+    let skillSource: string | null = null
+
+    // Try node_modules first (installed via npm)
+    const npmSkillPath = join(__dirname, "../clawdbot-skill")
+    if (existsSync(npmSkillPath)) {
+      skillSource = npmSkillPath
+    }
+
+    if (!skillSource) {
+      console.log(chalk.red("\n❌ JFL Clawdbot skill not found"))
+      console.log(chalk.gray("   This shouldn't happen. Please report a bug.\n"))
+      process.exit(1)
+    }
+
+    // Create .clawdbot/skills directory if it doesn't exist
+    if (!existsSync(skillsDir)) {
+      mkdirSync(skillsDir, { recursive: true })
+    }
+
+    // Remove existing symlink if present
+    if (existsSync(targetPath)) {
+      try {
+        require("fs").unlinkSync(targetPath)
+      } catch (error) {
+        console.log(chalk.yellow("⚠️  Could not remove existing skill (continuing)"))
+      }
+    }
+
+    // Create symlink
+    try {
+      symlinkSync(skillSource, targetPath)
+      console.log(chalk.green("\n✓ JFL skill installed for Clawdbot"))
+      console.log(chalk.cyan("  Restart Clawdbot to activate:"), "clawdbot restart\n")
+      console.log(chalk.gray("  Then use /jfl in Telegram/Slack/Discord\n"))
+    } catch (error: any) {
+      console.log(chalk.red(`\n❌ Failed to install skill: ${error.message}\n`))
+      process.exit(1)
+    }
+  })
+
+// ============================================================================
 // HELP
 // ============================================================================
 

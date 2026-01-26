@@ -1,0 +1,25 @@
+{
+  "name": "jfl-gtm",
+  "version": "0.1.0-local",
+  "displayName": "JFL - Just Fucking Launch",
+  "description": "Your team's context layer. Any AI. Any task.",
+  "emoji": "🚀",
+  "author": "402goose",
+  "repository": "local-dev",
+  "category": "productivity",
+  "bootSequence": true,
+  "requirements": {
+    "cli": {
+      "name": "jfl",
+      "check": "jfl --version",
+      "minVersion": "0.1.0"
+    }
+  },
+  "commands": {
+    "/gtm": "GTM operations (list, select, status)",
+    "/hud": "Show GTM dashboard", 
+    "/crm": "CRM operations (list, touch, prep)",
+    "/brand": "Brand architect workflow",
+    "/content": "Create content (thread, post, article)"
+  }
+}

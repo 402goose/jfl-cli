@@ -1,0 +1,28 @@
+{
+  "name": "jfl-gtm-clawdbot-skill",
+  "version": "0.1.0",
+  "description": "Clawdbot skill for JFL GTM - access your GTMs from Telegram/Slack",
+  "main": "index.ts",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "test": "node test.js",
+    "link": "ln -sf $(pwd) ~/.clawdbot/skills/jfl-gtm"
+  },
+  "keywords": [
+    "jfl",
+    "gtm",
+    "clawdbot",
+    "telegram",
+    "slack"
+  ],
+  "author": "402goose",
+  "license": "MIT",
+  "peerDependencies": {
+    "@clawdbot/sdk": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  }
+}
