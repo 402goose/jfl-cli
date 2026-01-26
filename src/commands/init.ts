@@ -225,10 +225,23 @@ export async function initCommand(options?: { name?: string }) {
             // Create the repo on GitHub
             const visFlag = visibility === "private" ? "--private" : "--public"
             const finalRepoName = (repoName as string).trim().replace(/\s+/g, '-')
-            execSync(`gh repo create ${finalRepoName} ${visFlag} --clone`, {
-              cwd: projectPath,
-              stdio: "pipe",
-            })
+
+            try {
+              execSync(`gh repo create ${finalRepoName} ${visFlag} --clone`, {
+                cwd: projectPath,
+                stdio: "pipe",
+                encoding: "utf-8",
+              })
+            } catch (createErr: any) {
+              // Show the actual error from gh CLI
+              createSpinner.fail("Failed to create repo")
+              console.log("")
+              console.log(chalk.red("Error from GitHub CLI:"))
+              console.log(chalk.gray(createErr.stderr || createErr.message || String(createErr)))
+              console.log("")
+              p.log.info(`Try: gh repo create ${finalRepoName} ${visFlag}`)
+              throw createErr
+            }
 
             // Get the repo URL
             const repoUrl = execSync(`gh repo view ${finalRepoName} --json url -q .url`, {
@@ -244,8 +257,7 @@ export async function initCommand(options?: { name?: string }) {
             productRepo = repoUrl
             productPath = "product/"
           } catch (err: any) {
-            createSpinner.fail("Failed to create repo")
-            p.log.warning(`You can create it manually: gh repo create ${repoName} --private`)
+            // Already handled above
           }
         } catch {
           p.log.warning("GitHub CLI (gh) not found. Install it to create repos:")
@@ -269,7 +281,6 @@ export async function initCommand(options?: { name?: string }) {
     const config: Record<string, any> = {
       name: projectName,
       type: "gtm",
-      setup: setup,
       description: description,
     }
 
