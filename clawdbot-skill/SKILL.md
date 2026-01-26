@@ -1,119 +1,183 @@
 ---
 name: jfl-gtm
-description: Access your JFL GTMs from Telegram/Slack - view status, update CRM, run commands on the go
+description: Full JFL CLI access from Telegram/Slack with session isolation, auto-commit, and journaling
 metadata: {"clawdbot":{"emoji":"🚀","requires":{"bins":["jfl"]}}}
 ---
 
 # JFL GTM
 
-Access your JFL GTM workspaces from Telegram/Slack.
+Full JFL CLI access from Telegram/Slack. Each conversation gets an isolated session with worktrees, auto-commit, and journaling.
 
 ## On `/jfl` command
 
-Find available GTMs and show picker:
-
+Find available GTMs:
 ```bash
-# Find all JFL GTMs
 find ~/CascadeProjects ~/Projects ~/code -maxdepth 2 -type d -name ".jfl" 2>/dev/null | sed 's#/.jfl##'
 ```
 
-Show buttons for each GTM found:
-- Button text: `📂 [GTM name]`
-- Callback data: `gtm:[full-path]`
-
-Add a "Create new" button at the bottom.
+Show picker buttons for each GTM.
 
 ## When user selects a GTM
 
-Store the GTM path for this conversation.
+1. **Get or create session for this conversation:**
 
-Run dashboard:
 ```bash
-cd [gtm-path] && jfl hud
+# Use Telegram thread ID as session identifier
+THREAD_ID="[telegram-thread-id]"
+GTM_PATH="[selected-gtm-path]"
+
+# Create session (or get existing)
+cd "$GTM_PATH"
+SESSION_ID=$(jfl session create --platform telegram --thread "$THREAD_ID")
+
+# Session creates:
+# - Git worktree at worktrees/session-telegram-$THREAD_ID
+# - Auto-commit daemon (commits every 2 min)
+# - Journal file at .jfl/journal/session-telegram-$THREAD_ID.jsonl
 ```
 
-Show the output + these command buttons:
-- `📊 Dashboard` → callback: `cmd:hud`
-- `👥 CRM` → callback: `cmd:crm`
-- `🔄 Sync` → callback: `cmd:sync`
-- `🔀 Switch` → callback: `cmd:switch`
+2. **Store session ID for this conversation** (in memory or Clawdbot state)
 
-## Commands
-
-### Dashboard (`cmd:hud`)
+3. **Run dashboard:**
 ```bash
-cd [gtm-path] && jfl hud
+cd "$GTM_PATH"
+jfl session exec "$SESSION_ID" "jfl hud"
 ```
 
-### CRM (`cmd:crm`)
+Show output + command buttons.
+
+## All Commands Use Session Exec
+
+**NEVER run jfl commands directly.** Always use `jfl session exec`:
+
+### Dashboard
 ```bash
-cd [gtm-path] && ./crm list
+jfl session exec "$SESSION_ID" "jfl hud"
 ```
 
-Show CRM output + these buttons:
-- `🔥 Hot deals` → callback: `crm:hot`
-- `👤 Prep for call` → callback: `crm:prep`
-- `📝 Log activity` → callback: `crm:touch`
-
-### Sync (`cmd:sync`)
+### CRM List
 ```bash
-cd [gtm-path] && git pull && git submodule update --remote
+jfl session exec "$SESSION_ID" "./crm list"
 ```
 
-### Switch (`cmd:switch`)
-Clear stored GTM path and show picker again (same as `/jfl`).
+### CRM Prep
+Ask user: "Who are you meeting with?"
 
-## CRM Sub-commands
-
-### Hot deals (`crm:hot`)
+Then:
 ```bash
-cd [gtm-path] && ./crm list | grep "🔴\|🟠"
+jfl session exec "$SESSION_ID" "./crm prep [name]"
 ```
 
-### Prep for call (`crm:prep`)
-Ask: "Who are you meeting with?"
+### CRM Touch (Log Activity)
+Ask user: "Who did you talk to?"
 
-Then run:
+Then:
 ```bash
-cd [gtm-path] && ./crm prep [name]
+jfl session exec "$SESSION_ID" "./crm touch [name]"
 ```
 
-### Log activity (`crm:touch`)
-Ask: "Who did you talk to?"
+### Update CRM Field
+Ask user: "What do you want to update?"
 
-Then run:
+Examples:
 ```bash
-cd [gtm-path] && ./crm touch [name]
+jfl session exec "$SESSION_ID" "./crm update [name] status HOT"
+jfl session exec "$SESSION_ID" "./crm update [name] stage COMMITTED"
 ```
+
+### Sync Repos
+```bash
+jfl session exec "$SESSION_ID" "git pull && git submodule update --remote"
+```
+
+## Why Session Exec Matters
+
+When you use `jfl session exec`, each command:
+1. **Runs session-sync.sh** - syncs all repos with remotes
+2. **Runs in isolated worktree** - no conflicts with other conversations
+3. **Auto-commits every 2 min** - work never lost
+4. **Logs to journal** - full audit trail
+
+**Without session exec:**
+- Commands run on main branch (conflicts!)
+- No auto-commit (lose work if crash)
+- No journaling (no audit trail)
+- Repos can drift out of sync
+
+## Session Management
+
+### List Active Sessions
+```bash
+jfl session list
+```
+
+Shows all active sessions across platforms with status.
+
+### Check Session Status
+```bash
+jfl session info "$SESSION_ID"
+```
+
+### Destroy Session (Cleanup)
+```bash
+jfl session destroy "$SESSION_ID"
+```
+
+Runs session-end hook, commits, removes worktree.
+
+**Note:** You don't need to destroy sessions manually. They can persist across conversations. Auto-commit keeps work safe.
+
+## Button Flows
+
+### After selecting GTM:
+- `📊 Dashboard`
+- `👥 CRM`
+- `🔄 Sync`
+- `🔀 Switch Project`
+
+### After CRM:
+- `🔥 Show hot deals`
+- `👤 Prep for call`
+- `📝 Log activity`
+- `✏️ Update field`
+
+### After showing deal details:
+- `📞 Mark as called`
+- `✅ Mark as committed`
+- `🔥 Mark as hot`
+- `❄️ Mark as cold`
 
 ## Output Formatting
 
-JFL uses ANSI colors. For Telegram/Slack:
-1. Strip ANSI codes: `sed 's/\x1b\[[0-9;]*m//g'`
-2. Keep emoji status indicators (🟠🟡✅🔴)
-3. Convert headers (━━━ lines) to **bold**
-4. Preserve line breaks
+Strip ANSI codes:
+```bash
+sed 's/\x1b\[[0-9;]*m//g'
+```
+
+Keep emoji indicators: 🟠🟡✅🔴
+
+Convert━━━ headers to **bold** in Markdown.
 
 ## Error Handling
 
-If GTM not found:
+If session create fails:
 ```
-❌ GTM not found at [path]
+❌ Couldn't create session for this GTM.
 
-Run /jfl to select a different GTM.
+This might mean the GTM isn't a git repo or .jfl is missing.
 ```
 
-If command fails:
+If session exec fails:
 ```
-⚠️ Command failed: [error]
+⚠️ Command failed in session.
 
-This might mean the GTM needs updating.
-Try: /jfl → [gtm] → Sync
+Try: /jfl → [your-gtm] → Sync
 ```
 
 ## Notes
 
-- Keep responses short for mobile
-- Always show action buttons (don't just dump text)
-- GTM path is stored per-conversation (not globally)
-- Commands run in GTM directory (cd first, then command)
+- Each Telegram conversation = one isolated session
+- Sessions persist across app restarts
+- All work auto-commits every 2 minutes
+- Journal tracks everything for audit trail
+- Session isolation prevents conflicts when multiple people use same GTM
