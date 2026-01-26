@@ -116,10 +116,9 @@ export async function sessionCreate(opts: {
   const autoCommitScript = join(cwd, "product/scripts/session/auto-commit.sh")
   if (existsSync(autoCommitScript)) {
     try {
-      execSync(`${autoCommitScript} start 120`, {
+      execSync(`${autoCommitScript} start 120 &`, {
         cwd: worktreePath,
-        stdio: "pipe",
-        detached: true
+        stdio: "pipe"
       })
       console.log(chalk.green("✓ Auto-commit daemon started"))
     } catch (error) {
