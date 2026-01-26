@@ -42,7 +42,7 @@ const program = new Command()
 program
   .name("jfl")
   .description("Just Fucking Launch - AI-powered GTM and development")
-  .version("0.0.0")
+  .version("0.1.0")
   .option("-u, --update", "Pull latest JFL updates before starting")
   .action(async (options) => {
     // If --update flag, run update first

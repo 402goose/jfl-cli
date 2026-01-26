@@ -302,9 +302,7 @@ async function launchCLI(cli: DetectedCLI, cwd: string, skipAutonomousPrompt = f
     args.push(CHROME_FLAG)
   }
 
-  showBanner()
-
-  // Show trial/day pass status
+  // Show trial/day pass status (no banner - already shown in onboard)
   if (isTrialMode()) {
     console.log(theme.success("🎁 Trial Mode") + theme.dim(" — Free until foundation complete\n"))
   } else {
