@@ -485,18 +485,16 @@ export async function initCommand(options?: { name?: string }) {
 
     // Success message
     p.note(
-      chalk.gray(
-        `${projectName}/\n` +
-        "├── .claude/skills/ ← JFL skills\n" +
-        "├── .jfl/           ← Project config\n" +
-        "├── knowledge/      ← Strategy & context\n" +
-        "├── content/        ← Marketing content\n" +
-        "├── suggestions/    ← Contributor work\n" +
-        "├── previews/       ← Generated assets\n" +
-        "├── templates/      ← Doc templates\n" +
-        "├── CLAUDE.md       ← AI instructions\n" +
-        "└── product/        ← Your code (add as submodule)"
-      ),
+      `${projectName}/\n` +
+      "├── .claude/skills/ ← JFL skills\n" +
+      "├── .jfl/           ← Project config\n" +
+      "├── knowledge/      ← Strategy & context\n" +
+      "├── content/        ← Marketing content\n" +
+      "├── suggestions/    ← Contributor work\n" +
+      "├── previews/       ← Generated assets\n" +
+      "├── templates/      ← Doc templates\n" +
+      "├── CLAUDE.md       ← AI instructions\n" +
+      "└── product/        ← Your code (add as submodule)",
       chalk.hex("#00FF88")("✅ GTM workspace initialized!")
     )
 
