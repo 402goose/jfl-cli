@@ -537,19 +537,8 @@ program
     try {
       symlinkSync(skillSource, targetPath)
       console.log(chalk.green("\n✓ JFL skill installed for Clawdbot"))
-
-      // Try to restart Clawdbot automatically
-      try {
-        console.log(chalk.dim("   Restarting Clawdbot..."))
-        execSync("clawdbot restart", { stdio: "pipe" })
-        console.log(chalk.green("   ✓ Clawdbot restarted"))
-        console.log(chalk.gray("\n   Ready! Use /jfl in Telegram/Slack/Discord\n"))
-      } catch (restartError) {
-        // Restart failed - maybe it's not running yet
-        console.log(chalk.yellow("   ⚠️  Couldn't restart automatically"))
-        console.log(chalk.cyan("   Run: clawdbot restart"))
-        console.log(chalk.gray("   Then use /jfl in Telegram/Slack/Discord\n"))
-      }
+      console.log(chalk.gray("   Clawdbot will auto-detect the skill"))
+      console.log(chalk.cyan("\n   Ready! Use /jfl in Telegram/Slack/Discord\n"))
     } catch (error: any) {
       console.log(chalk.red(`\n❌ Failed to install skill: ${error.message}\n`))
       process.exit(1)
