@@ -38,6 +38,48 @@ cleanup() {
     echo ""
     echo "🧹 Cleaning up..."
 
+    # Check for created GitHub repos in test directory
+    CREATED_REPOS=()
+    if [ -d "$TEST_DIR" ]; then
+        # Find any directories with .git in them (product repos)
+        for dir in "$TEST_DIR"/*/product; do
+            if [ -d "$dir/.git" ]; then
+                # Get repo name from git remote
+                cd "$dir" 2>/dev/null || continue
+                REPO_URL=$(git remote get-url origin 2>/dev/null || echo "")
+                if [[ -n "$REPO_URL" ]]; then
+                    # Extract repo name from URL (e.g., github.com:user/repo.git -> repo)
+                    REPO_NAME=$(basename "$REPO_URL" .git)
+                    CREATED_REPOS+=("$REPO_NAME")
+                fi
+            fi
+        done
+    fi
+
+    # Ask about deleting GitHub repos
+    if [ ${#CREATED_REPOS[@]} -gt 0 ]; then
+        echo ""
+        echo "Found ${#CREATED_REPOS[@]} test repo(s) on GitHub:"
+        for repo in "${CREATED_REPOS[@]}"; do
+            echo "  - $repo"
+        done
+        echo ""
+        read -p "Delete these repos from GitHub? (y/n) " -n 1 -r
+        echo
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            for repo in "${CREATED_REPOS[@]}"; do
+                echo "Deleting $repo from GitHub..."
+                if gh repo delete "$repo" --yes 2>/dev/null; then
+                    echo "  ✓ Deleted: $repo"
+                else
+                    echo "  ⚠️  Failed to delete: $repo (may need to delete manually)"
+                fi
+            done
+        else
+            echo "Repos kept on GitHub"
+        fi
+    fi
+
     # Remove test config
     rm -rf "$HOME/.config/jfl"
 
