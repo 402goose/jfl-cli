@@ -14,7 +14,7 @@ import {
   getGitHubUsername,
   type JflProject,
 } from "../utils/github-auth.js"
-import { renderBanner, showSection, theme } from "../ui/index.js"
+import { renderBanner, showSection, showHowItWorksNotice, theme } from "../ui/index.js"
 
 const config = new Conf({ projectName: "jfl" })
 

@@ -36,12 +36,13 @@ const BANNER_MEDIUM = [
 
 // Compact for narrow terminals
 const BANNER_COMPACT = [
-  "░░█░█░█░█████░█████░",
-  "░░█░█░█░█░░░░░░█░░░░",
-  "░░█░█░█░░███░░░█░░░░",
-  "█░█░█░█░░░░░█░░█░░░░",
-  "░██░░██░████░░░█░░░░",
-  "   🚀 JUST LAUNCH 🚀",
+  " ██████╗ ████████╗███╗   ███╗",
+  "██╔════╝ ╚══██╔══╝████╗ ████║",
+  "██║  ███╗   ██║   ██╔████╔██║",
+  "╚██████╔╝   ██║   ██║ ╚═╝ ██║",
+  " ╚═════╝    ╚═╝   ╚═╝     ╚═╝",
+  "    JUST * LAUNCH            ",
+  "🚀 CONTEXT COMPOUNDS 🚀     ",
 ]
 
 // Minimal fallback
@@ -341,4 +342,39 @@ export function showSection(title: string): void {
   console.log("")
   console.log(theme.accentBold(title))
   console.log(theme.dimmer("─".repeat(width)))
+}
+
+// ============================================================================
+// HOW IT WORKS NOTICE (Clawdbot-style)
+// ============================================================================
+
+export function showHowItWorksNotice(): void {
+  const width = Math.min(getTerminalWidth(), 70)
+
+  console.log("")
+  console.log(theme.accentBold("How JFL Works"))
+  console.log(theme.dimmer("─".repeat(width)))
+  console.log("")
+  console.log(theme.text("JFL creates isolated work sessions that sync automatically:"))
+  console.log("")
+  console.log(theme.success("  ✓") + theme.text(" Your session runs in its own workspace (git worktree)"))
+  console.log(theme.success("  ✓") + theme.text(" Changes auto-commit every 2 minutes (never lose work)"))
+  console.log(theme.success("  ✓") + theme.text(" Context compounds across sessions (journal + knowledge docs)"))
+  console.log(theme.success("  ✓") + theme.text(" Multiple teammates can work in parallel (see who's active)"))
+  console.log(theme.success("  ✓") + theme.text(" Works with any AI (Claude Code, Clawdbot, Aider, etc.)"))
+  console.log("")
+  console.log(theme.dimmer("Your AI agent can:"))
+  console.log(theme.dim("  • Read/write files in your project"))
+  console.log(theme.dim("  • Run git commands (isolated to your session)"))
+  console.log(theme.dim("  • Execute bash commands"))
+  console.log(theme.dim("  • Search and modify code"))
+  console.log("")
+  console.log(theme.dimmer("Safety features:"))
+  console.log(theme.dim("  • All work happens in isolated branches"))
+  console.log(theme.dim("  • Auto-commit backs up constantly"))
+  console.log(theme.dim("  • Easy to review changes before merging"))
+  console.log(theme.dim("  • Team presence shows overlap warnings"))
+  console.log("")
+  console.log(theme.dim("Learn more: ") + theme.accentDim("https://docs.jfl.run/how-it-works"))
+  console.log("")
 }
