@@ -358,43 +358,45 @@ async function onboardNewUser(cwd: string) {
     (p) => existsSync(join(p, "CLAUDE.md")) || existsSync(join(p, "knowledge"))
   )
 
+  // Start Clawdbot-style flow
+  p.intro(chalk.hex("#FFD700")("┌  JFL onboarding"))
+
   // If we have known projects, show them upfront
   if (existingProjects.length > 0) {
-    console.log(chalk.cyan("Your projects:\n"))
+    const selected = await p.select({
+      message: "Open a project or create new?",
+      options: [
+        ...existingProjects.map((proj) => ({
+          label: proj.replace(process.env.HOME || "", "~"),
+          value: proj,
+        })),
+        { label: "───────────────────────────────", value: "separator", disabled: true },
+        { label: "Join existing project (I was invited)", value: "join" },
+        { label: "Create new project", value: "new" },
+      ],
+    })
 
-    const { selected } = await inquirer.prompt([
-      {
-        type: "list",
-        name: "selected",
-        message: "Open a project or create new?",
-        choices: [
-          ...existingProjects.map((p) => ({
-            name: p.replace(process.env.HOME || "", "~"),
-            value: p,
-          })),
-          new inquirer.Separator("─────────────────"),
-          { name: "Join existing project (I was invited)", value: "join" },
-          { name: "Create new project", value: "new" },
-        ],
-      },
-    ])
+    if (p.isCancel(selected)) {
+      p.cancel("Setup cancelled.")
+      process.exit(0)
+    }
 
     if (selected === "join") {
       await joinExistingProject()
       return
     }
 
-    if (selected !== "new") {
+    if (selected !== "new" && selected !== "separator") {
       // Update config with cleaned list
       config.set("projects", existingProjects)
 
-      process.chdir(selected)
-      console.log(chalk.gray(`\nOpening ${selected}\n`))
+      process.chdir(selected as string)
+      p.outro(chalk.hex("#FFA500")(`Opening ${(selected as string).replace(process.env.HOME || "", "~")}`))
 
       // Launch
       const available = detectAICLIs()
       if (available.length > 0) {
-        await launchCLI(available[0], selected)
+        await launchCLI(available[0], selected as string)
       } else {
         await onboardAICLI()
       }
@@ -403,146 +405,27 @@ async function onboardNewUser(cwd: string) {
   }
 
   // No known projects or they want to create new
-  const hasUsedBefore = config.get("hasOnboarded")
+  const action = await p.select({
+    message: "What do you want to do?",
+    options: [
+      { label: "Join existing project (I was invited)", value: "join" },
+      { label: "Create a new project", value: "create" },
+    ],
+  })
 
-  if (!hasUsedBefore && existingProjects.length === 0) {
-    console.log(chalk.cyan("Welcome! Let's get you set up.\n"))
+  if (p.isCancel(action)) {
+    p.cancel("Setup cancelled.")
+    process.exit(0)
   }
-
-  const { action } = await inquirer.prompt([
-    {
-      type: "list",
-      name: "action",
-      message: "What do you want to do?",
-      choices: [
-        {
-          name: "Join existing project (I was invited)",
-          value: "join",
-        },
-        {
-          name: "Create a new project here",
-          value: "here",
-        },
-        {
-          name: "Create a project somewhere else",
-          value: "elsewhere",
-        },
-      ],
-    },
-  ])
 
   if (action === "join") {
     await joinExistingProject()
     return
   }
 
-  let projectPath = cwd
-  let projectName: string
-
-  if (action === "elsewhere") {
-    const { path } = await inquirer.prompt([
-      {
-        type: "input",
-        name: "path",
-        message: "Where? (path to parent directory):",
-        default: "~/Projects",
-      },
-    ])
-    // Expand ~ to home directory
-    projectPath = path.replace(/^~/, process.env.HOME || "")
-  }
-
-  // Get project name
-  const { name } = await inquirer.prompt([
-    {
-      type: "input",
-      name: "name",
-      message: "Project name:",
-      default: "my-project",
-      validate: (input: string) => {
-        if (!/^[a-z0-9-]+$/.test(input)) {
-          return "Use lowercase letters, numbers, and hyphens only"
-        }
-        return true
-      },
-    },
-  ])
-  projectName = name
-
-  const fullPath = join(projectPath, projectName)
-
-  // Check if directory exists
-  if (existsSync(fullPath)) {
-    console.log(chalk.red(`\nDirectory ${fullPath} already exists.`))
-    return
-  }
-
-  // Clone template
-  const spinner = ora("Creating project...").start()
-
-  const TEMPLATE_REPO = "https://github.com/402goose/jfl-cli.git"
-
-  try {
-    // Ensure parent directory exists
-    if (!existsSync(projectPath)) {
-      execSync(`mkdir -p "${projectPath}"`, { stdio: "pipe" })
-    }
-
-    execSync(`git clone --depth 1 ${TEMPLATE_REPO} "${fullPath}"`, {
-      stdio: "pipe",
-    })
-
-    // Remove .git to start fresh
-    execSync(`rm -rf "${join(fullPath, ".git")}"`, { stdio: "pipe" })
-
-    // Initialize new git repo
-    execSync(`git init`, { cwd: fullPath, stdio: "pipe" })
-
-    spinner.succeed("Project created!")
-
-    config.set("hasOnboarded", true)
-
-    // Track this project
-    const projects = (config.get("projects") as string[]) || []
-    if (!projects.includes(fullPath)) {
-      projects.push(fullPath)
-      config.set("projects", projects)
-    }
-
-    console.log(chalk.green(`\n✓ Created ${fullPath}\n`))
-
-    // Now onboard AI CLI
-    const available = detectAICLIs()
-
-    if (available.length === 0) {
-      await onboardAICLI()
-      console.log(chalk.cyan(`\nTo start working:`))
-      console.log(chalk.white(`  cd ${fullPath}`))
-      console.log(chalk.white(`  jfl\n`))
-    } else {
-      // They have an AI CLI, offer to launch
-      const { launch } = await inquirer.prompt([
-        {
-          type: "confirm",
-          name: "launch",
-          message: `Launch ${available[0].name} in your new project?`,
-          default: true,
-        },
-      ])
-
-      if (launch) {
-        process.chdir(fullPath)
-        await launchCLI(available[0], fullPath)
-      } else {
-        console.log(chalk.cyan(`\nTo start working:`))
-        console.log(chalk.white(`  cd ${fullPath}`))
-        console.log(chalk.white(`  jfl\n`))
-      }
-    }
-  } catch (error) {
-    spinner.fail("Failed to create project")
-    console.error(chalk.red(error))
-  }
+  // Redirect to init command for proper project creation
+  p.outro(chalk.hex("#FFA500")("Launching project setup..."))
+  await initCommand()
 }
 
 async function joinExistingProject() {

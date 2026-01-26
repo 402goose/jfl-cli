@@ -1,6 +1,7 @@
 import chalk from "chalk"
 import ora from "ora"
 import inquirer from "inquirer"
+import * as p from "@clack/prompts"
 import { execSync, spawn } from "child_process"
 import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "fs"
 import { join } from "path"
