@@ -119,64 +119,76 @@ export async function initCommand(options?: { name?: string }) {
 
     spinner.succeed("GTM workspace created!")
 
-    // Explain the architecture
-    console.log(chalk.cyan("\n📋 JFL Architecture\n"))
-    console.log(chalk.gray("  A GTM workspace is a context layer for building/launching."))
-    console.log(chalk.gray("  Product code lives in its own repo, linked as a submodule.\n"))
+    // Explain the architecture with box
+    p.note(
+      chalk.gray(
+        "A GTM workspace is a context layer for building/launching.\n" +
+        "Product code lives in its own repo, linked as a submodule."
+      ),
+      chalk.hex("#FFA500")("📋 JFL Architecture")
+    )
 
     // Ask about project setup
-    const projectSetup = await inquirer.prompt([
-      {
-        type: "list",
-        name: "setup",
-        message: "What's your setup?",
-        choices: [
-          { name: "Building a product (I have or need a product repo)", value: "building-product" },
-          { name: "GTM only (team handles code, I do content/marketing)", value: "gtm-only" },
-          { name: "Contributor (working on specific tasks)", value: "contributor" },
-        ],
-      },
-      {
-        type: "input",
-        name: "description",
-        message: "One-line description:",
-        default: "My project",
-      },
-    ])
+    const setup = await p.select({
+      message: "What's your setup?",
+      options: [
+        { label: "Building a product (I have or need a product repo)", value: "building-product" },
+        { label: "GTM only (team handles code, I do content/marketing)", value: "gtm-only" },
+        { label: "Contributor (working on specific tasks)", value: "contributor" },
+      ],
+    })
+
+    if (p.isCancel(setup)) {
+      p.cancel("Setup cancelled.")
+      process.exit(0)
+    }
+
+    const description = await p.text({
+      message: "One-line description:",
+      placeholder: "My project",
+    })
+
+    if (p.isCancel(description)) {
+      p.cancel("Setup cancelled.")
+      process.exit(0)
+    }
 
     let productRepo = null
     let productPath = null
 
     // If building product, handle the product repo
-    if (projectSetup.setup === "building-product") {
-      const productChoice = await inquirer.prompt([
-        {
-          type: "list",
-          name: "choice",
-          message: "Product repo:",
-          choices: [
-            { name: "I have an existing repo (add as submodule)", value: "existing" },
-            { name: "Create a new repo for me", value: "create" },
-            { name: "I'll add it later", value: "later" },
-          ],
-        },
-      ])
+    if (setup === "building-product") {
+      const productChoice = await p.select({
+        message: "Product repo:",
+        options: [
+          { label: "I have an existing repo (add as submodule)", value: "existing" },
+          { label: "Create a new repo for me", value: "create" },
+          { label: "I'll add it later", value: "later" },
+        ],
+      })
 
-      if (productChoice.choice === "existing") {
-        const repoAnswer = await inquirer.prompt([
-          {
-            type: "input",
-            name: "productRepo",
-            message: "Product repo URL:",
-            validate: (input: string) => {
-              if (!input.trim()) {
-                return "Please enter a repo URL"
-              }
-              return true
-            },
+      if (p.isCancel(productChoice)) {
+        p.cancel("Setup cancelled.")
+        process.exit(0)
+      }
+
+      if (productChoice === "existing") {
+        const repoUrl = await p.text({
+          message: "Product repo URL:",
+          placeholder: "https://github.com/user/repo.git",
+          validate: (input: string) => {
+            if (!input.trim()) {
+              return "Please enter a repo URL"
+            }
           },
-        ])
-        productRepo = repoAnswer.productRepo
+        })
+
+        if (p.isCancel(repoUrl)) {
+          p.cancel("Setup cancelled.")
+          process.exit(0)
+        }
+
+        productRepo = repoUrl as string
 
         // Add as submodule
         const submoduleSpinner = ora("Adding product repo as submodule...").start()
@@ -192,62 +204,63 @@ export async function initCommand(options?: { name?: string }) {
           console.log(chalk.yellow("  You can add it manually later:"))
           console.log(chalk.gray(`  git submodule add ${productRepo} product`))
         }
-      } else if (productChoice.choice === "create") {
+      } else if (productChoice === "create") {
         // Check if gh CLI is available
         try {
           execSync("gh --version", { stdio: "pipe" })
 
-          const repoDetails = await inquirer.prompt([
-            {
-              type: "input",
-              name: "repoName",
-              message: "New repo name:",
-              default: projectName!.replace(/-gtm$/, ""),
-              validate: (input: string) => {
-                if (!input.trim()) {
-                  return "Please enter a repo name"
-                }
-                if (/\s/.test(input)) {
-                  return "Repo names cannot contain spaces. Use hyphens instead (e.g., 'my-project')"
-                }
-                if (!/^[a-zA-Z0-9._-]+$/.test(input)) {
-                  return "Repo names can only contain letters, numbers, hyphens, underscores, and dots"
-                }
-                return true
-              },
-              filter: (input: string) => {
-                // Auto-convert spaces to hyphens as a convenience
-                return input.trim().replace(/\s+/g, '-')
-              },
+          const repoName = await p.text({
+            message: "New repo name:",
+            placeholder: projectName!.replace(/-gtm$/, ""),
+            validate: (input: string) => {
+              if (!input.trim()) {
+                return "Please enter a repo name"
+              }
+              if (/\s/.test(input)) {
+                return "Repo names cannot contain spaces. Use hyphens instead (e.g., 'my-project')"
+              }
+              if (!/^[a-zA-Z0-9._-]+$/.test(input)) {
+                return "Repo names can only contain letters, numbers, hyphens, underscores, and dots"
+              }
             },
-            {
-              type: "list",
-              name: "visibility",
-              message: "Visibility:",
-              choices: [
-                { name: "Private", value: "private" },
-                { name: "Public", value: "public" },
-              ],
-            },
-          ])
+          })
+
+          if (p.isCancel(repoName)) {
+            p.cancel("Setup cancelled.")
+            process.exit(0)
+          }
+
+          const visibility = await p.select({
+            message: "Visibility:",
+            options: [
+              { label: "Private", value: "private" },
+              { label: "Public", value: "public" },
+            ],
+          })
+
+          if (p.isCancel(visibility)) {
+            p.cancel("Setup cancelled.")
+            process.exit(0)
+          }
 
           const createSpinner = ora("Creating product repo...").start()
           try {
             // Create the repo on GitHub
-            const visFlag = repoDetails.visibility === "private" ? "--private" : "--public"
-            execSync(`gh repo create ${repoDetails.repoName} ${visFlag} --clone`, {
+            const visFlag = visibility === "private" ? "--private" : "--public"
+            const finalRepoName = (repoName as string).trim().replace(/\s+/g, '-')
+            execSync(`gh repo create ${finalRepoName} ${visFlag} --clone`, {
               cwd: projectPath,
               stdio: "pipe",
             })
 
             // Get the repo URL
-            const repoUrl = execSync(`gh repo view ${repoDetails.repoName} --json url -q .url`, {
+            const repoUrl = execSync(`gh repo view ${finalRepoName} --json url -q .url`, {
               cwd: projectPath,
               encoding: "utf-8",
             }).trim()
 
             // Move the cloned repo to product/ and set up as submodule
-            execSync(`mv ${repoDetails.repoName} product`, { cwd: projectPath, stdio: "pipe" })
+            execSync(`mv ${finalRepoName} product`, { cwd: projectPath, stdio: "pipe" })
             execSync(`git submodule add ${repoUrl} product`, { cwd: projectPath, stdio: "pipe" })
 
             createSpinner.succeed(`Product repo created: ${repoUrl}`)
@@ -255,18 +268,17 @@ export async function initCommand(options?: { name?: string }) {
             productPath = "product/"
           } catch (err: any) {
             createSpinner.fail("Failed to create repo")
-            console.log(chalk.yellow("  You can create it manually:"))
-            console.log(chalk.gray(`  gh repo create ${repoDetails.repoName} --private`))
+            p.log.warning(`You can create it manually: gh repo create ${repoName} --private`)
           }
         } catch {
-          console.log(chalk.yellow("\n  GitHub CLI (gh) not found. Install it to create repos:"))
-          console.log(chalk.gray("  brew install gh && gh auth login"))
-          console.log(chalk.gray("\n  Or create the repo manually and add as submodule:"))
-          console.log(chalk.gray("  git submodule add <repo-url> product"))
+          p.log.warning("GitHub CLI (gh) not found. Install it to create repos:")
+          p.log.info("brew install gh && gh auth login")
+          p.log.info("\nOr create the repo manually and add as submodule:")
+          p.log.info("git submodule add <repo-url> product")
         }
       } else {
-        console.log(chalk.gray("\n  Add your product repo later:"))
-        console.log(chalk.gray("  git submodule add <repo-url> product"))
+        p.log.info("Add your product repo later:")
+        p.log.info("git submodule add <repo-url> product")
       }
     }
 
