@@ -10,12 +10,20 @@ Full JFL CLI access from Telegram/Slack. Each conversation gets an isolated sess
 
 ## On `/jfl` command
 
-Find available GTMs:
+Find available GTMs (not product repos):
 ```bash
-find ~/CascadeProjects ~/Projects ~/code -maxdepth 2 -type d -name ".jfl" 2>/dev/null | sed 's#/.jfl##'
+for dir in ~/CascadeProjects ~/Projects ~/code; do
+  find "$dir" -maxdepth 2 -type d -name ".jfl" 2>/dev/null | while read jfldir; do
+    gtm="${jfldir%/.jfl}"
+    # Filter: Must have knowledge/ and CLAUDE.md to be a GTM
+    if [[ -d "$gtm/knowledge" && -f "$gtm/CLAUDE.md" ]]; then
+      echo "$gtm"
+    fi
+  done
+done
 ```
 
-Show picker buttons for each GTM.
+Show picker buttons for each GTM found.
 
 ## When user selects a GTM
 
