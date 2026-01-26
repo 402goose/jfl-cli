@@ -211,92 +211,129 @@ export async function initCommand(options?: { name?: string }) {
         try {
           execSync("gh --version", { stdio: "pipe" })
 
-          const repoName = await p.text({
-            message: "New repo name:",
-            placeholder: projectName!.replace(/-gtm$/, ""),
-            validate: (input: string) => {
-              if (!input.trim()) {
-                return "Please enter a repo name"
-              }
-              if (/\s/.test(input)) {
-                return "Repo names cannot contain spaces. Use hyphens instead (e.g., 'my-project')"
-              }
-              if (!/^[a-zA-Z0-9._-]+$/.test(input)) {
-                return "Repo names can only contain letters, numbers, hyphens, underscores, and dots"
-              }
-            },
-          })
+          let repoCreated = false
+          let attemptCount = 0
+          const maxAttempts = 3
 
-          if (p.isCancel(repoName)) {
-            p.cancel("Setup cancelled.")
-            process.exit(0)
-          }
+          while (!repoCreated && attemptCount < maxAttempts) {
+            attemptCount++
 
-          const visibility = await p.select({
-            message: "Visibility:",
-            options: [
-              { label: "Private", value: "private" },
-              { label: "Public", value: "public" },
-            ],
-          })
+            const repoName = await p.text({
+              message: attemptCount > 1 ? "Try a different name:" : "New repo name:",
+              placeholder: attemptCount > 1
+                ? `${projectName!.replace(/-gtm$/, "")}-${attemptCount}`
+                : projectName!.replace(/-gtm$/, ""),
+              validate: (input: string) => {
+                if (!input.trim()) {
+                  return "Please enter a repo name"
+                }
+                if (/\s/.test(input)) {
+                  return "Repo names cannot contain spaces. Use hyphens instead (e.g., 'my-project')"
+                }
+                if (!/^[a-zA-Z0-9._-]+$/.test(input)) {
+                  return "Repo names can only contain letters, numbers, hyphens, underscores, and dots"
+                }
+              },
+            })
 
-          if (p.isCancel(visibility)) {
-            p.cancel("Setup cancelled.")
-            process.exit(0)
-          }
-
-          const createSpinner = ora("Creating product repo...").start()
-          try {
-            // Create the repo on GitHub
-            const visFlag = visibility === "private" ? "--private" : "--public"
-            const finalRepoName = (repoName as string).trim().replace(/\s+/g, '-')
-
-            try {
-              execSync(`gh repo create ${finalRepoName} ${visFlag} --clone`, {
-                cwd: projectPath,
-                stdio: "pipe",
-                encoding: "utf-8",
-              })
-            } catch (createErr: any) {
-              // Show the actual error from gh CLI
-              createSpinner.fail("Failed to create repo")
-              console.log("")
-
-              const errorMsg = createErr.stderr || createErr.message || String(createErr)
-
-              // Check if it's an authentication issue
-              if (errorMsg.includes("authentication") || errorMsg.includes("not logged in") || errorMsg.includes("HTTP 401")) {
-                console.log(chalk.red("GitHub authentication required"))
-                console.log("")
-                p.log.info("Authenticate with GitHub:")
-                p.log.info("  gh auth login")
-                console.log("")
-                p.log.info("Then try again or add the repo manually:")
-                p.log.info(`  gh repo create ${finalRepoName} ${visFlag}`)
-              } else {
-                console.log(chalk.red("Error from GitHub CLI:"))
-                console.log(chalk.gray(errorMsg))
-                console.log("")
-                p.log.info(`Try manually: gh repo create ${finalRepoName} ${visFlag}`)
-              }
-              throw createErr
+            if (p.isCancel(repoName)) {
+              p.cancel("Setup cancelled.")
+              process.exit(0)
             }
 
-            // Get the repo URL
-            const repoUrl = execSync(`gh repo view ${finalRepoName} --json url -q .url`, {
-              cwd: projectPath,
-              encoding: "utf-8",
-            }).trim()
+            const visibility = await p.select({
+              message: "Visibility:",
+              options: [
+                { label: "Private", value: "private" },
+                { label: "Public", value: "public" },
+              ],
+            })
 
-            // Move the cloned repo to product/ and set up as submodule
-            execSync(`mv ${finalRepoName} product`, { cwd: projectPath, stdio: "pipe" })
-            execSync(`git submodule add ${repoUrl} product`, { cwd: projectPath, stdio: "pipe" })
+            if (p.isCancel(visibility)) {
+              p.cancel("Setup cancelled.")
+              process.exit(0)
+            }
 
-            createSpinner.succeed(`Product repo created: ${repoUrl}`)
-            productRepo = repoUrl
-            productPath = "product/"
-          } catch (err: any) {
-            // Already handled above
+            const createSpinner = ora("Creating product repo...").start()
+            try {
+              // Create the repo on GitHub
+              const visFlag = visibility === "private" ? "--private" : "--public"
+              const finalRepoName = (repoName as string).trim().replace(/\s+/g, '-')
+
+              try {
+                execSync(`gh repo create ${finalRepoName} ${visFlag} --clone`, {
+                  cwd: projectPath,
+                  stdio: "pipe",
+                  encoding: "utf-8",
+                })
+
+                // Get the repo URL
+                const repoUrl = execSync(`gh repo view ${finalRepoName} --json url -q .url`, {
+                  cwd: projectPath,
+                  encoding: "utf-8",
+                }).trim()
+
+                // Move the cloned repo to product/ and set up as submodule
+                execSync(`mv ${finalRepoName} product`, { cwd: projectPath, stdio: "pipe" })
+                execSync(`git submodule add ${repoUrl} product`, { cwd: projectPath, stdio: "pipe" })
+
+                createSpinner.succeed(`Product repo created: ${repoUrl}`)
+                productRepo = repoUrl
+                productPath = "product/"
+                repoCreated = true
+
+              } catch (createErr: any) {
+                // Show the actual error from gh CLI
+                createSpinner.fail("Failed to create repo")
+                console.log("")
+
+                const errorMsg = createErr.stderr || createErr.message || String(createErr)
+
+                // Check if it's a "name already exists" error
+                if (errorMsg.includes("already exists") || errorMsg.includes("Name already exists")) {
+                  console.log(chalk.yellow("⚠️  That name is already taken on your GitHub"))
+                  console.log("")
+
+                  if (attemptCount < maxAttempts) {
+                    const retry = await p.confirm({
+                      message: "Try a different name?",
+                      initialValue: true,
+                    })
+
+                    if (p.isCancel(retry) || !retry) {
+                      p.log.info("Skipping repo creation. Add it later with:")
+                      p.log.info("  git submodule add <repo-url> product")
+                      break
+                    }
+                    // Loop will continue with attemptCount++
+                  } else {
+                    p.log.warning("Max attempts reached. Add repo manually later:")
+                    p.log.info("  git submodule add <repo-url> product")
+                    break
+                  }
+                } else if (errorMsg.includes("authentication") || errorMsg.includes("not logged in") || errorMsg.includes("HTTP 401")) {
+                  // Check if it's an authentication issue
+                  console.log(chalk.red("GitHub authentication required"))
+                  console.log("")
+                  p.log.info("Authenticate with GitHub:")
+                  p.log.info("  gh auth login")
+                  console.log("")
+                  p.log.info("Then try again or add the repo manually:")
+                  p.log.info(`  gh repo create ${finalRepoName} ${visFlag}`)
+                  break
+                } else {
+                  // Other error
+                  console.log(chalk.red("Error from GitHub CLI:"))
+                  console.log(chalk.gray(errorMsg))
+                  console.log("")
+                  p.log.info(`Try manually: gh repo create ${finalRepoName} ${visFlag}`)
+                  break
+                }
+              }
+            } catch (err: any) {
+              // Break out of retry loop on unexpected errors
+              break
+            }
           }
         } catch {
           p.log.warning("GitHub CLI (gh) not found. Install it to create repos:")
