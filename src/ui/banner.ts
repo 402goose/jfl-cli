@@ -210,15 +210,48 @@ export function getTagline(): string {
   return pickRandom(TAGLINES)
 }
 
-export function getBannerArt(): string {
+export function getBannerArt(): string[] {
   const width = getTerminalWidth()
 
-  if (width >= 60) {
-    return BANNER_BLOCKS
-  } else if (width >= 30) {
+  if (width >= 50) {
+    return BANNER_ART
+  } else if (width >= 40) {
+    return BANNER_MEDIUM
+  } else if (width >= 35) {
     return BANNER_COMPACT
   }
-  return BANNER_MINIMAL
+  return [BANNER_MINIMAL]
+}
+
+// Color a character based on what it is (Clawdbot-style)
+function colorChar(ch: string): string {
+  if (ch === "█") return chalk.hex(colors.accent)(ch)      // Bright gold for solid
+  if (ch === "░") return chalk.hex(colors.accentDim)(ch)   // Dim gold for shade
+  if (ch === "▀" || ch === "▄") return chalk.hex(colors.accentSoft)(ch) // Orange for half-blocks
+  if (ch === "🚀") return ch  // Keep emoji as-is
+  return chalk.hex(colors.dim)(ch)  // Dim for other chars
+}
+
+// Color a whole line of ASCII art
+function colorLine(line: string): string {
+  // Special handling for the tagline/slogan line
+  if (line.includes("🚀") && (line.includes("SHIP") || line.includes("JFL") || line.includes("LAUNCH"))) {
+    // Extract the text between rockets
+    const match = line.match(/^(\s*)(🚀\s*)(.+?)(\s*🚀)(\s*)$/)
+    if (match) {
+      const [, leadingSpace, leftRocket, text, rightRocket, trailingSpace] = match
+      return (
+        chalk.hex(colors.dim)(leadingSpace) +
+        leftRocket +
+        chalk.hex(colors.accentSoft)(text) +
+        rightRocket +
+        chalk.hex(colors.dim)(trailingSpace)
+      )
+    }
+  }
+
+  // Color each character
+  return Array.from(line).map(colorChar).join("")
 }
 
 export interface BannerOptions {
@@ -240,17 +273,15 @@ export function renderBanner(options: BannerOptions = {}): string {
   const lines: string[] = []
 
   // Get appropriate banner art
-  const art = getBannerArt()
-  const isMinimal = art === BANNER_MINIMAL
+  const artLines = getBannerArt()
+  const isMinimal = artLines.length === 1 && artLines[0] === BANNER_MINIMAL
 
   if (isMinimal) {
     // Minimal banner for very narrow terminals
     const versionStr = version ? ` v${version}` : ""
     lines.push("")
-    lines.push(theme.accentBold(`🚀 JFL${versionStr}`))
-    lines.push(theme.dim("Just Fucking Launch"))
+    lines.push(theme.accentBold(`🚀 JFL${versionStr}`) + theme.dim(" — Just Fucking Launch"))
     if (showTagline) {
-      lines.push("")
       lines.push(theme.soft(`"${tagline}"`))
     }
     lines.push("")
@@ -258,23 +289,19 @@ export function renderBanner(options: BannerOptions = {}): string {
     // Full ASCII art banner
     lines.push("")
 
-    // Color the banner art with gradient effect
-    const artLines = art.split("\n")
-    for (let i = 0; i < artLines.length; i++) {
-      // Gradient from gold to orange
-      const ratio = i / (artLines.length - 1)
-      const color = interpolateColor(colors.accent, colors.accentSoft, ratio)
-      const coloredLine = chalk.hex(color)(artLines[i])
+    // Color and center each line
+    for (const line of artLines) {
+      const coloredLine = colorLine(line)
       lines.push(centered ? center(coloredLine, width) : coloredLine)
     }
 
     lines.push("")
 
-    // Title line
-    const title = "JUST FUCKING LAUNCH"
-    const versionStr = version ? theme.dim(` v${version}`) : ""
-    const titleLine = theme.accentBold(title) + versionStr
-    lines.push(centered ? center(titleLine, width) : titleLine)
+    // Version line (smaller, below art)
+    if (version) {
+      const versionLine = theme.dim(`v${version}`)
+      lines.push(centered ? center(versionLine, width) : versionLine)
+    }
 
     // Tagline
     if (showTagline) {
@@ -286,26 +313,6 @@ export function renderBanner(options: BannerOptions = {}): string {
   }
 
   return lines.join("\n")
-}
-
-// Simple color interpolation
-function interpolateColor(color1: string, color2: string, ratio: number): string {
-  const hex1 = color1.replace("#", "")
-  const hex2 = color2.replace("#", "")
-
-  const r1 = parseInt(hex1.slice(0, 2), 16)
-  const g1 = parseInt(hex1.slice(2, 4), 16)
-  const b1 = parseInt(hex1.slice(4, 6), 16)
-
-  const r2 = parseInt(hex2.slice(0, 2), 16)
-  const g2 = parseInt(hex2.slice(2, 4), 16)
-  const b2 = parseInt(hex2.slice(4, 6), 16)
-
-  const r = Math.round(r1 + (r2 - r1) * ratio)
-  const g = Math.round(g1 + (g2 - g1) * ratio)
-  const b = Math.round(b1 + (b2 - b1) * ratio)
-
-  return `#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}`
 }
 
 // ============================================================================
