@@ -370,7 +370,6 @@ async function onboardNewUser(cwd: string) {
           label: proj.replace(process.env.HOME || "", "~"),
           value: proj,
         })),
-        { label: "───────────────────────────────", value: "separator", disabled: true },
         { label: "Join existing project (I was invited)", value: "join" },
         { label: "Create new project", value: "new" },
       ],
@@ -386,7 +385,7 @@ async function onboardNewUser(cwd: string) {
       return
     }
 
-    if (selected !== "new" && selected !== "separator") {
+    if (selected !== "new") {
       // Update config with cleaned list
       config.set("projects", existingProjects)
 
