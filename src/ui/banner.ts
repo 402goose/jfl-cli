@@ -233,9 +233,11 @@ export function getBannerArt(): string[] {
 
 // Color a character based on what it is (Clawdbot-style)
 function colorChar(ch: string): string {
-  if (ch === "█") return chalk.hex(colors.accent)(ch)      // Bright gold for solid
+  if (ch === "█") return chalk.hex(colors.accent)(ch)      // Bright gold for solid blocks
   if (ch === "░") return chalk.hex(colors.accentDim)(ch)   // Dim gold for shade
   if (ch === "▀" || ch === "▄") return chalk.hex(colors.accentSoft)(ch) // Orange for half-blocks
+  // Box-drawing characters (╗╔═║╚╝╣) → gold accent
+  if ("╗╔═║╚╝╣╩╦╠╬".includes(ch)) return chalk.hex(colors.accent)(ch)
   if (ch === "🚀") return ch  // Keep emoji as-is
   return chalk.hex(colors.dim)(ch)  // Dim for other chars
 }
