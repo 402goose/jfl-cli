@@ -11,7 +11,8 @@ import { isAuthenticated, getUser, getAuthMethod, getX402Address } from "./login
 const TEMPLATE_REPO = "https://github.com/402goose/jfl-template.git"
 
 export async function initCommand(options?: { name?: string }) {
-  console.log(chalk.bold("\n🚀 JFL - Initialize GTM Workspace\n"))
+  // Start Clawdbot-style flow
+  p.intro(chalk.hex("#FFD700")("┌  JFL - Initialize GTM Workspace"))
 
   // Check authentication - owner needs to be verified
   let ownerName = ""
@@ -35,30 +36,31 @@ export async function initCommand(options?: { name?: string }) {
       ownerX402 = getX402Address() || ""
       ownerName = `x402:${ownerX402.slice(0, 8)}...`
     }
-    console.log(chalk.green(`✓ Authenticated as ${ownerName}`))
+    p.log.success(chalk.hex("#00FF88")(`Authenticated as ${ownerName}`))
   } else {
-    console.log(chalk.yellow("Not authenticated. You can still create a workspace,"))
-    console.log(chalk.yellow("but you'll need to run 'jfl login' to claim ownership.\n"))
+    p.log.warning("Not authenticated. You can create a workspace, but run 'jfl login' to claim ownership.")
   }
 
   // Get project name
   let projectName = options?.name
   if (!projectName) {
-    const answer = await inquirer.prompt([
-      {
-        type: "input",
-        name: "name",
-        message: "Project name:",
-        default: "my-project-gtm",
-        validate: (input: string) => {
-          if (!/^[a-z0-9-]+$/.test(input)) {
-            return "Use lowercase letters, numbers, and hyphens only"
-          }
-          return true
-        },
+    const name = await p.text({
+      message: "Project name:",
+      placeholder: "my-project-gtm",
+      validate: (input: string) => {
+        if (!input) return "Project name is required"
+        if (!/^[a-z0-9-]+$/.test(input)) {
+          return "Use lowercase letters, numbers, and hyphens only"
+        }
       },
-    ])
-    projectName = answer.name
+    })
+
+    if (p.isCancel(name)) {
+      p.cancel("Setup cancelled.")
+      process.exit(0)
+    }
+
+    projectName = name as string
   }
 
   const projectPath = join(process.cwd(), projectName!)
