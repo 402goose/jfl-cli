@@ -459,46 +459,50 @@ export async function initCommand(options?: { name?: string }) {
     }
 
     // Success message
-    console.log(chalk.bold.green("\n✅ GTM workspace initialized!\n"))
-
-    console.log(chalk.gray("Structure:"))
-    console.log(chalk.gray(`  ${projectName}/`))
-    console.log(chalk.gray("  ├── .claude/skills/ ← JFL skills"))
-    console.log(chalk.gray("  ├── .jfl/           ← Project config"))
-    console.log(chalk.gray("  ├── knowledge/      ← Strategy & context"))
-    console.log(chalk.gray("  ├── content/        ← Marketing content"))
-    console.log(chalk.gray("  ├── suggestions/    ← Contributor work"))
-    console.log(chalk.gray("  ├── previews/       ← Generated assets"))
-    console.log(chalk.gray("  ├── templates/      ← Doc templates"))
-    console.log(chalk.gray("  ├── CLAUDE.md       ← AI instructions"))
-    console.log(chalk.gray("  └── product/        ← Your code (add as submodule)"))
-    console.log()
+    p.note(
+      chalk.gray(
+        `${projectName}/\n` +
+        "├── .claude/skills/ ← JFL skills\n" +
+        "├── .jfl/           ← Project config\n" +
+        "├── knowledge/      ← Strategy & context\n" +
+        "├── content/        ← Marketing content\n" +
+        "├── suggestions/    ← Contributor work\n" +
+        "├── previews/       ← Generated assets\n" +
+        "├── templates/      ← Doc templates\n" +
+        "├── CLAUDE.md       ← AI instructions\n" +
+        "└── product/        ← Your code (add as submodule)"
+      ),
+      chalk.hex("#00FF88")("✅ GTM workspace initialized!")
+    )
 
     // Ask about launching Claude Code
-    const launchOptions = await inquirer.prompt([
-      {
-        type: "confirm",
-        name: "launchClaude",
-        message: "Start Claude Code now?",
-        default: true,
-      },
-    ])
+    const launchClaude = await p.confirm({
+      message: "Start Claude Code now?",
+      initialValue: true,
+    })
 
-    let dangerMode = false
-    if (launchOptions.launchClaude) {
-      const dangerOptions = await inquirer.prompt([
-        {
-          type: "confirm",
-          name: "dangerouslySkip",
-          message: "Skip permission prompts? (dangerously-skip-permissions)",
-          default: true,
-        },
-      ])
-      dangerMode = dangerOptions.dangerouslySkip
+    if (p.isCancel(launchClaude)) {
+      p.cancel("Setup cancelled.")
+      process.exit(0)
     }
 
-    if (launchOptions.launchClaude) {
-      console.log(chalk.cyan("\n🚀 Launching Claude Code...\n"))
+    let dangerMode = false
+    if (launchClaude) {
+      const dangerouslySkip = await p.confirm({
+        message: "Skip permission prompts? (dangerously-skip-permissions)",
+        initialValue: true,
+      })
+
+      if (p.isCancel(dangerouslySkip)) {
+        p.cancel("Setup cancelled.")
+        process.exit(0)
+      }
+
+      dangerMode = dangerouslySkip
+    }
+
+    if (launchClaude) {
+      p.log.info(chalk.hex("#FFA500")("🚀 Launching Claude Code..."))
 
       // Build the command args
       const claudeArgs: string[] = []
