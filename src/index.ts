@@ -410,6 +410,7 @@ program
     console.log("    jfl voice             Voice input commands")
     console.log("    jfl ralph             AI agent loop (ralph-tui)")
     console.log("    jfl context-hub       Context Hub (unified AI context)")
+    console.log("    jfl test              Test onboarding (isolated)")
 
     console.log(chalk.cyan("\n  Platform (requires login):"))
     console.log("    jfl login             Login to platform")
