@@ -377,6 +377,4 @@ export function showHowItWorksNotice(): void {
   console.log(theme.dim("  • Easy to review changes before merging"))
   console.log(theme.dim("  • Team presence shows overlap warnings"))
   console.log("")
-  console.log(theme.dim("Learn more: ") + theme.accent("https://docs.jfl.run/how-it-works"))
-  console.log("")
 }
