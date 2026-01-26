@@ -292,8 +292,8 @@ export async function initCommand(options?: { name?: string }) {
     const config: Record<string, any> = {
       name: projectName,
       type: "gtm",
-      setup: projectSetup.setup,
-      description: projectSetup.description,
+      setup: setup,
+      description: description,
     }
 
     // Save owner info if authenticated
@@ -332,35 +332,40 @@ export async function initCommand(options?: { name?: string }) {
       }
 
       writeFileSync(claudePath, claudeContent)
-      console.log(chalk.green("\n✓ Owner set in CLAUDE.md"))
+      p.log.success("Owner set in CLAUDE.md")
     }
 
-    console.log(chalk.green("✓ GTM config saved"))
+    p.log.success("GTM config saved")
 
     // Initial commit
     try {
       execSync(`git add .`, { cwd: projectPath, stdio: "pipe" })
       execSync(`git commit -m "Initialize JFL GTM workspace"`, { cwd: projectPath, stdio: "pipe" })
-      console.log(chalk.green("✓ Initial commit created"))
+      p.log.success("Initial commit created")
     } catch {
       // Ignore commit errors
     }
 
     // Offer semantic search setup
-    console.log(chalk.cyan("\n📚 Semantic Search\n"))
-    console.log(chalk.gray("  Search your workspace by meaning, not just keywords."))
-    console.log(chalk.gray("  Requires qmd (local search engine) + ~1.5GB for models.\n"))
+    p.note(
+      chalk.gray(
+        "Search your workspace by meaning, not just keywords.\n" +
+        "Requires qmd (local search engine) + ~1.5GB for models."
+      ),
+      chalk.hex("#FFA500")("📚 Semantic Search")
+    )
 
-    const searchSetup = await inquirer.prompt([
-      {
-        type: "confirm",
-        name: "enableSearch",
-        message: "Enable semantic search?",
-        default: true,
-      },
-    ])
+    const enableSearch = await p.confirm({
+      message: "Enable semantic search?",
+      initialValue: true,
+    })
 
-    if (searchSetup.enableSearch) {
+    if (p.isCancel(enableSearch)) {
+      p.cancel("Setup cancelled.")
+      process.exit(0)
+    }
+
+    if (enableSearch) {
       // Check if qmd is installed
       let qmdInstalled = false
       try {
@@ -381,16 +386,17 @@ export async function initCommand(options?: { name?: string }) {
         }
 
         if (bunInstalled) {
-          const installQmd = await inquirer.prompt([
-            {
-              type: "confirm",
-              name: "install",
-              message: "qmd not found. Install it now?",
-              default: true,
-            },
-          ])
+          const installQmd = await p.confirm({
+            message: "qmd not found. Install it now?",
+            initialValue: true,
+          })
 
-          if (installQmd.install) {
+          if (p.isCancel(installQmd)) {
+            p.cancel("Setup cancelled.")
+            process.exit(0)
+          }
+
+          if (installQmd) {
             const qmdSpinner = ora("Installing qmd...").start()
             try {
               execSync("bun install -g https://github.com/tobi/qmd", { stdio: "pipe" })
