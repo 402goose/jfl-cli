@@ -11,14 +11,15 @@ import { theme, colors, getTerminalWidth, center } from "./theme.js"
 // ============================================================================
 
 // Block-style JFL logo (like Claude Code)
-const BANNER_BLOCKS = `
-     ██╗███████╗██╗     
-     ██║██╔════╝██║     
-     ██║█████╗  ██║     
-██╗  ██║██╔══╝  ██║     
-╚█████╔╝██║     ███████╗
- ╚════╝ ╚═╝     ╚══════╝
-`.trim()
+// Each line is exactly 24 chars for consistent centering
+const BANNER_BLOCKS = [
+  "     ██╗███████╗██╗     ",
+  "     ██║██╔════╝██║     ",
+  "     ██║█████╗  ██║     ",
+  "██╗  ██║██╔══╝  ██║     ",
+  "╚█████╔╝██║     ███████╗",
+  " ╚════╝ ╚═╝     ╚══════╝",
+].join("\n")
 
 // Compact banner for narrow terminals
 const BANNER_COMPACT = `
