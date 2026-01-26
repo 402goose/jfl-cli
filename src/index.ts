@@ -373,18 +373,24 @@ program
   .command("test")
   .description("Test onboarding flow (isolated environment)")
   .action(() => {
-    const { spawn } = require("child_process")
-    const { join } = require("path")
-    const scriptPath = join(__dirname, "../scripts/test-onboarding.sh")
+    import("child_process").then(({ spawn }) => {
+      import("path").then(({ join }) => {
+        import("url").then(({ fileURLToPath }) => {
+          const __filename = fileURLToPath(import.meta.url)
+          const __dirname = join(__filename, "..")
+          const scriptPath = join(__dirname, "../scripts/test-onboarding.sh")
 
-    const test = spawn("bash", [scriptPath], {
-      stdio: "inherit",
-      shell: true,
-    })
+          const test = spawn("bash", [scriptPath], {
+            stdio: "inherit",
+            shell: true,
+          })
 
-    test.on("error", (err: Error) => {
-      console.log(chalk.red("\n❌ Failed to launch test mode"))
-      console.log(chalk.gray("  Make sure the test script exists at: scripts/test-onboarding.sh"))
+          test.on("error", (err: Error) => {
+            console.log(chalk.red("\n❌ Failed to launch test mode"))
+            console.log(chalk.gray("  Make sure the test script exists at: scripts/test-onboarding.sh"))
+          })
+        })
+      })
     })
   })
 
