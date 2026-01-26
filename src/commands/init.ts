@@ -121,10 +121,8 @@ export async function initCommand(options?: { name?: string }) {
 
     // Explain the architecture with box
     p.note(
-      chalk.gray(
-        "A GTM workspace is a context layer for building/launching.\n" +
-        "Product code lives in its own repo, linked as a submodule."
-      ),
+      "A GTM workspace is a context layer for building/launching.\n" +
+      "Product code lives in its own repo, linked as a submodule.",
       chalk.hex("#FFA500")("📋 JFL Architecture")
     )
 
