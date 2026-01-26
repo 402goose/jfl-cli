@@ -8,7 +8,7 @@
 
 import { Command } from "commander"
 import chalk from "chalk"
-import { spawn } from "child_process"
+import { spawn, execSync } from "child_process"
 import { join } from "path"
 import { fileURLToPath } from "url"
 import { initCommand } from "./commands/init.js"
