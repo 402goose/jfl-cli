@@ -1,6 +1,7 @@
 import chalk from "chalk"
 import ora from "ora"
 import inquirer from "inquirer"
+import * as p from "@clack/prompts"
 import { execSync, spawn } from "child_process"
 import { existsSync, readFileSync } from "fs"
 import { join } from "path"
@@ -15,6 +16,7 @@ import {
   type JflProject,
 } from "../utils/github-auth.js"
 import { renderBanner, showSection, showHowItWorksNotice, theme } from "../ui/index.js"
+import { initCommand } from "./init.js"
 
 const config = new Conf({ projectName: "jfl" })
 
