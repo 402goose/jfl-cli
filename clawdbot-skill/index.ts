@@ -137,11 +137,14 @@ async function checkJFLInstalled(): Promise<boolean> {
 
 /**
  * Find GTMs on this machine
+ *
+ * A GTM has: .jfl/ + knowledge/ + CLAUDE.md
+ * Product repos (jfl-cli, jfl-platform) have .jfl/ but aren't GTMs
  */
 async function findGTMs(): Promise<GTM[]> {
   const gtms: GTM[] = []
 
-  // Strategy 1: Check common locations
+  // Check common locations
   const searchPaths = [
     join(homedir(), "CascadeProjects"),
     join(homedir(), "Projects"),
@@ -157,6 +160,15 @@ async function findGTMs(): Promise<GTM[]> {
 
       for (const dir of dirs) {
         const gtmPath = dir.replace("/.jfl", "")
+
+        // Filter: Must have knowledge/ and CLAUDE.md to be a GTM
+        const hasKnowledge = existsSync(join(gtmPath, "knowledge"))
+        const hasClaude = existsSync(join(gtmPath, "CLAUDE.md"))
+
+        if (!hasKnowledge || !hasClaude) {
+          continue // Skip product repos
+        }
+
         const name = gtmPath.split("/").pop() || "unknown"
         gtms.push({ name, path: gtmPath })
       }
@@ -449,16 +461,21 @@ async function runGitStatus(session: SessionData) {
 
 /**
  * Format CLI output for Telegram
+ * Optimized for mobile viewing
  */
 function formatForTelegram(output: string): string {
   return output
     // Strip ANSI color codes
     .replace(/\x1b\[[0-9;]*m/g, "")
-    // Convert box-drawing to ASCII
-    .replace(/[━─]/g, "-")
-    .replace(/[│┃]/g, "|")
-    .replace(/[┌┐└┘├┤┬┴┼]/g, "+")
-    // Preserve emoji
+    // Convert long separator lines to short ones (mobile-friendly)
+    .replace(/[━─]{20,}/g, "━━━━━━━━━")
+    // Keep single box-drawing characters as-is (they render fine)
+    .replace(/[┌┐└┘├┤┬┴┼]/g, "")
+    // Convert vertical bars
+    .replace(/[│┃]/g, "")
+    // Add spacing around emoji headers for readability
+    .replace(/^(📊|👥|🎨|✍️|🔄|📝)/gm, "\n$1")
+    // Preserve emoji and structure
     .trim()
 }
 
