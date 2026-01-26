@@ -2,7 +2,7 @@ import chalk from "chalk"
 import ora from "ora"
 import inquirer from "inquirer"
 import { execSync, spawn } from "child_process"
-import { existsSync } from "fs"
+import { existsSync, readFileSync } from "fs"
 import { join } from "path"
 import Conf from "conf"
 import { ensureDayPass, isTrialMode, showDayPassStatus, markTeammateJoined } from "../utils/auth-guard.js"
@@ -14,6 +14,7 @@ import {
   getGitHubUsername,
   type JflProject,
 } from "../utils/github-auth.js"
+import { renderBanner, showSection, theme } from "../ui/index.js"
 
 const config = new Conf({ projectName: "jfl" })
 
@@ -260,20 +261,17 @@ async function promptChromeMode(cli: DetectedCLI): Promise<boolean> {
 }
 
 function showBanner() {
-  // Same style as GSD - aligned baseline
-  const c = chalk.cyan
-  const banner = `
-${c("     ██╗")} ${c("███████╗")} ${c("██╗     ")}
-${c("     ██║")} ${c("██╔════╝")} ${c("██║     ")}
-${c("     ██║")} ${c("█████╗  ")} ${c("██║     ")}
-${c("██╗  ██║")} ${c("██╔══╝  ")} ${c("██║     ")}
-${c("╚█████╔╝")} ${c("██║     ")} ${c("███████╗")}
-${c(" ╚════╝ ")} ${c("╚═╝     ")} ${c("╚══════╝")}
+  // Get version from package.json
+  let version: string | undefined
+  try {
+    const pkgPath = new URL("../../package.json", import.meta.url)
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"))
+    version = pkg.version
+  } catch {
+    // Ignore
+  }
 
-${chalk.bold("  JUST F*CKING LAUNCH")}
-${chalk.gray("Your context layer for building.")}
-`
-  console.log(banner)
+  console.log(renderBanner({ version }))
 }
 
 async function launchCLI(cli: DetectedCLI, cwd: string, skipAutonomousPrompt = false) {
@@ -308,7 +306,7 @@ async function launchCLI(cli: DetectedCLI, cwd: string, skipAutonomousPrompt = f
 
   // Show trial/day pass status
   if (isTrialMode()) {
-    console.log(chalk.green("🎁 Trial Mode") + chalk.gray(" - Free until foundation complete\n"))
+    console.log(theme.success("🎁 Trial Mode") + theme.dim(" — Free until foundation complete\n"))
   } else {
     showDayPassStatus()
     console.log()
@@ -318,11 +316,11 @@ async function launchCLI(cli: DetectedCLI, cwd: string, skipAutonomousPrompt = f
   const modes: string[] = []
   if (autonomous) modes.push("autonomous")
   if (chrome) modes.push("chrome")
-  const modeStr = modes.length > 0 ? ` (${modes.join(", ")})` : ""
+  const modeStr = modes.length > 0 ? theme.dim(` (${modes.join(", ")})`) : ""
 
-  console.log(chalk.cyan(`Launching ${cli.name}${modeStr}...`))
-  console.log(chalk.gray("Context loaded from CLAUDE.md + knowledge/\n"))
-  console.log(chalk.gray("─".repeat(40)))
+  console.log(theme.accent(`Launching ${cli.name}`) + modeStr)
+  console.log(theme.dim("Context loaded from CLAUDE.md + knowledge/\n"))
+  console.log(theme.dimmer("─".repeat(50)))
   console.log()
 
   // Spawn the CLI in the current directory
