@@ -76,10 +76,12 @@ export async function repairCommand() {
 
   console.log(chalk.green("\n✓ This looks like a JFL project!"))
 
-  // Detect project name from various sources
+  // Detect project name and description from various sources
   const projectName = detectProjectName(cwd)
+  const projectDescription = detectDescription(cwd)
 
   console.log(chalk.gray(`\nDetected project name: ${projectName}`))
+  console.log(chalk.gray(`Detected description: ${projectDescription}`))
 
   // Check authentication
   let ownerName = ""
@@ -107,7 +109,35 @@ export async function repairCommand() {
     console.log(chalk.yellow("⚠️  Not authenticated. Run 'jfl login' to claim ownership."))
   }
 
-  // Prompt for project details
+  // Detect product repo if it exists
+  let productRepo = ""
+  let productPath = ""
+  let setup = "building-product" // Default
+
+  // Check if product/ exists and is a submodule
+  const productDir = join(cwd, "product")
+  if (existsSync(productDir)) {
+    try {
+      const gitmodulesPath = join(cwd, ".gitmodules")
+      if (existsSync(gitmodulesPath)) {
+        const gitmodules = readFileSync(gitmodulesPath, "utf-8")
+        const productMatch = gitmodules.match(/\[submodule "product"\][^[]*url = (.+)/m)
+        if (productMatch) {
+          productRepo = productMatch[1].trim()
+          productPath = "product/"
+          setup = "building-product"
+          console.log(chalk.green(`\n✓ Detected product repo: ${productRepo}`))
+        }
+      }
+    } catch (err) {
+      // Ignore errors
+    }
+  } else if (existsSync(join(cwd, "knowledge")) && existsSync(join(cwd, "content"))) {
+    // Has knowledge and content but no product → GTM only
+    setup = "gtm-only"
+  }
+
+  // Only prompt for project name if we need to confirm
   const answers = await inquirer.prompt([
     {
       type: "input",
@@ -121,46 +151,7 @@ export async function repairCommand() {
         return true
       },
     },
-    {
-      type: "list",
-      name: "setup",
-      message: "What's your setup?",
-      choices: [
-        { name: "Building a product (I have or need a product repo)", value: "building-product" },
-        { name: "GTM only (team handles code, I do content/marketing)", value: "gtm-only" },
-        { name: "Contributor (working on specific tasks)", value: "contributor" },
-      ],
-    },
-    {
-      type: "input",
-      name: "description",
-      message: "One-line description:",
-      default: "My project",
-    },
   ])
-
-  // Detect product repo if it exists
-  let productRepo = ""
-  let productPath = ""
-
-  // Check if product/ exists and is a submodule
-  const productDir = join(cwd, "product")
-  if (existsSync(productDir)) {
-    try {
-      const gitmodulesPath = join(cwd, ".gitmodules")
-      if (existsSync(gitmodulesPath)) {
-        const gitmodules = readFileSync(gitmodulesPath, "utf-8")
-        const productMatch = gitmodules.match(/\[submodule "product"\][^[]*url = (.+)/m)
-        if (productMatch) {
-          productRepo = productMatch[1].trim()
-          productPath = "product/"
-          console.log(chalk.green(`\n✓ Detected product repo: ${productRepo}`))
-        }
-      }
-    } catch (err) {
-      // Ignore errors
-    }
-  }
 
   // Create .jfl directory
   const jflDir = join(cwd, ".jfl")
@@ -172,8 +163,8 @@ export async function repairCommand() {
   const config: Record<string, any> = {
     name: answers.name,
     type: "gtm",
-    setup: answers.setup,
-    description: answers.description,
+    setup: setup,
+    description: projectDescription,
   }
 
   // Add owner info if authenticated
@@ -254,7 +245,13 @@ function detectProjectName(cwd: string): string {
       const vision = readFileSync(visionPath, "utf-8")
       const match = vision.match(/^#\s+(.+)/m)
       if (match) {
-        return match[1].trim().toLowerCase().replace(/\s+/g, "-")
+        const heading = match[1].trim()
+
+        // Skip template headings
+        const templateHeadings = ["Vision", "Brand", "Narrative", "Thesis", "Roadmap"]
+        if (!templateHeadings.includes(heading)) {
+          return heading.toLowerCase().replace(/\s+/g, "-")
+        }
       }
     } catch {
       // Ignore
@@ -263,4 +260,43 @@ function detectProjectName(cwd: string): string {
 
   // Fall back to directory name
   return basename(cwd)
+}
+
+/**
+ * Detect project description from various sources
+ */
+function detectDescription(cwd: string): string {
+  // Try .jfl/config.json first (if it exists)
+  const configPath = join(cwd, ".jfl", "config.json")
+  if (existsSync(configPath)) {
+    try {
+      const config = JSON.parse(readFileSync(configPath, "utf-8"))
+      if (config.description) return config.description
+    } catch {
+      // Ignore
+    }
+  }
+
+  // Try knowledge/VISION.md - look for "The One-Liner" section
+  const visionPath = join(cwd, "knowledge", "VISION.md")
+  if (existsSync(visionPath)) {
+    try {
+      const vision = readFileSync(visionPath, "utf-8")
+
+      // Match pattern: ## The One-Liner followed by content
+      const oneLinerMatch = vision.match(/##\s+The One-Liner[\s\S]*?\*\*[^:]+:\*\*\s*(.+?)(?=\n\n|---)/m)
+      if (oneLinerMatch && oneLinerMatch[1]) {
+        const description = oneLinerMatch[1].trim()
+        // Make sure it's not a placeholder
+        if (description && !description.includes("{") && description.length > 10) {
+          return description
+        }
+      }
+    } catch {
+      // Ignore
+    }
+  }
+
+  // Fall back to generic description
+  return `GTM workspace for ${basename(cwd)}`
 }
