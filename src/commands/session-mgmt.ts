@@ -6,7 +6,7 @@
  */
 
 import { execSync } from "child_process"
-import { existsSync, readFileSync, writeFileSync, readdirSync } from "fs"
+import { existsSync, readFileSync, writeFileSync, readdirSync, statSync } from "fs"
 import { join } from "path"
 import chalk from "chalk"
 

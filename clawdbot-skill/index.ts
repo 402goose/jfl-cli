@@ -1,8 +1,9 @@
 /**
  * JFL GTM Clawdbot Skill
  *
- * Thin wrapper around jfl CLI - just shells out to actual commands.
- * No custom session management - uses jfl's built-in worktree system.
+ * Provides full JFL CLI access from Telegram/Slack with proper session isolation.
+ * Uses `jfl session create` and `jfl session exec` for worktree isolation, auto-commit, and journaling.
+ * Session state persisted to ~/.clawd/memory/jfl-sessions.json
  */
 
 import { exec } from "child_process"
@@ -168,16 +169,49 @@ async function findGTMs(): Promise<GTM[]> {
 }
 
 /**
- * Session storage (in-memory for now)
+ * Session storage (persisted to disk)
  */
-const sessions = new Map<string, { gtmPath: string; gtmName: string; worktree?: string }>()
+const SESSIONS_FILE = join(homedir(), ".clawd", "memory", "jfl-sessions.json")
+
+interface SessionData {
+  gtmPath: string
+  gtmName: string
+  sessionId: string
+  platform: string
+}
+
+function loadSessions(): Map<string, SessionData> {
+  try {
+    if (existsSync(SESSIONS_FILE)) {
+      const data = JSON.parse(readFileSync(SESSIONS_FILE, "utf-8"))
+      return new Map(Object.entries(data))
+    }
+  } catch {
+    // Ignore parse errors
+  }
+  return new Map()
+}
+
+function saveSessions(sessions: Map<string, SessionData>) {
+  try {
+    const data = Object.fromEntries(sessions)
+    const fs = require("fs")
+    fs.mkdirSync(join(homedir(), ".clawd", "memory"), { recursive: true })
+    fs.writeFileSync(SESSIONS_FILE, JSON.stringify(data, null, 2))
+  } catch (error) {
+    console.error("Failed to save sessions:", error)
+  }
+}
+
+const sessions = loadSessions()
 
 function getSession(threadId: string) {
   return sessions.get(threadId)
 }
 
-function setSession(threadId: string, gtmPath: string, gtmName: string) {
-  sessions.set(threadId, { gtmPath, gtmName })
+function setSession(threadId: string, data: SessionData) {
+  sessions.set(threadId, data)
+  saveSessions(sessions)
 }
 
 /**
@@ -186,30 +220,49 @@ function setSession(threadId: string, gtmPath: string, gtmName: string) {
 async function handleSelectGTM(gtmPath: string, ctx: Context) {
   const gtmName = gtmPath.split("/").pop() || "unknown"
 
-  // Store session
-  setSession(ctx.threadId, gtmPath, gtmName)
+  try {
+    // Create or get session with proper worktree isolation
+    const { stdout } = await execAsync(
+      `cd ${gtmPath} && jfl session create --platform ${ctx.platform} --thread ${ctx.threadId}`
+    )
+    const sessionId = stdout.trim()
 
-  // Show command menu
-  const commands = [
-    [
-      { text: "📊 Dashboard", callbackData: "cmd:hud" },
-      { text: "👥 CRM", callbackData: "cmd:crm" }
-    ],
-    [
-      { text: "🎨 Brand", callbackData: "cmd:brand" },
-      { text: "✍️ Content", callbackData: "cmd:content" }
-    ],
-    [
-      { text: "🔄 Sync", callbackData: "cmd:sync" },
-      { text: "📝 Status", callbackData: "cmd:status" }
+    // Store session with ID
+    setSession(ctx.threadId, {
+      gtmPath,
+      gtmName,
+      sessionId,
+      platform: ctx.platform
+    })
+
+    // Show command menu
+    const commands = [
+      [
+        { text: "📊 Dashboard", callbackData: "cmd:hud" },
+        { text: "👥 CRM", callbackData: "cmd:crm" }
+      ],
+      [
+        { text: "🎨 Brand", callbackData: "cmd:brand" },
+        { text: "✍️ Content", callbackData: "cmd:content" }
+      ],
+      [
+        { text: "🔄 Sync", callbackData: "cmd:sync" },
+        { text: "📝 Status", callbackData: "cmd:status" }
+      ]
     ]
-  ]
 
-  return {
-    text: `✓ Opened ${gtmName}\n\n` +
-          `Path: ${gtmPath}\n\n` +
-          `What do you want to do?`,
-    buttons: commands
+    return {
+      text: `✓ Session created: ${gtmName}\n\n` +
+            `Session ID: ${sessionId}\n` +
+            `Isolated worktree with auto-commit enabled.\n\n` +
+            `What do you want to do?`,
+      buttons: commands
+    }
+  } catch (error: any) {
+    return {
+      text: `❌ Failed to create session\n\n${error.message}\n\n` +
+            `Make sure you're in a JFL GTM directory.`
+    }
   }
 }
 
@@ -248,13 +301,17 @@ async function handleCommand(cmd: string, ctx: Context) {
 }
 
 /**
- * Run JFL command (actual CLI)
+ * Run JFL command (uses session exec for isolation)
  */
-async function runJFLCommand(session: any, command: string) {
+async function runJFLCommand(session: SessionData, command: string) {
   try {
-    const { stdout, stderr } = await execAsync(`cd ${session.gtmPath} && jfl ${command}`, {
-      env: { ...process.env, JFL_PLATFORM: "telegram" }
-    })
+    // Use jfl session exec to run command in isolated worktree
+    const { stdout, stderr } = await execAsync(
+      `cd ${session.gtmPath} && jfl session exec "${session.sessionId}" "${command}"`,
+      {
+        env: { ...process.env, JFL_PLATFORM: session.platform }
+      }
+    )
 
     const output = stdout || stderr
     const formatted = formatForTelegram(output)
@@ -271,11 +328,14 @@ async function runJFLCommand(session: any, command: string) {
 }
 
 /**
- * Run CRM command (actual ./crm script)
+ * Run CRM command (uses session exec for isolation)
  */
-async function runCRMCommand(session: any, args: string[]) {
+async function runCRMCommand(session: SessionData, args: string[]) {
   try {
-    const { stdout } = await execAsync(`cd ${session.gtmPath} && ./crm ${args.join(" ")}`)
+    // Use session exec to run CRM in isolated worktree
+    const { stdout } = await execAsync(
+      `cd ${session.gtmPath} && jfl session exec "${session.sessionId}" "./crm ${args.join(" ")}"`
+    )
     const formatted = formatForTelegram(stdout)
 
     return {
@@ -347,16 +407,17 @@ function showContentMenu() {
 }
 
 /**
- * Git sync
+ * Git sync (runs in session worktree)
  */
-async function runGitSync(session: any) {
+async function runGitSync(session: SessionData) {
   try {
+    // Session exec automatically runs session-sync.sh before command
     const { stdout } = await execAsync(
-      `cd ${session.gtmPath} && ./product/scripts/session/session-sync.sh`
+      `cd ${session.gtmPath} && jfl session exec "${session.sessionId}" "git status --short"`
     )
 
     return {
-      text: `✓ Synced ${session.gtmName}\n\n${stdout}`
+      text: `✓ Synced ${session.gtmName}\n\nSession-sync runs automatically before each command.\n\n${stdout || "Working tree clean"}`
     }
   } catch (error: any) {
     return {
@@ -366,16 +427,17 @@ async function runGitSync(session: any) {
 }
 
 /**
- * Git status
+ * Git status (runs in session worktree)
  */
-async function runGitStatus(session: any) {
+async function runGitStatus(session: SessionData) {
   try {
+    // Use session exec to check status in isolated worktree
     const { stdout } = await execAsync(
-      `cd ${session.gtmPath} && git status --short && echo '---' && git log --oneline -5`
+      `cd ${session.gtmPath} && jfl session exec "${session.sessionId}" "git status --short && echo '---' && git log --oneline -5"`
     )
 
     return {
-      text: `📊 Status: ${session.gtmName}\n\n\`\`\`\n${stdout}\n\`\`\``,
+      text: `📊 Status: ${session.gtmName}\nSession: ${session.sessionId}\n\n\`\`\`\n${stdout}\n\`\`\``,
       parseMode: "Markdown"
     }
   } catch (error: any) {
