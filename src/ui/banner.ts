@@ -19,7 +19,7 @@ const BANNER_ART = [
   "   ╚██████╔╝   ██║   ██║ ╚═╝ ██║",
   "    ╚═════╝    ╚═╝   ╚═╝     ╚═╝",
   "                                 ",
-  "     🚀 JUST * LAUNCH 🚀         ",
+  "       🚀 JUST * LAUNCH 🚀       ",
 ]
 
 // Simpler version for medium terminals
