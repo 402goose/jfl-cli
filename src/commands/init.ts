@@ -517,7 +517,7 @@ export async function initCommand(options?: { name?: string }) {
 
     // If not launching, show manual instructions
     let nextSteps = `cd ${projectName}\n\nThen:`
-    if (setup === "building-product" && !productRepo) {
+    if (!productRepo) {
       nextSteps += "\n  git submodule add <your-product-repo> product"
     }
     nextSteps += "\n  jfl status           # Check status"
