@@ -102,6 +102,15 @@ function main() {
     console.log("  ralph-tui    - AI agent loop orchestrator");
   }
   console.log("");
+
+  // Check for Clawdbot integration
+  if (hasCommand("clawdbot")) {
+    console.log("🦞 Clawdbot detected!");
+    console.log("");
+    console.log("Add JFL to Telegram/Slack/Discord:");
+    console.log("  jfl clawdbot install");
+    console.log("");
+  }
 }
 
 main();
