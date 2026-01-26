@@ -518,9 +518,9 @@ export async function initCommand(options?: { name?: string }) {
       })
 
       claude.on("error", (err) => {
-        console.log(chalk.red("\n❌ Failed to launch Claude Code"))
-        console.log(chalk.gray("  Make sure claude is installed: npm install -g @anthropic-ai/claude-code"))
-        console.log(chalk.gray(`\n  Then: cd ${projectName} && claude`))
+        p.log.error("Failed to launch Claude Code")
+        p.log.info("Make sure claude is installed: npm install -g @anthropic-ai/claude-code")
+        p.log.info(`Then: cd ${projectName} && claude`)
       })
 
       // Don't exit - let claude take over
@@ -528,28 +528,24 @@ export async function initCommand(options?: { name?: string }) {
     }
 
     // If not launching, show manual instructions
-    console.log(chalk.bgCyan.black.bold(" 👉 NEXT: Enter your project "))
-    console.log()
-    console.log(chalk.cyan.bold(`   cd ${projectName}`))
-    console.log()
-
-    console.log(chalk.gray("Then:"))
-    if (projectSetup.setup === "building-product" && !productRepo) {
-      console.log("  git submodule add <your-product-repo> product")
+    let nextSteps = `cd ${projectName}\n\nThen:`
+    if (setup === "building-product" && !productRepo) {
+      nextSteps += "\n  git submodule add <your-product-repo> product"
     }
-    console.log("  jfl status           # Check status")
-    console.log("  claude               # Start Claude Code")
-    console.log()
-    console.log(chalk.gray("In Claude Code:"))
-    console.log("  /hud                 # See dashboard")
-    console.log("  /brand-architect     # Create brand")
-    console.log("  /content thread      # Write content")
-    console.log()
-    console.log(chalk.cyan("Update GTM toolkit anytime:"))
-    console.log("  jfl update           # Pull latest skills, CLAUDE.md")
-    console.log()
+    nextSteps += "\n  jfl status           # Check status"
+    nextSteps += "\n  claude               # Start Claude Code"
+    nextSteps += "\n\nIn Claude Code:"
+    nextSteps += "\n  /hud                 # See dashboard"
+    nextSteps += "\n  /brand-architect     # Create brand"
+    nextSteps += "\n  /content thread      # Write content"
+    nextSteps += "\n\nUpdate GTM toolkit anytime:"
+    nextSteps += "\n  jfl update           # Pull latest skills, CLAUDE.md"
+
+    p.outro(chalk.hex("#FFA500")(nextSteps))
+
   } catch (error) {
     spinner.fail("Failed to create GTM workspace")
-    console.error(chalk.red(error))
+    p.log.error(String(error))
+    p.outro(chalk.red("Setup failed"))
   }
 }
