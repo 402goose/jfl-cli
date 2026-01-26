@@ -43,8 +43,8 @@ Store `SESSION_ID` and `GTM_PATH` for this conversation.
 2. **Read all context** (like /hud skill does):
 
 ```bash
-# Get unified context (journal, knowledge, code)
-jfl session exec "$SESSION_ID" "jfl context-hub get --task-type general"
+# Get unified context (journal, knowledge, code) - semantic search
+jfl session exec "$SESSION_ID" "jfl context-hub query 'recent work and priorities'"
 
 # Get CRM pipeline
 jfl session exec "$SESSION_ID" "./crm list"
