@@ -346,8 +346,11 @@ async function launchCLI(cli: DetectedCLI, cwd: string, skipAutonomousPrompt = f
 }
 
 async function onboardNewUser(cwd: string) {
-  console.log(chalk.bold("\n🚀 JFL - Just Fucking Launch\n"))
-  console.log(chalk.gray("Your team's context layer. Any AI. Any task.\n"))
+  // Show banner with version
+  showBanner()
+
+  // Show "How It Works" notice
+  showHowItWorksNotice()
 
   // Check for known projects first
   const knownProjects = (config.get("projects") as string[]) || []
