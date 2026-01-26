@@ -31,7 +31,7 @@ const BANNER_MEDIUM = [
   "  ╚██████╔╝   ██║   ██║ ╚═╝ ██║",
   "   ╚═════╝    ╚═╝   ╚═╝     ╚═╝",
   "                                ",
-  "   🚀 JUST * LAUNCH 🚀          ",
+  "      🚀 JUST * LAUNCH 🚀       ",
 ]
 
 // Compact for narrow terminals
@@ -42,7 +42,7 @@ const BANNER_COMPACT = [
   "╚██████╔╝   ██║   ██║ ╚═╝ ██║",
   " ╚═════╝    ╚═╝   ╚═╝     ╚═╝",
   "                             ",
-  "  🚀 JUST * LAUNCH 🚀        ",
+  "    🚀 JUST * LAUNCH 🚀      ",
 ]
 
 // Minimal fallback
