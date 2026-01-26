@@ -375,10 +375,8 @@ export async function initCommand(options?: { name?: string }) {
 
     // Offer semantic search setup
     p.note(
-      chalk.gray(
-        "Search your workspace by meaning, not just keywords.\n" +
-        "Requires qmd (local search engine) + ~1.5GB for models."
-      ),
+      "Search your workspace by meaning, not just keywords.\n" +
+      "Requires qmd (local search engine) + ~1.5GB for models.",
       chalk.hex("#FFA500")("📚 Semantic Search")
     )
 
