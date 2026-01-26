@@ -487,9 +487,8 @@ program
   .command("clawdbot")
   .description("Install JFL skill for Clawdbot")
   .action(() => {
-    const { existsSync, symlinkSync, mkdirSync } = require("fs")
+    const { existsSync, symlinkSync, mkdirSync, unlinkSync } = require("fs")
     const { homedir } = require("os")
-    const { join } = require("path")
 
     try {
       // Check if clawdbot is installed
