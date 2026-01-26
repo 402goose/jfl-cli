@@ -5,3 +5,4 @@
 
 export * from "./theme.js"
 export * from "./banner.js"
+export * from "./prompts.js"

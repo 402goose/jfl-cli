@@ -49,6 +49,7 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
+    "@clack/prompts": "^0.11.0",
     "@scure/bip32": "^2.0.1",
     "@scure/bip39": "^2.0.1",
     "@x402/core": "^2.2.0",
