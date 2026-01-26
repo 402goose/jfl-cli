@@ -8,6 +8,9 @@
 
 import { Command } from "commander"
 import chalk from "chalk"
+import { spawn } from "child_process"
+import { join } from "path"
+import { fileURLToPath } from "url"
 import { initCommand } from "./commands/init.js"
 import { repairCommand } from "./commands/repair.js"
 import { loginCommand, logout, getX402Address } from "./commands/login.js"
@@ -373,24 +376,18 @@ program
   .command("test")
   .description("Test onboarding flow (isolated environment)")
   .action(() => {
-    import("child_process").then(({ spawn }) => {
-      import("path").then(({ join }) => {
-        import("url").then(({ fileURLToPath }) => {
-          const __filename = fileURLToPath(import.meta.url)
-          const __dirname = join(__filename, "..")
-          const scriptPath = join(__dirname, "../scripts/test-onboarding.sh")
+    const __filename = fileURLToPath(import.meta.url)
+    const __dirname = join(__filename, "..")
+    const scriptPath = join(__dirname, "../scripts/test-onboarding.sh")
 
-          const test = spawn("bash", [scriptPath], {
-            stdio: "inherit",
-            shell: true,
-          })
+    const test = spawn("bash", [scriptPath], {
+      stdio: "inherit",
+      shell: true,
+    })
 
-          test.on("error", (err: Error) => {
-            console.log(chalk.red("\n❌ Failed to launch test mode"))
-            console.log(chalk.gray("  Make sure the test script exists at: scripts/test-onboarding.sh"))
-          })
-        })
-      })
+    test.on("error", (err: Error) => {
+      console.log(chalk.red("\n❌ Failed to launch test mode"))
+      console.log(chalk.gray("  Make sure the test script exists at: scripts/test-onboarding.sh"))
     })
   })
 
