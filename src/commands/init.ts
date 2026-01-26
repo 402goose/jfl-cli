@@ -71,6 +71,19 @@ export async function initCommand(options?: { name?: string }) {
     return
   }
 
+  // Pre-flight check: is git installed?
+  try {
+    execSync("git --version", { stdio: "pipe" })
+  } catch {
+    p.log.error("git is not installed. JFL requires git.")
+    p.log.info("Install git:")
+    p.log.info("  macOS: brew install git")
+    p.log.info("  Windows: https://git-scm.com/download/win")
+    p.log.info("  Linux: sudo apt install git")
+    p.outro(chalk.red("Setup failed"))
+    return
+  }
+
   // Clone template to temp directory, copy only template/ folder
   const spinner = ora("Downloading GTM template...").start()
   const tempDir = join(tmpdir(), `jfl-init-${Date.now()}`)
@@ -136,9 +149,21 @@ export async function initCommand(options?: { name?: string }) {
     const productChoice = await p.select({
       message: "Product repo:",
       options: [
-        { label: "I have an existing repo (add as submodule)", value: "existing" },
-        { label: "Create a new repo for me", value: "create" },
-        { label: "I'll add it later", value: "later" },
+        {
+          label: "I have an existing repo (add as submodule)",
+          value: "existing",
+          hint: "Requires: git"
+        },
+        {
+          label: "Create a new repo for me",
+          value: "create",
+          hint: "Requires: git, gh CLI, gh auth login"
+        },
+        {
+          label: "I'll add it later",
+          value: "later",
+          hint: "Recommended if unsure"
+        },
       ],
     })
 
@@ -236,10 +261,24 @@ export async function initCommand(options?: { name?: string }) {
               // Show the actual error from gh CLI
               createSpinner.fail("Failed to create repo")
               console.log("")
-              console.log(chalk.red("Error from GitHub CLI:"))
-              console.log(chalk.gray(createErr.stderr || createErr.message || String(createErr)))
-              console.log("")
-              p.log.info(`Try: gh repo create ${finalRepoName} ${visFlag}`)
+
+              const errorMsg = createErr.stderr || createErr.message || String(createErr)
+
+              // Check if it's an authentication issue
+              if (errorMsg.includes("authentication") || errorMsg.includes("not logged in") || errorMsg.includes("HTTP 401")) {
+                console.log(chalk.red("GitHub authentication required"))
+                console.log("")
+                p.log.info("Authenticate with GitHub:")
+                p.log.info("  gh auth login")
+                console.log("")
+                p.log.info("Then try again or add the repo manually:")
+                p.log.info(`  gh repo create ${finalRepoName} ${visFlag}`)
+              } else {
+                console.log(chalk.red("Error from GitHub CLI:"))
+                console.log(chalk.gray(errorMsg))
+                console.log("")
+                p.log.info(`Try manually: gh repo create ${finalRepoName} ${visFlag}`)
+              }
               throw createErr
             }
 
