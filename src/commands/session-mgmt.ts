@@ -212,8 +212,55 @@ export async function sessionExec(sessionId: string, command: string) {
  * List all sessions
  */
 export async function sessionList() {
-  const sessions = loadSessions()
-  const sessionIds = Object.keys(sessions)
+  const cwd = process.cwd()
+  const worktreesDir = join(cwd, "worktrees")
+
+  // Scan worktrees directory for session-* directories
+  const detectedSessions: Record<string, SessionInfo> = {}
+
+  if (existsSync(worktreesDir)) {
+    const entries = readdirSync(worktreesDir)
+
+    for (const entry of entries) {
+      if (!entry.startsWith("session-")) continue
+
+      const worktreePath = join(worktreesDir, entry)
+      const stat = statSync(worktreePath)
+
+      if (!stat.isDirectory()) continue
+
+      // Extract session info from directory name
+      // Format: session-{platform}-{thread} or session-{user}-{date}-{time}-{id}
+      const parts = entry.split("-")
+      let platform = "cli"
+      let thread: string | undefined
+
+      if (parts.length >= 3) {
+        // Check if it matches platform-thread pattern
+        if (["telegram", "slack", "discord", "web"].includes(parts[1])) {
+          platform = parts[1]
+          thread = parts.slice(2).join("-")
+        }
+      }
+
+      detectedSessions[entry] = {
+        id: entry,
+        platform,
+        thread,
+        path: worktreePath,
+        branch: entry,
+        created: stat.birthtime.toISOString(),
+        lastActive: stat.mtime.toISOString(),
+        status: "active"
+      }
+    }
+  }
+
+  // Merge with sessions.json if it exists
+  const registeredSessions = loadSessions()
+  const allSessions = { ...detectedSessions, ...registeredSessions }
+
+  const sessionIds = Object.keys(allSessions)
 
   if (sessionIds.length === 0) {
     console.log(chalk.yellow("No active sessions"))
@@ -223,7 +270,7 @@ export async function sessionList() {
   console.log(chalk.bold("\nActive Sessions:\n"))
 
   for (const id of sessionIds) {
-    const session = sessions[id]
+    const session = allSessions[id]
     const lastActive = new Date(session.lastActive)
     const now = new Date()
     const diffMs = now.getTime() - lastActive.getTime()
@@ -239,15 +286,27 @@ export async function sessionList() {
       timeAgo = `${diffHours}h ago`
     }
 
-    // Check if auto-commit daemon is running
+    // Check if auto-commit daemon is running (check PID)
     const pidFile = join(session.path, ".jfl/auto-commit.pid")
-    const isActive = existsSync(pidFile)
+    let isActive = false
 
-    const status = isActive ? chalk.green("active") : chalk.yellow("idle")
+    if (existsSync(pidFile)) {
+      try {
+        const pid = parseInt(readFileSync(pidFile, "utf-8").trim())
+        // Check if process is running
+        process.kill(pid, 0) // Signal 0 = existence check
+        isActive = true
+      } catch {
+        // PID doesn't exist or not accessible
+        isActive = false
+      }
+    }
+
+    const status = isActive ? chalk.green("🟢 active") : chalk.yellow("🟡 idle")
     const platform = chalk.cyan(session.platform.padEnd(10))
     const thread = session.thread ? chalk.gray(`thread:${session.thread}`) : ""
 
-    console.log(`${chalk.bold(id.padEnd(30))} ${platform} ${status.padEnd(15)} ${timeAgo.padEnd(10)} ${thread}`)
+    console.log(`${chalk.bold(id.padEnd(40))} ${platform} ${status.padEnd(20)} ${timeAgo.padEnd(10)} ${thread}`)
   }
 
   console.log()
