@@ -244,6 +244,33 @@ cleanup_stale_session() {
         return
     fi
 
+    # Check for unpushed commits
+    local current_branch=$(git branch --show-current 2>/dev/null)
+    if [[ -n "$current_branch" ]]; then
+        # Get remote tracking branch
+        local remote_branch=$(git rev-parse --abbrev-ref "$current_branch@{upstream}" 2>/dev/null)
+
+        if [[ -n "$remote_branch" ]]; then
+            # Check if there are unpushed commits
+            local unpushed=$(git log "$remote_branch..$current_branch" --oneline 2>/dev/null | wc -l | tr -d ' ')
+
+            if [[ $unpushed -gt 0 ]]; then
+                echo "    ⚠ Has $unpushed unpushed commits - skipping (push first or use --force)"
+                cd "$REPO_DIR"
+                return
+            fi
+        else
+            # No upstream branch - check if branch has any commits
+            local commit_count=$(git rev-list --count "$current_branch" 2>/dev/null | tr -d ' ')
+
+            if [[ $commit_count -gt 0 ]]; then
+                echo "    ⚠ Branch has commits but no remote tracking - skipping (push first or use --force)"
+                cd "$REPO_DIR"
+                return
+            fi
+        fi
+    fi
+
     cd "$REPO_DIR"
 
     # Stop any background processes

@@ -368,6 +368,55 @@ export async function sessionDestroy(sessionId: string, opts?: { force?: boolean
     // Ignore
   }
 
+  // Check for unpushed commits
+  try {
+    const currentBranch = execSync("git branch --show-current", {
+      cwd: session.path,
+      encoding: "utf-8"
+    }).trim()
+
+    if (currentBranch) {
+      try {
+        // Get remote tracking branch
+        const remoteBranch = execSync(`git rev-parse --abbrev-ref ${currentBranch}@{upstream}`, {
+          cwd: session.path,
+          encoding: "utf-8"
+        }).trim()
+
+        // Check for unpushed commits
+        const unpushed = execSync(`git log ${remoteBranch}..${currentBranch} --oneline`, {
+          cwd: session.path,
+          encoding: "utf-8"
+        }).trim()
+
+        if (unpushed && !opts?.force) {
+          console.log(chalk.yellow("\n⚠️  Unpushed commits found:"))
+          console.log(unpushed)
+          console.log(chalk.yellow("\nPush to remote or run with --force to destroy anyway\n"))
+          return
+        }
+      } catch (error) {
+        // No upstream branch - check if branch has any commits
+        try {
+          const commitCount = execSync(`git rev-list --count ${currentBranch}`, {
+            cwd: session.path,
+            encoding: "utf-8"
+          }).trim()
+
+          if (parseInt(commitCount) > 0 && !opts?.force) {
+            console.log(chalk.yellow("\n⚠️  Branch has commits but no remote tracking"))
+            console.log(chalk.yellow("Push to remote or run with --force to destroy anyway\n"))
+            return
+          }
+        } catch {
+          // Ignore
+        }
+      }
+    }
+  } catch (error) {
+    // Ignore
+  }
+
   // Delete worktree
   try {
     execSync(`git worktree remove ${session.path} --force`, {
