@@ -51,8 +51,8 @@ function parseVersion(version: string): { major: number; minor: number; patch: n
 }
 
 function shouldCheckForUpdates(): boolean {
-  const homedir = require("os").homedir()
-  const cachePath = path.join(homedir, ".jfl", UPDATE_CHECK_CACHE)
+  const cacheDir = homedir()
+  const cachePath = path.join(cacheDir, ".jfl", UPDATE_CHECK_CACHE)
 
   if (!fs.existsSync(cachePath)) {
     return true
@@ -67,8 +67,8 @@ function shouldCheckForUpdates(): boolean {
 }
 
 function markUpdateChecked() {
-  const homedir = require("os").homedir()
-  const jflDir = path.join(homedir, ".jfl")
+  const homeDir = homedir()
+  const jflDir = path.join(homeDir, ".jfl")
   const cachePath = path.join(jflDir, UPDATE_CHECK_CACHE)
 
   if (!fs.existsSync(jflDir)) {
