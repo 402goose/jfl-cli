@@ -239,11 +239,10 @@ export async function updateCommand(options: { dry?: boolean; autoUpdate?: boole
 
   const isDryRun = options.dry || false
 
-  if (!isAutoUpdate) {
-    console.log(chalk.cyan("📦 Syncing GTM template...\n"))
-  }
-
   if (isDryRun) {
+    if (!isAutoUpdate) {
+      console.log(chalk.cyan("📦 Checking GTM template...\n"))
+    }
     console.log(chalk.gray("  DRY RUN - Showing what would be updated\n"))
 
     console.log(chalk.white("  Would sync from jfl-template:"))
@@ -263,6 +262,10 @@ export async function updateCommand(options: { dry?: boolean; autoUpdate?: boole
 
     console.log(chalk.cyan("\n  No changes made. Run without --dry to actually update.\n"))
     return
+  }
+
+  if (!isAutoUpdate) {
+    console.log(chalk.cyan("📦 Syncing GTM template...\n"))
   }
 
   const spinner = ora("Fetching latest from jfl-template...").start()
