@@ -121,27 +121,17 @@ async function checkNpmPackageUpdate(autoUpdate: boolean): Promise<void> {
     return
   }
 
-  if (!autoUpdate) {
-    console.log(chalk.cyan("\n🔍 Checking for npm package updates...\n"))
-  }
-
-  let spinner: any = null
-
   try {
-    spinner = ora("Checking npm registry...")
-    if (!autoUpdate) spinner.start()
-
     const currentVersion = getCurrentVersion()
     const latestVersion = getLatestVersion()
 
     if (!latestVersion) {
-      if (spinner && !autoUpdate) spinner.stop()
       return
     }
 
     if (currentVersion === latestVersion) {
       if (!autoUpdate) {
-        spinner.succeed(`jfl is up to date (v${currentVersion})`)
+        console.log(chalk.green("✓ jfl is up to date") + chalk.gray(` (v${currentVersion})`))
         console.log()
       }
       markUpdateChecked()
@@ -153,7 +143,7 @@ async function checkNpmPackageUpdate(autoUpdate: boolean): Promise<void> {
 
     // Major version change - prompt user
     if (latest.major > current.major) {
-      if (!autoUpdate) spinner.stop()
+      if (spinner && !autoUpdate) spinner.stop()
       const shouldUpdate = await promptForMajorUpdate(currentVersion, latestVersion)
 
       if (!shouldUpdate) {
@@ -165,9 +155,9 @@ async function checkNpmPackageUpdate(autoUpdate: boolean): Promise<void> {
       if (!autoUpdate) spinner = ora(`Updating to v${latestVersion}...`).start()
     } else {
       // Minor/patch - auto-update silently
-      if (!autoUpdate) {
+      if (!autoUpdate && spinner) {
         spinner.text = `Updating to v${latestVersion}...`
-      } else {
+      } else if (autoUpdate) {
         // For auto-update, show brief message
         console.log(chalk.gray(`⚡ Updating jfl to v${latestVersion}...`))
       }
@@ -176,17 +166,17 @@ async function checkNpmPackageUpdate(autoUpdate: boolean): Promise<void> {
     // Run npm update
     execSync("npm install -g jfl@latest", { stdio: "pipe" })
 
-    if (!autoUpdate) {
+    if (!autoUpdate && spinner) {
       spinner.succeed(`Updated to v${latestVersion}`)
       console.log()
-    } else {
+    } else if (autoUpdate) {
       console.log(chalk.green(`✓ Updated to v${latestVersion}\n`))
     }
 
     markUpdateChecked()
 
   } catch (err: any) {
-    if (!autoUpdate) {
+    if (!autoUpdate && spinner) {
       spinner.fail("Update check failed")
       console.error(chalk.red(err.message))
       console.log()
