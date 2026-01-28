@@ -1,17 +1,26 @@
 # JFL - Just Fucking Launch
 
-Your team's context layer for shipping products. Any AI. Any task.
+**Your context layer. Any project. Any AI.**
 
-JFL is a CLI toolkit that powers go-to-market campaigns from zero to launch. It creates structured GTM workspaces where product code, strategy, brand, and content all work together.
+A CLI toolkit that structures GTM campaigns from idea to launch. JFL creates workspaces where strategy, brand, code, and content work together—powered by AI agents that understand your full context across sessions.
+
+**Quick Links:** [Website](https://jfl.run) · [Docs](https://jfl.run/docs) · [Getting Started](https://jfl.run/start) · [GitHub](https://github.com/402goose/jfl-cli)
+
+---
 
 ## What JFL Does
 
-- **Initialize GTM workspaces** with proper architecture
-- **Manage your launch dashboard** with countdown, phases, and tasks
-- **Authenticate and manage billing** ($5/day per person, crypto-first)
-- **Deploy to platform** for team collaboration
-- **Orchestrate parallel agents** for Pro tier
-- **Track feedback** and iterate
+JFL is built around three core systems:
+
+**Context Hub** — Unified context layer that aggregates journal entries, knowledge docs, and code headers. Any AI can query it to understand what happened across sessions, what decisions were made, and what code does.
+
+**Synopsis** — Work summaries that roll up journal + commits + file headers into readable reports. Ask "what happened this week?" or "what did Alex work on?" and get structured answers.
+
+**Session Management** — Git worktree-based isolation for parallel work. Each session auto-commits, auto-merges, and cleans up. No more lost work or merge conflicts.
+
+Plus: Brand generation, content creation, x402 crypto micropayments, and a growing skill library.
+
+---
 
 ## Installation
 
@@ -19,166 +28,238 @@ JFL is a CLI toolkit that powers go-to-market campaigns from zero to launch. It 
 npm install -g jfl
 ```
 
-JFL automatically installs all required dependencies, including:
-- **httpcat-cli** - For gasless USDC transfers via x402 (bundled, no separate install needed)
-- **@x402/evm** - x402 payment protocol for Day Pass payments
+**Requirements:** Node ≥18
 
-## Quick Start
+JFL automatically installs dependencies including Context Hub MCP and x402 payment tools.
+
+---
+
+## Quick Start (TL;DR)
 
 ```bash
-# Create a new GTM workspace
-jfl init my-project-gtm
+# Initialize a GTM workspace
+jfl init my-product-gtm
 
 # Check status
-cd my-project-gtm
+cd my-product-gtm
 jfl status
 
-# View launch dashboard
+# View campaign dashboard
 jfl hud
 
-# Or just type. It will walk you through it
+# See what happened recently
+jfl synopsis 24
+
+# Start interactive session (auto-updates on first run)
 jfl
 ```
 
+---
+
+## Core Commands
+
+| Command | Description |
+|---------|-------------|
+| `jfl` | Interactive session (auto-updates GTM template + npm package) |
+| `jfl init [name]` | Initialize new GTM workspace |
+| `jfl status` | Show project status and auth |
+| `jfl hud` | Campaign dashboard (ship date, phases, pipeline) |
+| `jfl synopsis [hours] [author]` | Work summary (journal + commits + code) |
+| `jfl update` | Pull latest skills and templates |
+| `jfl context-hub [action]` | Manage Context Hub daemon (start/stop/status) |
+| `jfl session [action]` | Session management (create/list/end) |
+| `jfl repair` | Fix .jfl/config.json if corrupted |
+
+### Platform Commands
+
+| Command | Description |
+|---------|-------------|
+| `jfl login` | Authenticate to JFL platform |
+| `jfl login --x402` | Use x402 Day Pass ($5/day crypto) |
+| `jfl wallet` | Show wallet and day pass status |
+| `jfl deploy` | Deploy to JFL platform |
+| `jfl agents [action]` | Manage parallel agents (list/create/start/stop) |
+| `jfl feedback` | Rate your session |
+
+---
+
 ## Architecture
 
-JFL creates GTM workspaces that are **separate from your product code**:
+JFL creates GTM workspaces that are **separate from product code**:
 
 ```
-my-project-gtm/              ← GTM workspace (strategy, content, brand)
+my-product-gtm/              ← GTM workspace (strategy, content, brand)
+├── .jfl/
+│   ├── config.json          ← Project settings
+│   ├── journal/             ← Session journals (JSONL)
+│   └── context-hub.pid      ← Context Hub daemon
 ├── product/                 ← SUBMODULE → your-product-repo
-├── knowledge/               ← Strategy, vision, narrative
-├── content/                 ← Marketing content
-├── suggestions/             ← Contributor work
-├── skills/                  ← JFL skills (updated via jfl update)
+├── knowledge/               ← Strategy docs (VISION, ROADMAP, etc.)
+├── content/                 ← Generated marketing content
+├── suggestions/             ← Contributor workspaces
+├── .claude/skills/          ← JFL skills
 └── CLAUDE.md                ← AI instructions
 
-your-product-repo/           ← SEPARATE REPO (all code lives here)
+your-product-repo/           ← SEPARATE REPO (all code)
 ├── src/
 ├── cli/
 └── ...
 ```
 
-**Why?**
+**Why separate?**
 - Clean separation of concerns
-- Product can be worked on independently
-- GTM context doesn't pollute product repo
-- Multiple GTMs can reference same product
-- `jfl update` updates GTM toolkit without touching product
+- Product code doesn't get polluted with GTM docs
+- Multiple GTMs can reference the same product
+- `jfl update` updates GTM toolkit without touching product code
+- Team can work on product independently
 
-## Commands
+---
 
-### Core Commands
+## Context Hub
 
-```bash
-jfl                          # Start interactive session (with optional --update)
-jfl init [template]          # Initialize new GTM workspace
-jfl status                   # Show project status
-jfl hud                      # Show campaign dashboard
-jfl hud --compact            # One-line status
-jfl update                   # Pull latest JFL updates
-jfl update --dry             # Preview updates without applying
-```
-
-### Platform Commands
+Context Hub is a local daemon (port 4242) that provides unified context to any AI:
 
 ```bash
-jfl login                    # Authenticate to JFL platform
-jfl login --x402             # Use x402 Day Pass ($5/day, crypto)
-jfl login --solo             # Use Solo plan ($49/mo)
-jfl login --team             # Use Team plan ($199/mo)
-jfl login --free             # Stay on trial
-jfl logout                   # Logout from platform
-jfl wallet                   # Show wallet and day pass status
-jfl deploy                   # Deploy to JFL platform
-jfl deploy --force           # Force deploy even if no changes
-jfl agents [action]          # Manage parallel agents (list, create, start, stop)
-jfl feedback                 # Rate your session
+# Start Context Hub
+jfl context-hub start
+
+# Check status
+jfl context-hub status
+
+# Stop daemon
+jfl context-hub stop
 ```
 
-### Skill Shortcuts
+**What it aggregates:**
+- **Journal entries** — What happened across sessions (`.jfl/journal/*.jsonl`)
+- **Knowledge docs** — Strategy, vision, roadmap (`knowledge/*.md`)
+- **Code headers** — `@purpose`, `@spec`, `@decision` tags from files
 
-These skills run in your Claude Code session:
+**MCP Integration:**
+Context Hub exposes MCP tools that Claude Code and other AIs can use:
+- `context_get` — Get unified context (journal + knowledge + code)
+- `context_search` — Semantic search across all sources
+- `context_status` — Check daemon status
+- `context_sessions` — See activity from other sessions
+
+Add to your `.mcp.json`:
+```json
+{
+  "jfl-context": {
+    "command": "jfl-context-hub-mcp"
+  }
+}
+```
+
+---
+
+## Synopsis - Work Summaries
+
+Synopsis aggregates journal entries, git commits, and code file headers to answer "what happened?"
 
 ```bash
-jfl brand [subcommand]       # Run /brand-architect skill
-jfl content <type> [topic]   # Run /content skill (thread, post, article, one-pager)
+# Last 24 hours, all authors
+jfl synopsis 24
+
+# Last 8 hours
+jfl synopsis 8
+
+# What did Alex work on in last 48 hours?
+jfl synopsis 48 alex
+
+# Filter by git author name
+jfl synopsis 24 --author "Andrew"
 ```
+
+**Output includes:**
+- Summary of features, fixes, decisions
+- Time audit breakdown (infra vs features vs docs)
+- Per-team-member contributions
+- Health checks (too much infra? not enough outreach?)
+- Next steps from journal entries
+- Incomplete/stubbed items
+
+---
+
+## Session Management
+
+Work in isolated git worktrees with automatic commit/merge:
+
+```bash
+# Create new session (creates worktree + branch)
+jfl session create
+
+# List active sessions
+jfl session list
+
+# End session (merges to main, removes worktree)
+jfl session end [session-name]
+
+# Auto-commit running in background (every 2 min)
+./scripts/session/auto-commit.sh start
+```
+
+**Each session:**
+- Isolated git worktree (parallel work without conflicts)
+- Auto-commits knowledge/, content/, suggestions/ every 2 minutes
+- Auto-merges to main on session end
+- Removes worktree and branch when merged
+- Writes journal entries (enforced by hooks)
+
+**SessionStart hook:**
+- CD to worktree
+- Sync repos (jfl-gtm + product submodule)
+- Run doctor check (detect issues)
+- Start Context Hub
+- Show HUD dashboard
+
+**Stop hook:**
+- Auto-commit uncommitted changes
+- Merge to main (with conflict handling)
+- Cleanup worktree and branch
+- Validate journal entry exists
+
+---
 
 ## Authentication
 
-JFL supports two authentication methods:
-
-**GitHub OAuth**
+**GitHub OAuth:**
 ```bash
 jfl login
 ```
 
-**x402 Crypto Wallet** (with httpcat-cli bundled)
+**x402 Crypto Wallet ($5/day micropayments):**
 ```bash
 jfl login --x402
 ```
 
-This enables:
-- Gasless USDC transfers (no ETH needed for gas)
-- $5/day payments via x402 protocol
-- httpcat-cli automatically installed and configured
+Enables:
+- Gasless USDC transfers (no ETH needed)
+- $5/day Day Pass payments
+- httpcat-cli bundled and configured
 
-View your auth status:
+View auth status:
 ```bash
+jfl status
 jfl wallet
 ```
 
+---
+
 ## Pricing
 
-**Trial - $0**
-- Full JFL toolkit
-- Foundation + brand setup
-- Use Claude Code or Codex CLI - download Claude Pro or Max at claude.ai 
-- Ends when you add teammates (context is more fun when you shape it together)
+| Plan | Price | What You Get |
+|------|-------|--------------|
+| **Trial** | $0 | Full toolkit, foundation + brand setup. Use with Claude Code. |
+| **Day Pass** | $5/day | Pay only days you use. AI included. Chat in Telegram/Slack/Discord. Pay with USDC (gasless). |
+| **Solo** | $49/mo | Just you. AI included. Best if you use it most days. |
+| **Team** | $199/mo | Up to 5 seats (+$25/seat after). AI for everyone. Parallel agents. Team analytics. |
 
-**Day Pass - $5/day per person**
-- Only pay the days you use it
-- AI included (no API key needed)
-- Chat in Telegram, Slack, Discord
-- Dashboard + Deploy at [TBD]
-- Pay with USDC (gasless via x402)
+---
 
-**Solo - $49/mo**
-- Just you (1 seat)
-- AI included
-- Everything in Day Pass
-- Best if you use it most days
+## Skills Library
 
-**Team - $199/mo**
-- Up to 5 seats (+$25/seat after)
-- AI included for everyone
-- Team dashboard + analytics
-- Parallel agents
-- Priority support
-
-## Project Setup Types
-
-When initializing a project, JFL asks about your setup:
-
-**Building a product**
-- You're writing code
-- Product repo linked as submodule at `product/`
-- Code changes go to product repo
-
-**GTM only**
-- Team handles code
-- You focus on content, brand, outreach
-- No code changes, just marketing
-
-**Contributor**
-- Working on specific tasks
-- Changes go to `suggestions/{name}.md`
-- Owner reviews and merges
-
-## Skills Available
-
-JFL includes powerful skills for Claude Code:
+JFL includes skills for Claude Code:
 
 | Skill | Description |
 |-------|-------------|
@@ -186,16 +267,18 @@ JFL includes powerful skills for Claude Code:
 | `/brand-architect` | Generate brand identity (marks, colors, typography) |
 | `/web-architect` | Implement assets (SVG, favicon, OG images) |
 | `/content` | Create content (threads, posts, articles, one-pagers) |
-| `/x-algorithm` | Optimize tweets for X For You feed using the open-sourced algorithm |
+| `/x-algorithm` | Optimize tweets for X For You feed |
 | `/video` | Founder video scripts (viral short-form) |
 | `/startup` | Startup journey guidance (idea to scale) |
-| `/agent-browser` | Headless browser automation - navigate, screenshot, scrape |
-| `/search` | Semantic search across GTM knowledge base using qmd |
+| `/agent-browser` | Headless browser automation |
+| `/search` | Semantic search across GTM knowledge base |
 | `/spec` | Multi-agent adversarial spec refinement |
 | `/react-best-practices` | React/Next.js performance optimization |
 | `/remotion-best-practices` | Remotion video creation in React |
 
-Run these in Claude Code after initializing your project. Easy to add more skills, it has a sklls factory just ask it or copy your favorite skills repos
+Run in Claude Code after `jfl init`.
+
+---
 
 ## Knowledge Layer
 
@@ -210,52 +293,104 @@ knowledge/
 ├── BRAND_BRIEF.md         # Brand inputs
 ├── BRAND_DECISIONS.md     # Finalized brand choices
 ├── VOICE_AND_TONE.md      # How the brand speaks
-├── TASKS.md               # Master task list
-└── CRM.md                 # Contact database
+└── TASKS.md               # Master task list
 ```
 
-These docs are the source of truth that AI reads to generate content, make decisions, and maintain consistency.
+These docs are the source of truth. AIs read them to generate content, make decisions, and maintain consistency.
 
-## Updating JFL
+---
 
-JFL updates independently of your project:
+## Auto-Update
 
+JFL automatically checks for updates on session start (24-hour cache):
+
+- **Minor/patch versions** — Auto-updates silently
+- **Major versions** — Prompts for approval
+
+**Skip auto-update:**
+```bash
+jfl --no-update
+```
+
+**Manual update:**
 ```bash
 jfl update                   # Pull latest skills and CLAUDE.md
 jfl update --dry             # Preview changes first
 ```
 
-This updates:
-- `skills/` - Latest skill implementations
-- `CLAUDE.md` - Latest AI instructions
-- Templates for new docs
+**What gets updated:**
+- `.claude/skills/` — Latest skill implementations
+- `CLAUDE.md` — Latest AI instructions
+- `scripts/` — Session management scripts
+- `templates/` — Doc templates
 
-Your project content (knowledge/, content/, product/) is never touched.
+**What's preserved:**
+- `knowledge/` — Your strategy docs
+- `content/` — Your generated content
+- `product/` — Your product code
+- `.jfl/config.json` — Project settings
 
-## Session Management
+---
 
-**Default:** Single session, direct in repo.
+## Journal Protocol
 
-**Advanced:** For parallel work across multiple sessions, use worktrees:
+Every session MUST write journal entries. The Stop hook blocks if no entry exists.
 
-```bash
-./scripts/worktree-session.sh create [username]    # Create isolated session
-./scripts/worktree-session.sh list                 # List active sessions
-./scripts/worktree-session.sh end [session-name]   # End session
+**Entry format:**
+```json
+{
+  "v": 1,
+  "ts": "2026-01-28T10:00:00.000Z",
+  "session": "session-goose-20260128-1014-00cec4",
+  "type": "feature|fix|decision|milestone|discovery",
+  "status": "complete|incomplete|blocked",
+  "title": "Short title",
+  "summary": "2-3 sentence summary",
+  "detail": "Full description with context",
+  "files": ["file1.ts", "file2.ts"],
+  "incomplete": ["what's not done"],
+  "next": "what should happen next"
+}
 ```
 
-Each worktree session has:
-- Isolated git worktree
-- Auto-commit (every 5 min)
-- Auto-merge to main (every 15 min)
-- Own branch for changes
+**Write entries when:**
+- Feature completed
+- Decision made
+- Bug fixed
+- Milestone reached
+- Session ending
 
-## Development
+Journal entries become searchable via Context Hub and Synopsis.
 
-Contributing to JFL itself:
+---
+
+## File Headers (Required for Code)
+
+Every `.ts`, `.tsx`, `.js`, `.jsx` file MUST have a header with `@purpose`:
+
+```typescript
+/**
+ * Component/Module Name
+ *
+ * Brief description of what this does.
+ *
+ * @purpose One-line description of file's purpose
+ * @spec Optional: link to spec (e.g., PLATFORM_SPEC.md#sessions)
+ * @decision Optional: decision slug (e.g., journal/2026-01.md#per-session)
+ */
+```
+
+Enables:
+- Synopsis to extract context from files
+- Codebase understanding without reading full files
+- Decision traceability
+
+---
+
+## Contributing to JFL
 
 ```bash
-# Clone through GTM structure
+# Clone via GTM structure
 jfl init my-jfl-gtm
 # During setup, add: https://github.com/402goose/just-fucking-launch.git
 
@@ -263,8 +398,8 @@ jfl init my-jfl-gtm
 cd my-jfl-gtm/product
 ./scripts/dev-setup.sh
 
-# Work in the submodule
-cd product/cli
+# Work in the CLI submodule
+cd cli
 npm install
 npm run build
 
@@ -272,42 +407,74 @@ npm run build
 npm link
 ```
 
+---
+
 ## Environment Variables
 
 ```bash
 CRM_SHEET_ID=your-sheet-id   # Google Sheets CRM integration
 ```
 
+---
+
 ## Files You'll Work With
 
 ```
-.jfl/config.json              # Project configuration
+.jfl/
+├── config.json              # Project configuration
+├── journal/                 # Session journals (JSONL)
+├── context-hub.pid          # Context Hub daemon PID
+└── logs/                    # Session logs
+
 knowledge/                    # Strategy docs (you fill these)
 content/                      # Generated content
 suggestions/{name}.md         # Per-person working space
 previews/                     # Generated assets
 ```
 
-## Help
+---
+
+## Help & Support
 
 ```bash
 jfl help                      # Show all commands
 jfl --version                 # Show version
 ```
 
-For issues or feedback:
-- GitHub: https://github.com/402goose/just-fucking-launch
+**Issues & Feedback:**
+- GitHub: https://github.com/402goose/jfl-cli/issues
 - Docs: https://jfl.run
+- X: [@taggaoyl](https://x.com/taggaoyl)
+
+---
+
+## What's New in 0.1.0
+
+- ✨ Auto-update on session start (checks npm registry, 24h cache)
+- 🔍 Synopsis command (`jfl synopsis [hours] [author]`)
+- 🏥 Improved doctor checks with categorized output
+- 🐛 Fixed auto-merge failure that caused branch pileup
+- 📊 Context Hub productization improvements
+
+---
 
 ## License
 
 MIT License - see LICENSE file for details.
+
+---
 
 ## Credits
 
 Built by [@tagga](https://x.com/taggaoyl) (Alec Taggart)
 
 Powered by:
-- Claude (Anthropic)
-- x402 (crypto micropayments)
+- [Claude](https://claude.ai) (Anthropic)
+- [x402](https://402.com) (crypto micropayments)
 - Commander.js, Inquirer, Chalk, and more
+
+---
+
+**Sources:**
+- [Moltbot (formerly Clawdbot) README](https://github.com/moltbot/moltbot)
+- [Moltbot Documentation](https://docs.molt.bot/)
