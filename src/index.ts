@@ -25,6 +25,7 @@ import { feedbackCommand } from "./commands/feedback.js"
 import { updateCommand } from "./commands/update.js"
 import { contextHubCommand } from "./commands/context-hub.js"
 import { voiceCommand } from "./commands/voice.js"
+import { synopsisCommand } from "./commands/synopsis.js"
 import {
   listSkillsCommand,
   installSkillCommand,
