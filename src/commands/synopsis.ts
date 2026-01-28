@@ -206,10 +206,13 @@ function readFileHeaders(projectRoot: string, since: Date): FileHeader[] {
       const extracted = extractHeaders(content)
 
       if (extracted.purpose) {
-        headers.push({
+        const header: FileHeader = {
           file,
-          ...extracted
-        })
+          purpose: extracted.purpose
+        }
+        if (extracted.spec) header.spec = extracted.spec
+        if (extracted.decision) header.decision = extracted.decision
+        headers.push(header)
       }
     } catch {
       // Skip unreadable files

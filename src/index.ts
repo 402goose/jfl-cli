@@ -101,6 +101,15 @@ program
     await contextHubCommand(action, { port: parseInt(options.port, 10) })
   })
 
+program
+  .command("synopsis")
+  .description("Show work summary (journal + commits + code)")
+  .argument("[hours]", "Hours to look back (default: 24)", "24")
+  .argument("[author]", "Filter by author name")
+  .action(async (hours, author) => {
+    await synopsisCommand(hours, author)
+  })
+
 // ============================================================================
 // PLATFORM COMMANDS (require login for full features)
 // ============================================================================
