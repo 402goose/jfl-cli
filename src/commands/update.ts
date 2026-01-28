@@ -319,9 +319,9 @@ export async function updateCommand(options: { dry?: boolean; autoUpdate?: boole
     // Cleanup temp directory
     fs.rmSync(tempPath, { recursive: true })
 
-    spinner.succeed("Updated!")
+    spinner.succeed("GTM template synced")
 
-    console.log(chalk.green("\n  Synced from product repo:"))
+    console.log(chalk.white("\n  Synced from jfl-template:"))
     for (const p of updated) {
       console.log(chalk.gray(`    ✓ ${p}`))
     }
@@ -333,7 +333,7 @@ export async function updateCommand(options: { dry?: boolean; autoUpdate?: boole
       }
     }
 
-    console.log(chalk.cyan("\n  Done! Restart Claude Code to pick up changes.\n"))
+    console.log(chalk.cyan("\n✨ Update complete! Restart Claude Code to pick up changes.\n"))
 
   } catch (err: any) {
     spinner.fail("Update failed")
