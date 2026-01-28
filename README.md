@@ -6,7 +6,7 @@ JFL provides persistent context for AI workflows. Agents can read what happened 
 
 Context lives in git as structured files (markdown, JSONL). Any AI tool can integrate via MCP.
 
-**Quick Links:** [Website](https://jfl.run) · [Docs](https://jfl.run/docs) · [Getting Started](https://jfl.run/start) · [GitHub](https://github.com/402goose/jfl-cli)
+**Quick Links:** [GitHub](https://github.com/402goose/jfl-cli) · [npm](https://www.npmjs.com/package/jfl)
 
 ---
 
