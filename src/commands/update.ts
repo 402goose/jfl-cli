@@ -143,7 +143,6 @@ async function checkNpmPackageUpdate(autoUpdate: boolean): Promise<void> {
 
     // Major version change - prompt user
     if (latest.major > current.major) {
-      if (spinner && !autoUpdate) spinner.stop()
       const shouldUpdate = await promptForMajorUpdate(currentVersion, latestVersion)
 
       if (!shouldUpdate) {
@@ -151,34 +150,27 @@ async function checkNpmPackageUpdate(autoUpdate: boolean): Promise<void> {
         markUpdateChecked()
         return
       }
-
-      if (!autoUpdate) spinner = ora(`Updating to v${latestVersion}...`).start()
     } else {
-      // Minor/patch - auto-update silently
-      if (!autoUpdate && spinner) {
-        spinner.text = `Updating to v${latestVersion}...`
-      } else if (autoUpdate) {
-        // For auto-update, show brief message
+      // Minor/patch - show update message
+      if (autoUpdate) {
         console.log(chalk.gray(`⚡ Updating jfl to v${latestVersion}...`))
+      } else {
+        console.log(chalk.cyan(`Updating to v${latestVersion}...`))
       }
     }
 
     // Run npm update
     execSync("npm install -g jfl@latest", { stdio: "pipe" })
 
-    if (!autoUpdate && spinner) {
-      spinner.succeed(`Updated to v${latestVersion}`)
-      console.log()
-    } else if (autoUpdate) {
-      console.log(chalk.green(`✓ Updated to v${latestVersion}\n`))
-    }
+    console.log(chalk.green(`✓ Updated to v${latestVersion}`))
+    console.log()
 
     markUpdateChecked()
 
   } catch (err: any) {
-    if (!autoUpdate && spinner) {
-      spinner.fail("Update check failed")
-      console.error(chalk.red(err.message))
+    if (!autoUpdate) {
+      console.log(chalk.red("✗ Update check failed"))
+      console.error(chalk.gray(err.message))
       console.log()
     }
   }
