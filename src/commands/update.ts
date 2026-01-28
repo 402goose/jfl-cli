@@ -40,7 +40,144 @@ const PRESERVE_PATHS = [
   "site/"
 ]
 
-export async function updateCommand(options: { dry?: boolean } = {}) {
+// ============================================================================
+// npm Package Update Check
+// ============================================================================
+
+function parseVersion(version: string): { major: number; minor: number; patch: number } {
+  const parts = version.replace(/^v/, "").split(".").map(n => parseInt(n, 10))
+  return { major: parts[0] || 0, minor: parts[1] || 0, patch: parts[2] || 0 }
+}
+
+function shouldCheckForUpdates(): boolean {
+  const homedir = require("os").homedir()
+  const cachePath = path.join(homedir, ".jfl", UPDATE_CHECK_CACHE)
+
+  if (!fs.existsSync(cachePath)) {
+    return true
+  }
+
+  try {
+    const lastCheck = parseInt(fs.readFileSync(cachePath, "utf-8"), 10)
+    return Date.now() - lastCheck > UPDATE_CHECK_INTERVAL
+  } catch {
+    return true
+  }
+}
+
+function markUpdateChecked() {
+  const homedir = require("os").homedir()
+  const jflDir = path.join(homedir, ".jfl")
+  const cachePath = path.join(jflDir, UPDATE_CHECK_CACHE)
+
+  if (!fs.existsSync(jflDir)) {
+    fs.mkdirSync(jflDir, { recursive: true })
+  }
+
+  fs.writeFileSync(cachePath, Date.now().toString())
+}
+
+function getCurrentVersion(): string {
+  try {
+    const packageJson = JSON.parse(
+      fs.readFileSync(path.join(__dirname, "../../package.json"), "utf-8")
+    )
+    return packageJson.version
+  } catch {
+    return "0.0.0"
+  }
+}
+
+function getLatestVersion(): string | null {
+  try {
+    const output = execSync("npm view jfl version", { encoding: "utf-8", stdio: ["pipe", "pipe", "pipe"] })
+    return output.trim()
+  } catch {
+    return null
+  }
+}
+
+async function promptForMajorUpdate(currentVersion: string, latestVersion: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout
+    })
+
+    console.log(chalk.yellow(`\n⚠️  Major version update available: ${currentVersion} → ${latestVersion}`))
+    console.log(chalk.gray("This may include breaking changes."))
+
+    rl.question(chalk.cyan("Update now? (y/n): "), (answer) => {
+      rl.close()
+      resolve(answer.toLowerCase() === "y" || answer.toLowerCase() === "yes")
+    })
+  })
+}
+
+async function checkNpmPackageUpdate(autoUpdate: boolean): Promise<void> {
+  // Skip if we checked recently (unless manual update)
+  if (autoUpdate && !shouldCheckForUpdates()) {
+    return
+  }
+
+  const spinner = ora("Checking for updates...").start()
+
+  try {
+    const currentVersion = getCurrentVersion()
+    const latestVersion = getLatestVersion()
+
+    if (!latestVersion) {
+      spinner.stop()
+      return
+    }
+
+    if (currentVersion === latestVersion) {
+      spinner.succeed("Already on latest version")
+      markUpdateChecked()
+      return
+    }
+
+    const current = parseVersion(currentVersion)
+    const latest = parseVersion(latestVersion)
+
+    // Major version change - prompt user
+    if (latest.major > current.major) {
+      spinner.stop()
+      const shouldUpdate = await promptForMajorUpdate(currentVersion, latestVersion)
+
+      if (!shouldUpdate) {
+        console.log(chalk.gray("Skipping major update. Run 'jfl update' to update later.\n"))
+        markUpdateChecked()
+        return
+      }
+    } else {
+      // Minor/patch - auto-update silently
+      spinner.text = `Updating to ${latestVersion}...`
+    }
+
+    // Run npm update
+    execSync("npm install -g jfl@latest", { stdio: "pipe" })
+
+    spinner.succeed(`Updated to ${latestVersion}`)
+    markUpdateChecked()
+
+  } catch (err: any) {
+    spinner.fail("Update check failed")
+    if (!autoUpdate) {
+      console.error(chalk.red(err.message))
+    }
+  }
+}
+
+// ============================================================================
+// GTM Template Sync
+// ============================================================================
+
+export async function updateCommand(options: { dry?: boolean; autoUpdate?: boolean } = {}) {
+  const isAutoUpdate = options.autoUpdate || false
+
+  // Check npm package updates first
+  await checkNpmPackageUpdate(isAutoUpdate)
   const cwd = process.cwd()
 
   // Check if we're in a JFL project
