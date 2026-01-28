@@ -510,7 +510,6 @@ jfl --version                 # Show version
 
 **Issues & Feedback:**
 - GitHub: https://github.com/402goose/jfl-cli/issues
-- Docs: https://jfl.run
 - X: [@taggaoyl](https://x.com/taggaoyl)
 
 ---
