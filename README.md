@@ -2,43 +2,58 @@
 
 **The context layer for AI-native teams.**
 
-Context is the bottleneck. AI agents can do the work—but they forget everything between sessions. They don't know what you're building, who you're building it for, or what you decided yesterday.
+JFL provides persistent context for AI workflows. Agents can read what happened in previous sessions, understand decisions that were made, and access project knowledge—eliminating the cold-start problem where each AI interaction begins from zero.
 
-JFL solves this. It's persistent context that lives in git, accumulates over time, and lets any AI pick up exactly where the last one left off.
+Context lives in git as structured files (markdown, JSONL). Any AI tool can integrate via MCP.
 
 **Quick Links:** [Website](https://jfl.run) · [Docs](https://jfl.run/docs) · [Getting Started](https://jfl.run/start) · [GitHub](https://github.com/402goose/jfl-cli)
 
 ---
 
-## The Problem
+## What Problem Does This Solve?
 
-The $300B SaaS economy is a patch for human coordination failures:
+AI agents are stateless by default. Each new session starts from scratch:
+- Previous decisions aren't remembered
+- Work from other sessions isn't visible
+- Context has to be re-explained every time
 
-- **Notion** exists because people forget context
-- **Asana** exists because people forget tasks
-- **Slack** exists because email is too slow
-- **HubSpot** exists because people forget to follow up
-- **Zapier** exists because tools don't talk to each other
+For multi-session projects or team collaboration with AI, this creates coordination overhead. JFL provides a shared context layer that accumulates over time and is accessible to any AI tool.
 
-And here's the punchline: **it doesn't even work.**
+---
 
-No one reads your product spec. No one maintains your CRM. No one respects the kanban. You create all these artifacts to coordinate humans, and then humans don't use them.
+## Where JFL Fits
 
-**AI changes this.** Perfect memory. Infinite patience. Zero context-switching cost. LLMs are better coordinators than humans—if they have the context.
+JFL is a coordination and context layer for AI workflows.
+
+**What it provides:**
+- Persistent memory across sessions (journal entries, decisions, code context)
+- Shared context that any AI can read and contribute to
+- Git-native storage (markdown, JSONL) that survives model changes
+
+**What it works with:**
+- AI coding tools (Claude Code, Cursor)
+- Agent frameworks (CrewAI, AutoGPT)
+- Custom AI workflows
+
+**Architecture:**
+JFL runs as a local daemon (Context Hub on port 4242) and integrates via MCP. Your project's context lives in `.jfl/` as structured files. Any AI tool with MCP support can read and update this context.
+
+**Use cases:**
+- Solo developers building with AI (never lose context between sessions)
+- Teams coordinating work with AI agents (shared memory across people and agents)
+- Multi-session projects (context accumulates, agents get smarter over time)
 
 ---
 
 ## What JFL Does
 
-JFL is the context layer that makes AI actually useful for real work.
+JFL provides three core systems:
 
-**Context Hub** — Unified context aggregating journal entries, knowledge docs, and code headers. Any AI can query it to understand what happened across sessions, what decisions were made, and what code does. It's a daemon (port 4242) with MCP integration.
+**Context Hub** — A local daemon (port 4242) that aggregates journal entries, knowledge docs, and code headers. Any AI can query it via MCP to understand what happened across sessions, what decisions were made, and what code does.
 
-**Synopsis** — Work summaries that roll up journal + commits + file headers into readable reports. Ask "what happened this week?" or "what did Alex work on?" and get structured answers with time audit breakdowns.
+**Synopsis** — Generates work summaries by rolling up journal entries, git commits, and file headers. Answers questions like "what happened this week?" or "what did Alex work on?" with structured reports and time breakdowns.
 
-**Session Management** — Git worktree-based isolation for parallel work. Each session auto-commits, auto-merges, and cleans up. No more lost work or merge conflicts. Hooks enforce journal entries and handle cleanup automatically.
-
-**Plus:** Brand generation, content creation, x402 crypto micropayments, and a growing skill library.
+**Session Management** — Git worktree-based isolation for parallel work. Each session auto-commits, auto-merges, and cleans up. Hooks enforce journal entries and handle cleanup automatically.
 
 ---
 
