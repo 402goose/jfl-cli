@@ -343,47 +343,17 @@ The memory pipeline indexes `.jfl/journal/` automatically. Entries become search
 
 ## CRITICAL: Synopsis Command (What Happened?)
 
-**When anyone asks "what happened?" or "what did X work on?" — use the synopsis command.**
-
-This is the STANDARDIZED way to get work summaries. Don't manually string together git log, journal files, etc. Use this:
+**When anyone asks "what happened?" use synopsis:**
 
 ```bash
-# From project root:
 cd product/packages/memory && node dist/journal/cli.js synopsis [hours] [author]
 
 # Examples:
-node dist/journal/cli.js synopsis 24           # Last 24 hours, all team
-node dist/journal/cli.js synopsis 8            # Last 8 hours
-node dist/journal/cli.js synopsis 24 hathbanger # What did hath do in 24 hours
-node dist/journal/cli.js synopsis --author "Andrew" # Filter by git author name
+node dist/journal/cli.js synopsis 24           # Last 24 hours
+node dist/journal/cli.js synopsis 24 hathbanger # Specific author
 ```
 
-### What It Returns
-
-The synopsis aggregates:
-1. **Journal entries** from all sessions/worktrees
-2. **Git commits** from all branches
-3. **File headers** (@purpose, @spec, @decision tags)
-4. **Time audit** with category breakdown and multipliers
-
-Output includes:
-- Summary of work done (features, fixes, decisions)
-- Time audit breakdown (infra vs features vs docs vs content)
-- Per-team-member contribution
-- Health checks (too much infra? not enough outreach?)
-- Next steps from journal entries
-- Incomplete/stubbed items
-
-### When to Use
-
-| Question | Command |
-|----------|---------|
-| "What happened today?" | `synopsis 24` |
-| "What did Hath work on?" | `synopsis 48 hathbanger` |
-| "What happened this week?" | `synopsis 168` |
-| "Give me a status update" | `synopsis 24 --verbose` |
-
-**IMPORTANT:** Every AI should use this exact command. Do NOT try to manually piece together journal + commits + headers yourself. The synopsis command does it correctly every time.
+Aggregates journal entries, git commits, file headers, and time audit with category breakdown.
 
 ---
 
@@ -655,41 +625,12 @@ See `templates/` folder for full spec template.
 
 ## Session Feedback
 
-Every few sessions (or at natural breakpoints), ask:
+Every few sessions, ask: "How's JFL doing this session? (0-5)"
 
-```
-Quick check - how's JFL doing this session? (0-5)
+- **0-2:** Ask what went wrong, log to `.jfl/feedback.jsonl` with details
+- **3-5:** Log rating only
 
-0 = broken/frustrating
-3 = fine
-5 = amazing
-```
-
-**If 0-2 (bad):**
-```
-Sorry to hear that. What went wrong?
-(I'll log this to help improve JFL)
-```
-
-Capture to `.jfl/feedback.jsonl`:
-```json
-{"date": "2024-01-18", "rating": 1, "issue": "kept asking open-ended questions", "session_context": "onboarding new project"}
-```
-
-**If 3-5 (ok/good):**
-```
-Thanks! Keep shipping.
-```
-
-Just log the rating:
-```json
-{"date": "2024-01-18", "rating": 5}
-```
-
-**For paid users:** Offer to share feedback with JFL team to improve the product.
-**For free users:** Stays local unless they opt-in.
-
-Don't ask every session - maybe every 3rd session or after major milestones.
+Don't ask every session - maybe every 3rd or after major milestones.
 
 Then:
 1. Get right into building
@@ -701,45 +642,15 @@ Then:
 
 ## After Planning
 
-If you make a plan (architecture, skill design, etc.), don't just ask "want me to build it?"
-
-**Stop and ask clarifying questions first:**
-
-```
-Before I build this:
-
-1. [Specific question about their use case]
-2. [Question about scope/priorities]
-3. [Question about integrations/APIs]
+Before building, ask clarifying questions:
+1. Specific question about their use case
+2. Question about scope/priorities
+3. Question about integrations/APIs
 4. Any references or examples to pull in?
-```
 
-**Also check the foundational docs.** If VISION.md, ROADMAP.md, etc. are empty, offer to capture what you've learned:
+If foundation docs are empty, offer to capture what you learned into VISION.md, ROADMAP.md, etc.
 
-```
-Also - your VISION.md is empty. Based on what you said,
-you're building [summary]. Want me to capture that so
-we have context for future sessions?
-```
-
-This way the docs get populated naturally through building, not through forms.
-
-**Make it easy to share context:**
-
-```
-I'll help you work through this. Send me anything:
-- Pictures, screenshots
-- Documents, PDFs
-- Voice notes, transcripts
-- Links, references
-- Stream of consciousness
-
-I'll process it and pull out what matters.
-```
-
-Don't make them structure their thoughts. Meet them where they are.
-
-The plan is a draft. Refine it with them before executing. They know things you don't.
+Accept any format: pictures, documents, voice notes, links, stream of consciousness.
 
 ---
 
@@ -792,25 +703,17 @@ Run `/hud` to show the project dashboard.
 
 ## Team Configuration
 
-> Edit this section with your team. **JFL auth identity must match to get access.**
+**Owner** (full edit access - must authenticate via `jfl login`):
+- **Name:** {owner_name}
+- **GitHub Username:** {owner_github_username}
+- **x402 Address:** {owner_wallet_address}
 
-### Owner
-<!-- The person who can edit all files directly -->
-<!-- These identities get owner access when authenticated via jfl login -->
-**Name:** {owner_name}
-**GitHub Username:** {owner_github_username}
-**x402 Address:** {owner_wallet_address}
-
-### Core Team
-<!-- People with deeper access - must be authenticated -->
+**Core Team** (authenticated access):
 | Name | GitHub Username | x402 Address | Role |
 |------|-----------------|--------------|------|
 | | | | |
 
-### Contributors
-<!-- Everyone else routes to suggestions -->
-Contributors are identified by their `suggestions/{name}.md` file.
-New authenticated users without a suggestions file get onboarded as contributors.
+**Contributors:** Identified by `suggestions/{name}.md` file. New users onboarded as contributors.
 
 ---
 
@@ -829,26 +732,9 @@ New authenticated users without a suggestions file get onboarded as contributors
 
 ## Knowledge Sources
 
-### Understanding the Vision
+**Check VISION.md status:** If `EMERGENT` → synthesize from living docs. If `DECLARED` → use declared vision.
 
-**Check VISION.md status first:**
-- If `Status: EMERGENT` → Synthesize from living docs below
-- If `Status: DECLARED` → Use the declared vision, stop synthesizing
-
-Vision is blurry at the start and gets teased out through product development. But at some point, the founder nails it.
-
-**When EMERGENT**, synthesize understanding from living docs:
-
-| Priority | Document | What It Tells You |
-|----------|----------|-------------------|
-| 1 | Product specs, if any | What you're actually building |
-| 2 | GTM strategy docs | Who you're targeting and why |
-| 3 | `content/articles/` | How you explain it to the world |
-| 4 | `drafts/` | Active pitches to real people |
-| 5 | CRM notes (`./crm prep [name]`) | What resonates with real people |
-| 6 | `knowledge/VISION.md` | Pointer doc + current synthesis |
-
-When someone asks "what is this?", read the living docs and synthesize. The vision crystallizes through building and selling, not through declaration.
+**When EMERGENT, synthesize from:** Product specs → GTM strategy → `content/articles/` → `drafts/` → CRM notes → `knowledge/VISION.md`
 
 ### Other Strategic Docs
 
