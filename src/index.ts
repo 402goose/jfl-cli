@@ -56,11 +56,11 @@ program
   .name("jfl")
   .description("Just Fucking Launch - AI-powered GTM and development")
   .version("0.1.0")
-  .option("-u, --update", "Pull latest JFL updates before starting")
+  .option("--no-update", "Skip automatic update check")
   .action(async (options) => {
-    // If --update flag, run update first
-    if (options.update) {
-      await updateCommand()
+    // Always update on session start (unless --no-update flag)
+    if (options.update !== false) {
+      await updateCommand({ autoUpdate: true })
       console.log() // Add spacing before session starts
     }
     await sessionCommand()
