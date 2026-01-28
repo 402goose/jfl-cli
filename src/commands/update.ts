@@ -125,7 +125,7 @@ async function checkNpmPackageUpdate(autoUpdate: boolean): Promise<void> {
     console.log(chalk.cyan("\n🔍 Checking for npm package updates...\n"))
   }
 
-  const spinner = autoUpdate ? ora({ isSilent: true }) : ora("Checking npm registry...")
+  let spinner = autoUpdate ? ora({ isSilent: true }) : ora("Checking npm registry...")
 
   if (!autoUpdate) spinner.start()
 
