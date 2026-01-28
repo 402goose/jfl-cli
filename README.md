@@ -163,6 +163,14 @@ your-product-repo/           ← SEPARATE REPO (all code)
 4. Session ends, context persists
 5. Next session picks up exactly where you left off
 
+**Why git-native?**
+
+All context is stored as markdown and JSONL in your git repository. This means:
+- Version controlled (see how context evolved)
+- Portable (no vendor lock-in)
+- Model-agnostic (switch AI tools without losing context)
+- Collaborative (merge and branch like code)
+
 **It compounds.** The more you use it, the more it knows. Six months in, the agent understands your business better than most employees would.
 
 **Why GTM workspace is separate from product code:**
