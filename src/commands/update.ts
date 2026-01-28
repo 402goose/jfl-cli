@@ -12,6 +12,7 @@ import { execSync } from "child_process"
 import * as fs from "fs"
 import * as path from "path"
 import * as readline from "readline"
+import { homedir } from "os"
 
 const TEMPLATE_REPO = "https://github.com/402goose/jfl-template.git"
 const TEMP_DIR = ".jfl-update-temp"
