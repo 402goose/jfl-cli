@@ -1,24 +1,54 @@
 # JFL - Just Fucking Launch
 
-**Your context layer. Any project. Any AI.**
+**The context layer for AI-native teams.**
 
-A CLI toolkit that structures GTM campaigns from idea to launch. JFL creates workspaces where strategy, brand, code, and content work together—powered by AI agents that understand your full context across sessions.
+Context is the bottleneck. AI agents can do the work—but they forget everything between sessions. They don't know what you're building, who you're building it for, or what you decided yesterday.
+
+JFL solves this. It's persistent context that lives in git, accumulates over time, and lets any AI pick up exactly where the last one left off.
 
 **Quick Links:** [Website](https://jfl.run) · [Docs](https://jfl.run/docs) · [Getting Started](https://jfl.run/start) · [GitHub](https://github.com/402goose/jfl-cli)
 
 ---
 
+## The Problem
+
+The $300B SaaS economy is a patch for human coordination failures:
+
+- **Notion** exists because people forget context
+- **Asana** exists because people forget tasks
+- **Slack** exists because email is too slow
+- **HubSpot** exists because people forget to follow up
+- **Zapier** exists because tools don't talk to each other
+
+And here's the punchline: **it doesn't even work.**
+
+No one reads your product spec. No one maintains your CRM. No one respects the kanban. You create all these artifacts to coordinate humans, and then humans don't use them.
+
+**AI changes this.** Perfect memory. Infinite patience. Zero context-switching cost. LLMs are better coordinators than humans—if they have the context.
+
+---
+
 ## What JFL Does
 
-JFL is built around three core systems:
+JFL is the context layer that makes AI actually useful for real work.
 
-**Context Hub** — Unified context layer that aggregates journal entries, knowledge docs, and code headers. Any AI can query it to understand what happened across sessions, what decisions were made, and what code does.
+**Context Hub** — Unified context aggregating journal entries, knowledge docs, and code headers. Any AI can query it to understand what happened across sessions, what decisions were made, and what code does. It's a daemon (port 4242) with MCP integration.
 
-**Synopsis** — Work summaries that roll up journal + commits + file headers into readable reports. Ask "what happened this week?" or "what did Alex work on?" and get structured answers.
+**Synopsis** — Work summaries that roll up journal + commits + file headers into readable reports. Ask "what happened this week?" or "what did Alex work on?" and get structured answers with time audit breakdowns.
 
-**Session Management** — Git worktree-based isolation for parallel work. Each session auto-commits, auto-merges, and cleans up. No more lost work or merge conflicts.
+**Session Management** — Git worktree-based isolation for parallel work. Each session auto-commits, auto-merges, and cleans up. No more lost work or merge conflicts. Hooks enforce journal entries and handle cleanup automatically.
 
-Plus: Brand generation, content creation, x402 crypto micropayments, and a growing skill library.
+**Plus:** Brand generation, content creation, x402 crypto micropayments, and a growing skill library.
+
+---
+
+## The Unlock
+
+**Solo operators can run like a full team.** One founder with JFL can coordinate product, GTM, content, brand, and ops—all with perfect context, no meetings, no handoffs.
+
+**Teams scale without the overhead.** Add a new person, they inherit the full context graph. No onboarding docs. No "shadow someone for a week." They're productive day one.
+
+**The system maintains itself.** Context accumulates automatically. CRM updates through conversation. Decisions are captured as you make them. The agent handles maintenance. You handle taste.
 
 ---
 
@@ -83,12 +113,14 @@ jfl
 
 ---
 
-## Architecture
+## How It Works
 
-JFL creates GTM workspaces that are **separate from product code**:
+**The system lives in git. Everything is files.**
+
+No proprietary database. No lock-in. Your company's knowledge graph is version-controlled and portable.
 
 ```
-my-product-gtm/              ← GTM workspace (strategy, content, brand)
+my-project-gtm/              ← GTM workspace (strategy, content, brand)
 ├── .jfl/
 │   ├── config.json          ← Project settings
 │   ├── journal/             ← Session journals (JSONL)
@@ -106,7 +138,16 @@ your-product-repo/           ← SEPARATE REPO (all code)
 └── ...
 ```
 
-**Why separate?**
+**When you start a session:**
+1. The agent loads your full context (via Context Hub)
+2. You work (code, content, strategy, whatever)
+3. Decisions and learnings are captured automatically
+4. Session ends, context persists
+5. Next session picks up exactly where you left off
+
+**It compounds.** The more you use it, the more it knows. Six months in, the agent understands your business better than most employees would.
+
+**Why GTM workspace is separate from product code:**
 - Clean separation of concerns
 - Product code doesn't get polluted with GTM docs
 - Multiple GTMs can reference the same product
@@ -473,8 +514,3 @@ Powered by:
 - [x402](https://402.com) (crypto micropayments)
 - Commander.js, Inquirer, Chalk, and more
 
----
-
-**Sources:**
-- [Moltbot (formerly Clawdbot) README](https://github.com/moltbot/moltbot)
-- [Moltbot Documentation](https://docs.molt.bot/)
