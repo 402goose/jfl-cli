@@ -239,10 +239,14 @@ export async function updateCommand(options: { dry?: boolean; autoUpdate?: boole
 
   const isDryRun = options.dry || false
 
-  if (isDryRun) {
-    console.log(chalk.cyan("\n  DRY RUN - Showing what would be updated\n"))
+  if (!isAutoUpdate) {
+    console.log(chalk.cyan("📦 Syncing GTM template...\n"))
+  }
 
-    console.log(chalk.green("  Would sync from product repo:"))
+  if (isDryRun) {
+    console.log(chalk.gray("  DRY RUN - Showing what would be updated\n"))
+
+    console.log(chalk.white("  Would sync from jfl-template:"))
     for (const p of SYNC_PATHS) {
       const destPath = path.join(cwd, p)
       const exists = fs.existsSync(destPath)
