@@ -265,9 +265,7 @@ export async function updateCommand(options: { dry?: boolean; autoUpdate?: boole
     return
   }
 
-  console.log(chalk.cyan("\n  Updating JFL product files...\n"))
-
-  const spinner = ora("Fetching latest product...").start()
+  const spinner = ora("Fetching latest from jfl-template...").start()
 
   try {
     // Clone product repo to temp directory
