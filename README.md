@@ -57,13 +57,16 @@ JFL provides three core systems:
 
 ---
 
-## The Unlock
+## How Teams Use It
 
-**Solo operators can run like a full team.** One founder with JFL can coordinate product, GTM, content, brand, and ops—all with perfect context, no meetings, no handoffs.
+**Solo developers:**
+Build with AI tools across multiple sessions without re-explaining context. Your project knowledge accumulates—agents get smarter over time, not dumber.
 
-**Teams scale without the overhead.** Add a new person, they inherit the full context graph. No onboarding docs. No "shadow someone for a week." They're productive day one.
+**Teams with AI agents:**
+Multiple people and AI agents can work in parallel. Everyone reads from and writes to the same context layer. No meetings to sync up, no handoff docs that get stale.
 
-**The system maintains itself.** Context accumulates automatically. CRM updates through conversation. Decisions are captured as you make them. The agent handles maintenance. You handle taste.
+**Works with your existing tools:**
+JFL integrates with Claude Code, Cursor, Clawdbot, CrewAI, and any tool that supports MCP. Switch models or tools tomorrow—your context survives because it's git-native.
 
 ---
 
