@@ -491,74 +491,6 @@ your-product-repo/           ← SEPARATE REPO (all code lives here)
 
 ---
 
-## Contributor Setup (For JFL Developers Only)
-
-> **Note:** This section is for people contributing to the JFL project itself.
-> If you're a JFL user building your own product, skip this - you installed `jfl` from npm and it just works.
-
-If you're contributing to JFL itself, follow this setup:
-
-### 1. Clone through a GTM (Recommended)
-
-```bash
-# Create a GTM workspace
-jfl init my-jfl-gtm
-
-# During setup, add the JFL product repo as submodule:
-# - Choose "Building a product"
-# - Enter: https://github.com/402goose/just-fucking-launch.git
-```
-
-### 2. Run the dev setup script
-
-```bash
-cd my-jfl-gtm/product
-./scripts/dev-setup.sh
-```
-
-This will:
-- Install CLI dependencies
-- Link `jfl` globally from this location
-- Verify everything is working
-
-### 3. Work in the submodule
-
-All product code changes happen in `product/`:
-
-```bash
-# Make changes in product/
-cd product/
-# ... work on code ...
-
-# Commit to product repo
-git add . && git commit -m "feature: ..." && git push
-
-# Update GTM's reference (optional, for tracking)
-cd ..
-git add product && git commit -m "Update product submodule"
-```
-
-### Why This Matters
-
-- **Single source of truth**: The `jfl` command always points to `/Users/andrewhathaway/code/goose/jfl/jfl-cli`
-- **No sync issues**: You're not juggling multiple clones
-- **GTM context available**: While building, you have the full GTM toolkit
-- **Clean commits**: Product commits go to product repo, GTM commits go to GTM repo
-
-### CLI Location
-
-The CLI is cloned at `/Users/andrewhathaway/code/goose/jfl/jfl-cli` (parent directory of this GTM workspace).
-
-To re-link after changes:
-
-```bash
-cd /Users/andrewhathaway/code/goose/jfl/jfl-cli
-yarn build
-npm link
-```
-
----
-
 ## Understanding the Project Setup
 
 **Before doing any work, understand the setup:**
@@ -627,236 +559,40 @@ Once you understand their setup, save it:
 
 ## Working Modes
 
-### Mode: Building Product
+| Mode | Structure | Behavior |
+|------|-----------|----------|
+| **Building Product** | `product/` submodule → product repo | Code to `product/`, GTM to main repo. Commit to submodule first, then update reference. |
+| **GTM Only** | No code, just `knowledge/`, `content/` | Focus on content/brand/outreach. Never suggest code changes. |
+| **Contributor** | Has `suggestions/{name}.md` | Work within scope. Route suggestions through proper channels. |
 
-You're building the product. Code lives in the product repo (linked as submodule).
-
-```
-this-gtm/                      your-product-repo/
-├── product/ ──────────────→   ├── src/
-├── knowledge/                 ├── cli/
-├── content/                   ├── platform/
-├── suggestions/               └── package.json
-└── CLAUDE.md
-```
-
-**Behavior:**
-- Code changes go to `product/` (commits to product repo)
-- GTM changes (knowledge/, content/) stay in GTM repo
-- When editing code, you're in the submodule context
-- `git push` from `product/` pushes to product repo
-
-**IMPORTANT - Code Routing:**
-```bash
-# When you make code changes:
-cd product/
-git add . && git commit -m "feature: ..." && git push
-cd ..
-git add product && git commit -m "Update product submodule"
-```
-
-If someone tries to create code files outside `product/`, warn:
-```
-This looks like product code, but you're in the GTM repo.
-Product code should go in the product/ submodule.
-Want me to create this in product/ instead?
-```
-
-### Mode: GTM Only
-
-They don't touch code. Team handles product.
-
-```
-this-repo/
-├── knowledge/        ← Strategic context
-├── content/          ← What they create
-├── product/SPEC.md   ← Reference from team
-└── (no code)
-```
-
-**Behavior:**
-- Never suggest code changes
-- Focus on content, brand, outreach
-- Reference spec but don't modify product
-- Capture feedback for product team in suggestions/
-
-### Mode: Contributor
-
-They have a piece of the work. Team gave them context.
-
-```
-this-repo/
-├── product/SPEC.md           ← From team
-├── knowledge/BRAND*.md       ← Guidelines
-└── their-work/               ← What they're doing
-```
-
-**Behavior:**
-- Work within their scope
-- Don't change shared docs without flagging
-- Route suggestions through proper channels
-- Ask: "Should I update the spec or suggest this to the team?"
-
----
-
-## Detecting Mode Changes
-
-People's roles evolve. Watch for signals:
-
-| Signal | What It Means |
-|--------|---------------|
-| "I need to update the code" | They need product repo access - add submodule if not present |
-| "The team changed the spec" | Pull latest in product submodule |
-| "I'm taking over the product" | Mode change: GTM-only → building-product (add submodule) |
-| "Someone else is handling X now" | Scope narrowing, might become GTM-only |
-
-When mode changes, update `.jfl/config.json` and confirm:
-```
-Sounds like you're now handling the product directly.
-Do you have a product repo? I'll add it as a submodule at product/
-```
-
-**Adding a product repo to existing GTM:**
-```bash
-git submodule add <product-repo-url> product
-git commit -m "Add product submodule"
-```
+**Detecting mode changes:**
+- "I need to update the code" → Add product submodule if missing
+- "I'm taking over the product" → Switch to building-product mode
+- Update `.jfl/config.json` when mode changes
 
 ---
 
 ## Starting a New Project (Foundation Empty)
 
-When knowledge docs are templates/empty, don't ask open-ended questions like "What do you want to build?"
+When knowledge docs are empty, pull them through foundation in order. Don't ask open-ended "What do you want to build?"
 
-**First, understand who you're talking to:**
+**Foundation checklist:**
 
-```
-Before we dive in - what's your role?
+1. **VISION.md** - What are you building? Who is it for? What problem does it solve? One-liner?
+2. **ROADMAP.md** - When do you want to ship? MVP? Phases? Hard deadlines?
+3. **NARRATIVE.md** - Casual pitch? Before/after? Key words? Emotional hook?
+4. **THESIS.md** - Why will YOU win? What insight? Unfair advantage? Why now?
 
-1. Founder (I'm building this thing)
-2. Developer (I'm building FOR someone)
-3. Marketing/Content (I'm telling the story)
-4. Sales/BD (I'm selling it)
-5. Product (I'm defining what we build)
-6. Other
-```
+**Key principles:**
+- Ask role-specific questions (don't ask non-technical founders about stack)
+- Write to files immediately as they answer
+- Provide examples/suggestions to guide them
+- Allow "emergent" status - vision clarifies through building
+- Don't skip docs - complete all four before building
 
-**Adjust based on role:**
-
-| Role | Focus On | Don't Ask About |
-|------|----------|-----------------|
-| Non-technical founder | Vision, market, customers | Stack, architecture |
-| Technical founder | Everything | Nothing - they can handle it |
-| Developer | Implementation, specs | Business model, pricing |
-| Marketing | Brand, messaging, content | Technical details |
-| Sales | Pitch, objections, CRM | Code |
-| Product | Features, roadmap, users | Implementation details |
-
-**Then pull them through foundation:**
-
-```
-Got it. Let's get your foundation set up.
-
-What are you building and who is it for?
-(2-3 sentences is fine. Send me anything - docs,
-screenshots, voice notes - I'll process it.)
-```
-
-For non-technical people, don't ask:
-- "What's the stack?"
-- "Next.js or something else?"
-- Technical architecture questions
-
-Instead: "I'll handle the technical side. You focus on the vision and who you're building for."
-
-When they answer, **write it to the file immediately**:
-
-```python
-# Update knowledge/VISION.md with what they said
-# Replace placeholder content with real content
-# Keep Status: EMERGENT until they explicitly nail it
-```
-
-Then continue:
-
-```
-Got it - saved to your VISION.md.
-
-Next - when do you want to ship? Any key milestones?
-```
-
-**How to detect template vs filled:**
-- Check for "Status: EMERGENT" with empty "The Vision" section
-- Check for placeholder text like "{fill this in}"
-- If real content exists, it's been filled
-
-**Pull them through each doc in order. Don't skip. Don't ask open-ended "what do you want to do?"**
-
-### VISION.md Questions:
-Even if vision is "emergent", capture what they have. It evolves through building.
-```
-1. What are you building? (2-3 sentences, doesn't need to be perfect)
-2. Who is it for? (specific person, not "everyone")
-3. What problem does it solve for them?
-4. If it works perfectly, what does their life look like?
-5. What's your rough one-liner? (we can refine it later)
-```
-Don't let them skip because "I haven't figured it out yet." Get SOMETHING down. It'll sharpen through building.
-
-**For each question:**
-- Give examples/suggestions based on what you know about their project
-- Always offer an out: "Or if you're not sure, we can keep going and let it emerge"
-
-Example:
-```
-What's your rough one-liner?
-
-Some options based on what you've told me:
-- "Legal docs for founders, without the lawyer"
-- "Spin up contracts in minutes, not days"
-- "Your startup's legal co-pilot"
-
-Or not sure yet? That's fine - we can refine it as we build.
-```
-
-### ROADMAP.md Questions:
-```
-1. When do you want to ship? (date)
-2. What's the first thing that needs to work? (MVP)
-3. What are the phases? (usually: foundation → MVP → launch → iterate)
-4. Any hard deadlines? (demo day, funding, announcement)
-```
-
-### NARRATIVE.md Questions:
-```
-1. How would you explain this at a party? (casual pitch)
-2. What's the before/after? (their life before vs after)
-3. What words do you want associated with this? (3-5 words)
-4. What's the emotional hook? (fear, aspiration, frustration, hope)
-```
-
-### THESIS.md Questions:
-```
-1. Why will YOU win? (not just anyone - you specifically)
-2. What do you know that others don't? (insight)
-3. What's your unfair advantage? (skills, access, timing)
-4. Why now? (what changed that makes this possible/needed)
-```
-
-### BRAND Questions (after foundation):
-```
-1. What's the vibe? (professional, playful, bold, minimal, techy, human)
-2. Any brands you admire the look of?
-3. Colors that feel right? Or colors to avoid?
-4. Any existing assets? (logo, colors already chosen)
-```
-
-**Flow:**
-1. VISION → ROADMAP → NARRATIVE → THESIS (don't skip ANY)
-2. Check ALL FOUR before moving on
-3. Then ask: "Foundation is set. Want to work on brand/design next, or jump into building?"
-4. Write to each file as you go. Don't wait.
-5. After each doc, summarize what you captured and confirm.
+**After foundation:**
+- Check if ALL FOUR docs have real content (not templates)
+- Then ask: "Foundation is set. Want to work on brand/design next, or jump into building?"
 
 ---
 
@@ -864,230 +600,56 @@ Or not sure yet? That's fine - we can refine it as we build.
 
 **⚠️ ALWAYS establish brand direction before writing UI code**
 
-Before writing ANY code with visual elements (React, HTML, CSS, landing pages, forms, etc.):
+**Check for brand decisions:**
+1. `knowledge/BRAND_DECISIONS.md` - finalized choices
+2. `knowledge/BRAND_BRIEF.md` - brand inputs
+3. `knowledge/VOICE_AND_TONE.md` - personality/feel
 
-**1. Check for explicit brand decisions (in order):**
-```
-1. knowledge/BRAND_DECISIONS.md - finalized choices
-2. knowledge/BRAND_BRIEF.md - brand inputs
-3. knowledge/VOICE_AND_TONE.md - personality/feel
-```
+**If no explicit brand docs, INFER from foundation:**
+- Read NARRATIVE.md and VISION.md
+- Extract tone, audience, positioning
+- Propose direction and confirm
 
-**2. If no explicit brand docs, INFER from foundation:**
-```
-Read NARRATIVE.md and VISION.md to extract:
-- Tone: Is it serious? Playful? Bold? Minimal?
-- Audience: Who is this for? What do they expect?
-- Positioning: Premium? Accessible? Techy? Human?
+**Gather references:**
+- Aesthetic refs: Sites they like
+- Functional refs: Similar products done well
+- Anti-refs: What to avoid
+- Store in `references/` or note in `product/SPEC.md`
 
-Example:
-- "Legal docs for founders" → Professional but approachable, not stuffy
-- "Self-serve" → Clean, simple, minimal friction
-- Founders as audience → Modern, fast, no-nonsense
-```
-
-**3. Confirm your inference and gather references:**
-```
-Based on your vision and narrative, I'm thinking:
-- Vibe: Professional but approachable (not corporate stuffy)
-- Mode: Light (cleaner for legal docs)
-- Colors: Neutral with one accent (trustworthy, not flashy)
-
-Sound right? Or different direction?
-
-Also - any sites or products you like the look/feel of?
-Drop a link or screenshot and I'll match that vibe.
-```
-
-**References to gather:**
-- **Aesthetic references:** "Any sites whose design you love?"
-- **Functional references:** "Any products that do something similar well?"
-- **Anti-references:** "Anything you've seen that you hate?"
-
-Store references in `references/` folder or note links in `product/SPEC.md` under a References section.
-
-If they share a link, fetch it and extract:
-- Color palette
-- Typography style
-- Layout patterns
-- Component patterns
-- Overall vibe
-
-**If fetch is blocked (403, timeout, etc.):**
-```
-That site blocked my request.
-
-Can you screenshot it? Or use Claude Chrome to fetch it -
-it can navigate there directly.
-```
-
-If they share a screenshot, analyze it for the same.
-
-**4. Use the right tools to build:**
-- Run `/ui-skills` for opinionated UI constraints
-- Run `/web-interface-guidelines` for Vercel design patterns
-- Run `/rams` for accessibility review after building
-
-**5. NEVER do these:**
-- Use another project's styling as a default
+**NEVER:**
+- Use another project's styling as default
 - Assume dark theme without reason
-- Pick random colors (green, purple, etc.) without basis
+- Pick random colors without basis
 - Build UI "to get started" and "refine later"
 
-**If they say "just build something":**
-```
-Let me infer from your docs...
-
-[Read NARRATIVE + VISION, propose direction, confirm]
-```
-
-**Why this matters:** Brand direction exists in the foundation docs even if not explicit. Extract it, confirm it, then build with intention.
+Brand direction exists in foundation docs. Extract it, confirm it, build with intention.
 
 ---
 
 ## Product Specs: The Living Build Document
 
-When building a product (not just content or brand work), maintain a product spec.
+When building a product, maintain `product/SPEC.md` as the source of truth for implementation.
 
-**1. Check for existing spec:**
-```
-product/SPEC.md        - main product spec
-product/[feature].md   - feature-specific specs
-```
+**Template sections:** What We're Building | Who It's For | Core Features (table) | Tech Stack | Current Focus | Decisions Made (table) | Open Questions | References (table)
 
-**2. If no spec exists and they're building product, create one:**
+See `templates/` folder for full spec template.
 
-```markdown
-# [Product Name] - Spec
+**When to use:**
+- Before starting: Read spec for decisions already made
+- While building: Update feature status, add decisions, note questions
+- After building: Mark features done, document tech choices
 
-## What We're Building
-{2-3 sentences - what is this?}
-
-## Who It's For
-{specific user, not "everyone"}
-
-## Core Features
-| Feature | Status | Notes |
-|---------|--------|-------|
-| {feature} | planned/building/done | |
-
-## Tech Stack
-{what we're using to build it}
-
-## Current Focus
-{what we're working on right now}
-
-## Decisions Made
-| Decision | Choice | Why | Date |
-|----------|--------|-----|------|
-| {decision} | {choice} | {reasoning} | |
-
-## Open Questions
-- {things we haven't figured out yet}
-
-## References
-| Type | Name | Link/Note | What We Like |
-|------|------|-----------|--------------|
-| aesthetic | {site} | {url} | {what to copy} |
-| functional | {product} | {url} | {feature to emulate} |
-| anti | {site} | {url} | {what to avoid} |
-```
-
-**3. Reference the spec when building:**
-- Before starting work, read `product/SPEC.md`
-- Check what's already been decided
-- Check current focus and priorities
-- Don't re-ask questions that have answers in the spec
-
-**4. Update the spec as you build:**
-- Feature completed? Update status to `done`
-- Made a decision? Add to Decisions table
-- Scope changed? Update Core Features
-- New questions? Add to Open Questions
-- Tech choice made? Update Tech Stack
-
-**5. Spec vs Foundation docs:**
+**Spec vs Foundation:**
 | Doc | Purpose | Updates |
 |-----|---------|---------|
-| VISION.md | Why we're building | Rarely changes |
-| NARRATIVE.md | How we talk about it | Evolves with positioning |
-| product/SPEC.md | What we're building | Updates every session |
+| VISION.md | Why we're building | Rarely |
+| NARRATIVE.md | How we talk about it | Evolves |
+| product/SPEC.md | What we're building | Every session |
 
-The spec is the source of truth for implementation. Keep it current.
-
-**Example flow:**
-```
-User: "Let's build the contract generator"
-
-Claude: *reads product/SPEC.md*
-"Picking up from the spec - we have the basic form done,
-next up is the PDF export. The spec says we're using
-@react-pdf/renderer. Want to continue there?"
-
-*after building*
-Claude: *updates product/SPEC.md*
-- PDF export: done
-- Added decision: "PDF styling matches brand colors"
-```
-
-**IMPORTANT: Don't skip to "what do you want to work on?" until foundation is COMPLETE.**
-
-Before showing status/HUD or asking what to build, check:
-```
-VISION.md    - has real content? (not just template)
-ROADMAP.md   - has dates and phases?
-NARRATIVE.md - has story/messaging?
-THESIS.md    - has why you'll win?
-```
-
-If ANY are missing, say:
-```
-"Before we dive in, let's finish your foundation.
-We have VISION and ROADMAP, but still need NARRATIVE and THESIS.
-These are quick - let me walk you through them."
-```
-
-Then complete the missing docs. THEN show status and ask what to build.
-
-**Date handling:**
-When someone gives a date without a year (e.g., "Jan 30"):
-- If that date has passed this year → assume NEXT year
-- If that date hasn't happened yet → assume THIS year
-- Always confirm: "Jan 30, 2026 - that's X days from now. Sound right?"
-
-Never assume a past date for a launch/ship date. People don't ship in the past.
-
-**Then gather build context:**
-
-```
-Foundation is set. Before we build:
-
-1. Any existing repos or code to build on?
-2. References or examples you like?
-3. [Specific question based on what they're building]
-```
-
-If they have repos/references:
-- Add as submodules: `git submodule add <url> references/<name>`
-- Or clone to `references/` folder
-- Now you have context to build smarter
-
-**Check for GitHub remote:**
-```bash
-git remote -v
-```
-
-If no remote configured, offer to create one:
-```
-No GitHub repo yet. Want me to create one?
-
-I can run:
-  gh repo create [name] --private --source=. --push
-
-Just let me know the name (and if you want it public or private).
-```
-
-This uses their local `gh` CLI - no platform account needed.
+**Before building, ensure foundation is complete:**
+- Check VISION.md, ROADMAP.md, NARRATIVE.md, THESIS.md all have real content
+- If any are missing, complete them first before asking "what to build?"
+- Date handling: Dates without year assume future (next year if passed this year)
 
 ---
 
@@ -1254,72 +816,14 @@ New authenticated users without a suggestions file get onboarded as contributors
 
 ## Onboarding Flows
 
-### New Contributor (First Time)
+**New Contributor:** Orient → Profile → Assign
+1. Explain VISION.md and NARRATIVE.md
+2. Capture their strengths, role, time commitment in `suggestions/{name}.md`
+3. Assign tasks from `knowledge/TASKS.md`
 
-Walk them through step by step:
+**Returning (> 7 days):** Show updates since last visit, remind them what they were working on
 
-```
-Welcome to {project_name}!
-
-Let me get you oriented.
-```
-
-**Step 1: The Vision**
-Read `knowledge/VISION.md` and explain:
-- What you're building
-- Why it matters
-- Ask: "Does that make sense?"
-
-**Step 2: The Narrative**
-Read `knowledge/NARRATIVE.md` and explain:
-- How you tell the story
-- Key messages
-- Ask: "How does that land?"
-
-**Step 3: Their Profile**
-Ask:
-```
-Tell me about you:
-
-1. What are your strengths? (Be specific)
-2. What role do you see yourself playing?
-3. How much time can you give? (hours/week)
-4. Anything you're NOT good at?
-```
-
-Save to their `suggestions/{name}.md` under `## PROFILE`.
-
-**Step 4: Assign Tasks**
-Show available tasks from `knowledge/TASKS.md` or `templates/collaboration/TASKS.md`.
-
----
-
-### Returning Contributor (Been Gone > 7 days)
-
-```
-Hey {name}. Welcome back!
-
-Since you were last here:
-{list updates from knowledge/UPDATES.md or recent changes}
-
-You were working on:
-{from their suggestions file}
-
-Ready to continue?
-```
-
----
-
-### Regular Return (< 7 days)
-
-Keep it quick:
-```
-Hey {name}. {X} days to launch.
-
-{Show /hud dashboard}
-
-What do you want to work on?
-```
+**Regular (< 7 days):** Show /hud dashboard, ask what to work on
 
 ---
 
@@ -1425,116 +929,26 @@ Claude: "Nice! Marking complete.
 
 ## Skills Available
 
-### /hud - Project Dashboard
+| Skill | Purpose | Key Commands |
+|-------|---------|--------------|
+| `/hud` | Project dashboard | `(default)` full dashboard, `--compact` one-line |
+| `/brand-architect` | Brand creation | `(default)` full workflow, `marks`, `colors` |
+| `/web-architect` | Asset implementation | `audit`, `implement all` |
+| `/content` | Content creation | `thread [topic]`, `post [topic]`, `article [topic]`, `one-pager [topic]` |
+| `/video` | Founder video scripts | `idea [topic]`, `script [topic]`, `hook [topic]`, `story [exp]`, `batch [theme]` |
+| `/startup` | Startup guidance | `(default)` assess stage, `next`, `validate [idea]`, `mvp [idea]`, `customers`, `launch` |
 
-Shows timeline, phases, tasks. See `skills/hud/SKILL.md`.
-
-```
-/hud                    # Full dashboard
-/hud --compact          # One-line status
-```
-
-### /brand-architect - Brand Creation
-
-Generates marks, colors, typography. See `skills/brand-architect/SKILL.md`.
-
-```
-/brand-architect              # Full workflow
-/brand-architect marks        # Just marks
-/brand-architect colors       # Just colors
-```
-
-### /web-architect - Asset Implementation
-
-Generates final assets. See `skills/web-architect/SKILL.md`.
-
-```
-/web-architect audit          # Check completeness
-/web-architect implement all  # Generate everything
-```
-
-### /content - Content Creation
-
-Generates threads, articles, one-pagers. See `skills/content-creator/SKILL.md`.
-
-```
-/content thread [topic]       # Twitter thread
-/content post [topic]         # Single post
-/content article [topic]      # Long-form
-/content one-pager [topic]    # Print-ready summary
-```
-
-### /video - Founder Video Content
-
-Generates viral short-form video scripts. Based on Jun Yuh's frameworks. See `skills/founder-video/SKILL.md`.
-
-```
-/video idea [topic]           # Generate concept with hook options
-/video script [topic]         # Full script with shot list
-/video hook [topic]           # 5 hook variations
-/video story [experience]     # Extract video from your story
-/video batch [theme]          # Weekly content batch (7-day plan)
-/video repurpose [source]     # Rule of 7 repurposing
-/video diagnose [problem]     # Fix underperforming videos
-```
-
-### /startup - The Startup Journey
-
-Startup stages from idea to scale, informed by Paul Graham + Garry Tan. See `skills/startup/SKILL.md`.
-
-```
-/startup                      # Where am I? What's next?
-/startup stage                # Assess current stage from docs
-/startup next                 # The one thing to do this week
-/startup validate [idea]      # PG-style idea critique
-/startup mvp [idea]           # Scope to 2-week MVP
-/startup customers            # How to find your first 10
-/startup launch               # Launch playbook
-/startup fundraise [stage]    # Fundraising by stage
-/startup pg [topic]           # What would PG say?
-/startup garry [topic]        # What would Garry say?
-```
+See `skills/` folder for detailed documentation on each skill.
 
 ---
 
 ## The Workflow Phases
 
-### Phase 1: Foundation
-
-Set up strategic docs:
-1. Copy templates from `templates/strategic/` to `knowledge/`
-2. Fill in VISION, NARRATIVE, THESIS, ROADMAP
-3. This informs everything else
-
-### Phase 2: Collaboration Setup
-
-Configure team:
-1. Edit Team section above with owner/team info
-2. Create `suggestions/{name}.md` for each contributor
-3. Set up CRM via `./crm` CLI (syncs to Google Sheets)
-
-### Phase 3: Brand
-
-Create visual identity:
-1. Fill out `knowledge/BRAND_BRIEF.md`
-2. Run `/brand-architect`
-3. Preview options in `previews/brand/`
-4. Record decisions in `knowledge/BRAND_DECISIONS.md`
-5. Run `/web-architect implement all`
-
-### Phase 4: Content
-
-Generate launch content:
-1. Use `/content` to create threads, posts, articles
-2. Preview in `previews/content/`
-3. Create one-pagers with PDF export
-
-### Phase 5: Launch
-
-Coordinate the launch:
-1. Track with `/hud`
-2. Execute tasks from `knowledge/TASKS.md`
-3. Ship it
+1. **Foundation** - Copy templates to `knowledge/`, fill VISION/NARRATIVE/THESIS/ROADMAP
+2. **Collaboration Setup** - Edit Team section, create `suggestions/` files, set up `./crm`
+3. **Brand** - Fill `BRAND_BRIEF.md`, run `/brand-architect`, record decisions, run `/web-architect implement all`
+4. **Content** - Use `/content` for threads/posts/articles, preview in `previews/content/`
+5. **Launch** - Track with `/hud`, execute tasks, ship it
 
 ---
 
@@ -1658,103 +1072,3 @@ What's your name? I'll get you set up.
 5. **Ship it** - The goal is launch, not endless iteration
 
 ---
-
-## INTERNAL: Template Distribution (JFL Team Only)
-
-**When you make changes that should reach ALL jfl users globally, update the template repo.**
-
-### Architecture
-
-```
-jfl-template (402goose/jfl-template)     ← SOURCE OF TRUTH
-    ↑
-    │ jfl init / jfl update pulls from here
-    │
-┌───┴────────────────────────────────────┐
-│ User's project                         │
-│ ├── CLAUDE.md                          │
-│ ├── .claude/settings.json              │
-│ ├── scripts/session/*.sh               │
-│ ├── knowledge/                         │
-│ └── ...                                │
-└────────────────────────────────────────┘
-```
-
-### When to Update jfl-template
-
-Update the template repo when changing:
-- `CLAUDE.md` - instructions for Claude
-- `.claude/settings.json` - hooks (SessionStart, Stop, etc.)
-- `scripts/session/*.sh` - session management scripts
-- `knowledge/*.md` - default knowledge templates
-- `templates/` - doc templates
-- `.claude/skills/` - bundled skills
-- `crm` - CRM CLI wrapper
-
-### How to Update
-
-**From JFL-GTM repo:**
-
-```bash
-# 1. Make changes in product/template/
-#    (This is the dev copy, test here first)
-
-# 2. Test the changes locally
-
-# 3. Copy to jfl-template repo
-cd /tmp
-rm -rf jfl-template
-git clone git@github.com:402goose/jfl-template.git
-cd jfl-template
-
-# 4. Copy updated files
-cp -r /path/to/JFL-GTM/product/template/* .
-cp -r /path/to/JFL-GTM/product/template/.[!.]* . 2>/dev/null || true
-
-# 5. Commit and push
-git add -A
-git commit -m "feat: description of what changed"
-git push origin main
-```
-
-**Or use this one-liner:**
-
-```bash
-# From JFL-GTM root:
-./scripts/sync-template.sh "commit message here"
-```
-
-### What Happens on User Side
-
-- **New users (`jfl init`)**: Get the latest template immediately
-- **Existing users (`jfl update`)**: Syncs these paths from template:
-  - `CLAUDE.md`
-  - `.claude/`
-  - `.mcp.json`
-  - `context-hub`
-  - `templates/`
-  - `scripts/`
-
-### Files NOT Synced on Update (preserved)
-
-These are project-specific and never overwritten:
-- `knowledge/` (their filled-in docs)
-- `product/` (their product code)
-- `suggestions/`
-- `content/`
-- `previews/`
-- `.jfl/config.json`
-
-### Testing Template Changes
-
-1. Make changes in `product/template/`
-2. Run `jfl init test-project` in /tmp to verify init works
-3. Create a project, run `jfl update` to verify update works
-4. If both work, sync to jfl-template repo
-
-### Remember
-
-- **jfl-template is lightweight** (~500KB) - only template files
-- **jfl-platform has code** (~50MB) - packages, scripts, etc.
-- Users should NEVER clone jfl-platform just for templates
-- Keep jfl-template in sync with product/template/
