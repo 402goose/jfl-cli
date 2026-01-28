@@ -107,12 +107,21 @@ export async function initCommand(options?: { name?: string }) {
       // Copy hidden files (like .jfl, .gitignore)
       execSync(`cp -r ${templatePath}/.[!.]* ${projectPath}/ 2>/dev/null || true`, { stdio: "pipe" })
 
-      // Verify we got the expected structure
-      const expectedDirs = [".claude/skills", "templates", "knowledge", "content", "suggestions", "previews", ".jfl", "scripts/session"]
-      const missingDirs = expectedDirs.filter(dir => !existsSync(join(projectPath, dir)))
+      // Verify we got the core template structure
+      const requiredDirs = [".claude/skills", "templates", ".jfl"]
+      const missingRequired = requiredDirs.filter(dir => !existsSync(join(projectPath, dir)))
 
-      if (missingDirs.length > 0) {
-        throw new Error(`Template copy incomplete. Missing: ${missingDirs.join(", ")}`)
+      if (missingRequired.length > 0) {
+        throw new Error(`Template copy incomplete. Missing required: ${missingRequired.join(", ")}`)
+      }
+
+      // Create workspace directories if they don't exist
+      const workspaceDirs = ["knowledge", "content", "suggestions", "previews", "scripts/session"]
+      for (const dir of workspaceDirs) {
+        const dirPath = join(projectPath, dir)
+        if (!existsSync(dirPath)) {
+          mkdirSync(dirPath, { recursive: true })
+        }
       }
     } else {
       throw new Error("Template folder not found in repository")
