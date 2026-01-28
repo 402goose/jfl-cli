@@ -1,7 +1,8 @@
 /**
- * jfl update - Pull latest GTM template updates
+ * jfl update - Update npm package and GTM template
  *
- * Syncs CLAUDE.md, skills/, templates/ from the template/ folder
+ * 1. Checks npm for jfl package updates (minor/patch auto-update, major prompts)
+ * 2. Syncs CLAUDE.md, skills/, templates/ from the template/ folder
  * while preserving project-specific files (knowledge/, product/, etc.)
  */
 
@@ -10,9 +11,12 @@ import ora from "ora"
 import { execSync } from "child_process"
 import * as fs from "fs"
 import * as path from "path"
+import * as readline from "readline"
 
 const TEMPLATE_REPO = "https://github.com/402goose/jfl-template.git"
 const TEMP_DIR = ".jfl-update-temp"
+const UPDATE_CHECK_CACHE = ".jfl-last-update-check"
+const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000 // 24 hours
 
 // Files/folders to sync from template/ folder (not repo root)
 const SYNC_PATHS = [
