@@ -281,36 +281,42 @@ async function listServices(): Promise<void> {
   console.log("Global Services:");
   console.log("================");
 
-  for (const [name, service] of Object.entries(globalServices.services)) {
-    const running = await isServiceRunning(service);
-    const status = running ? "✓ Running" : "✗ Stopped";
-    const port = service.port || "N/A";
-    console.log(`  ${name}: ${status} (port: ${port})`);
-    console.log(`    ${service.description}`);
+  if (globalServices?.services) {
+    for (const [name, service] of Object.entries(globalServices.services)) {
+      const running = await isServiceRunning(service);
+      const status = running ? "✓ Running" : "✗ Stopped";
+      const port = service.port || "N/A";
+      console.log(`  ${name}: ${status} (port: ${port})`);
+      console.log(`    ${service.description}`);
+    }
   }
 
   console.log("");
   console.log("Project Services:");
   console.log("=================");
 
-  for (const [name, service] of Object.entries(projectServices.services)) {
-    // Find allocated port
-    let allocatedPort: number | undefined;
-    for (const [port, allocation] of Object.entries(registry.allocated_ports)) {
-      if (
-        allocation.service === name &&
-        allocation.project === projectRoot
-      ) {
-        allocatedPort = parseInt(port);
-        break;
+  if (projectServices?.services) {
+    for (const [name, service] of Object.entries(projectServices.services)) {
+      // Find allocated port
+      let allocatedPort: number | undefined;
+      if (registry?.allocated_ports) {
+        for (const [port, allocation] of Object.entries(registry.allocated_ports)) {
+        if (
+          allocation.service === name &&
+          allocation.project === projectRoot
+        ) {
+          allocatedPort = parseInt(port);
+          break;
+        }
       }
-    }
+      }
 
-    const running = await isServiceRunning(service, allocatedPort);
-    const status = running ? "✓ Running" : "✗ Stopped";
-    const port = allocatedPort || service.base_port || "Not allocated";
-    console.log(`  ${name}: ${status} (port: ${port})`);
-    console.log(`    ${service.description}`);
+      const running = await isServiceRunning(service, allocatedPort);
+      const status = running ? "✓ Running" : "✗ Stopped";
+      const port = allocatedPort || service.base_port || "Not allocated";
+      console.log(`  ${name}: ${status} (port: ${port})`);
+      console.log(`    ${service.description}`);
+    }
   }
 }
 
@@ -327,16 +333,19 @@ async function showStatus(): Promise<void> {
   let totalCount = 0;
 
   // Check global services
-  for (const [name, service] of Object.entries(globalServices.services)) {
-    totalCount++;
-    if (await isServiceRunning(service)) {
-      runningCount++;
+  if (globalServices?.services) {
+    for (const [name, service] of Object.entries(globalServices.services)) {
+      totalCount++;
+      if (await isServiceRunning(service)) {
+        runningCount++;
+      }
     }
   }
 
   // Check project services
-  for (const [name, service] of Object.entries(projectServices.services)) {
-    totalCount++;
+  if (projectServices?.services) {
+    for (const [name, service] of Object.entries(projectServices.services)) {
+      totalCount++;
 
     // Find allocated port
     let allocatedPort: number | undefined;
@@ -353,10 +362,13 @@ async function showStatus(): Promise<void> {
     if (await isServiceRunning(service, allocatedPort)) {
       runningCount++;
     }
+    }
   }
 
   console.log(`Services: ${runningCount}/${totalCount} running`);
-  console.log(`Allocated ports: ${Object.keys(registry.allocated_ports).length}`);
+  console.log(
+    `Allocated ports: ${Object.keys(registry?.allocated_ports || {}).length}`
+  );
 }
 
 /**
