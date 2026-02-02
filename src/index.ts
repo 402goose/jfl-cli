@@ -97,8 +97,12 @@ program
   .description("Manage Context Hub daemon (unified context for AI agents)")
   .argument("[action]", "start, stop, restart, status, ensure, query, serve")
   .option("-p, --port <port>", "Port to run on (default: 4242)", "4242")
+  .option("-g, --global", "Run in global mode (serve all GTM projects)")
   .action(async (action, options) => {
-    await contextHubCommand(action, { port: parseInt(options.port, 10) })
+    await contextHubCommand(action, {
+      port: parseInt(options.port, 10),
+      global: options.global || false,
+    })
   })
 
 program
@@ -108,6 +112,16 @@ program
   .argument("[author]", "Filter by author name")
   .action(async (hours, author) => {
     await synopsisCommand(hours, author)
+  })
+
+program
+  .command("services")
+  .description("Manage services across all GTM projects")
+  .argument("[action]", "list, status, start, stop")
+  .argument("[service]", "Service name")
+  .action(async (action, service) => {
+    const { servicesCommand } = await import("./commands/services.js")
+    await servicesCommand(action, service)
   })
 
 // ============================================================================

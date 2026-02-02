@@ -14,6 +14,7 @@ import * as fs from "fs"
 import * as path from "path"
 import * as http from "http"
 import * as readline from "readline"
+import { homedir } from "os"
 
 const DEFAULT_PORT = 4242
 const PID_FILE = ".jfl/context-hub.pid"
@@ -646,13 +647,17 @@ async function stopDaemon(projectRoot: string): Promise<{ success: boolean; mess
 
 export async function contextHubCommand(
   action?: string,
-  options: { port?: number } = {}
+  options: { port?: number; global?: boolean } = {}
 ) {
-  const projectRoot = process.cwd()
+  const isGlobal = options.global || false
+  const projectRoot = isGlobal ? homedir() : process.cwd()
   const port = options.port || DEFAULT_PORT
 
   // Ensure .jfl directory exists
-  const jflDir = path.join(projectRoot, ".jfl")
+  const jflDir = isGlobal
+    ? path.join(homedir(), ".jfl")
+    : path.join(projectRoot, ".jfl")
+
   if (!fs.existsSync(jflDir)) {
     fs.mkdirSync(jflDir, { recursive: true })
   }
