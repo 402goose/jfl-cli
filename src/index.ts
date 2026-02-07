@@ -27,6 +27,7 @@ import { contextHubCommand } from "./commands/context-hub.js"
 import { voiceCommand } from "./commands/voice.js"
 import { synopsisCommand } from "./commands/synopsis.js"
 import { onboardCommand } from "./commands/onboard.js"
+import { profileCommand } from "./commands/profile.js"
 import {
   listSkillsCommand,
   installSkillCommand,
@@ -135,6 +136,15 @@ program
   .option("--skip-git", "Skip git clone (treat URL as local path)")
   .action(async (pathOrUrl, options) => {
     await onboardCommand(pathOrUrl, options)
+  })
+
+program
+  .command("profile [action]")
+  .description("Manage your JFL profile (stored in config)")
+  .argument("[action]", "show, edit, export, import")
+  .option("-f, --file <path>", "File path for export/import")
+  .action(async (action, options) => {
+    await profileCommand(action, options)
   })
 
 // ============================================================================
@@ -623,6 +633,7 @@ program
     console.log("    jfl init              Initialize project")
     console.log("    jfl repair            Repair missing .jfl directory")
     console.log("    jfl update            Pull latest JFL updates")
+    console.log("    jfl profile           Manage your profile")
     console.log("    jfl hud               Project dashboard")
     console.log("    jfl status            Project status")
     console.log("    jfl onboard           Onboard service as agent")

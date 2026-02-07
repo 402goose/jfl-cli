@@ -7,6 +7,7 @@ import { existsSync, readFileSync } from "fs"
 import { join } from "path"
 import Conf from "conf"
 import { ensureDayPass, isTrialMode, showDayPassStatus, markTeammateJoined } from "../utils/auth-guard.js"
+import { ensureContextHub } from "../utils/ensure-context-hub.js"
 import {
   authenticateWithGitHub,
   discoverJflProjects,
@@ -41,7 +42,12 @@ const AUTONOMOUS_FLAGS: Record<AIProvider, string | undefined> = {
 // Flag for enabling Chrome/browser capabilities (Claude only)
 const CHROME_FLAG = "--chrome"
 
-export async function sessionCommand() {
+interface SessionOptions {
+  autoLaunch?: boolean
+}
+
+export async function sessionCommand(options: SessionOptions = {}) {
+  const { autoLaunch = true } = options
   const cwd = process.cwd()
 
   // Check if in a JFL project
@@ -75,8 +81,11 @@ export async function sessionCommand() {
     config.set("projects", projects)
   }
 
-  // Check for saved preference
-  let preferredCLI = config.get("aiCLI") as string | undefined
+  // Ensure Context Hub is running (silently, in background)
+  await ensureContextHub()
+
+  // Check for saved preference (only if auto-launch is enabled)
+  let preferredCLI = autoLaunch ? (config.get("aiCLI") as string | undefined) : undefined
 
   // Detect available CLIs
   const available = detectAICLIs()
@@ -86,8 +95,8 @@ export async function sessionCommand() {
     return
   }
 
-  // If preference is set and still available, use it
-  if (preferredCLI) {
+  // If preference is set and still available, use it (only if auto-launch enabled)
+  if (autoLaunch && preferredCLI) {
     const preferred = available.find(cli => cli.command === preferredCLI)
     if (preferred) {
       await launchCLI(preferred, cwd)
@@ -95,8 +104,8 @@ export async function sessionCommand() {
     }
   }
 
-  // If only one option, use it
-  if (available.length === 1) {
+  // If only one option, use it (only if auto-launch enabled)
+  if (autoLaunch && available.length === 1) {
     config.set("aiCLI", available[0].command)
     await launchCLI(available[0], cwd)
     return

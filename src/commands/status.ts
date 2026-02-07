@@ -1,8 +1,11 @@
 import chalk from "chalk"
 import { existsSync, readFileSync } from "fs"
 import { join } from "path"
+import { homedir } from "os"
 import { getAuthMethod, getToken, getX402Address, getUser, isAuthenticated } from "./login.js"
 import { ensureInProject } from "../utils/ensure-project.js"
+import { getContextHubConfig } from "../utils/ensure-context-hub.js"
+import { isRunning as getContextHubStatus } from "./context-hub.js"
 
 const PLATFORM_URL = process.env.JFL_PLATFORM_URL || "https://jfl.run"
 
@@ -70,6 +73,21 @@ export async function statusCommand() {
   }
 
   console.log(chalk.gray(`\n  ${foundCount}/${knowledgeFiles.length} files configured`))
+
+  // Context Hub status
+  console.log(chalk.cyan("\nContext Hub"))
+  const contextHubConfig = getContextHubConfig()
+  const contextHubStatus = getContextHubStatus(contextHubConfig.mode === "global" ? homedir() : cwd)
+
+  if (contextHubStatus.running) {
+    console.log(`  Status: ${chalk.green("Running")}`)
+    console.log(`  Mode: ${chalk.white(contextHubConfig.mode === "global" ? "Global" : "Local")}`)
+    console.log(`  Port: ${chalk.white(contextHubConfig.port)}`)
+    console.log(`  PID: ${chalk.gray(contextHubStatus.pid)}`)
+  } else {
+    console.log(`  Status: ${chalk.yellow("Not running")}`)
+    console.log(chalk.gray("  (Auto-starts with 'jfl')"))
+  }
 
   // Skills available
   console.log(chalk.cyan("\nSkills Available"))

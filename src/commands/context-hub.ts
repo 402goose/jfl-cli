@@ -537,7 +537,7 @@ function getLogFile(projectRoot: string): string {
   return logFile
 }
 
-function isRunning(projectRoot: string): { running: boolean; pid?: number } {
+export function isRunning(projectRoot: string): { running: boolean; pid?: number } {
   const pidFile = getPidFile(projectRoot)
 
   if (!fs.existsSync(pidFile)) {
