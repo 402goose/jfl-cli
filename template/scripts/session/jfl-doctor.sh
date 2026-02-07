@@ -209,6 +209,11 @@ check_stale_sessions() {
     fi
 }
 
+# Global variables for branch data (used in summary)
+UNMERGED_BRANCHES_COUNT=0
+UNMERGED_BRANCHES_LIST=""
+MERGED_BRANCHES_COUNT=0
+
 # Check: Old session branches that have been merged
 check_orphaned_branches() {
     cd "$REPO_DIR"
@@ -230,6 +235,11 @@ check_orphaned_branches() {
             merged_list="$merged_list $branch"
         fi
     done
+
+    # Store for summary display
+    UNMERGED_BRANCHES_COUNT=$unmerged_orphans
+    UNMERGED_BRANCHES_LIST="$unmerged_list"
+    MERGED_BRANCHES_COUNT=$merged_orphans
 
     # Also check submodules for orphan branches
     local submodule_orphans=0
@@ -466,13 +476,39 @@ main() {
 
         if $has_unmerged_branches; then
             echo ""
-            echo -e "${YELLOW}⚠️  Needs Review${NC} (branches with unmerged work)"
-            echo "   • 9 GTM branches have unmerged commits"
-            echo "   • Including: session-telegram-cash-main (4 commits)"
-            echo "   Run with --verbose to see all branches"
-            echo ""
-            echo "   To review: git log main..<branch-name>"
-            echo "   To merge: git checkout main && git merge <branch-name>"
+            if [[ $UNMERGED_BRANCHES_COUNT -gt 0 ]]; then
+                echo -e "${YELLOW}⚠️  Needs Review${NC} (branches with unmerged work)"
+                echo "   • $UNMERGED_BRANCHES_COUNT GTM branches have unmerged commits"
+
+                # Show first unmerged branch as example
+                if [[ -n "$UNMERGED_BRANCHES_LIST" ]]; then
+                    local first_entry=$(echo "$UNMERGED_BRANCHES_LIST" | awk '{print $1}')
+                    local first_branch="${first_entry%%:*}"
+                    local first_commits="${first_entry##*:}"
+                    echo "   • Including: $first_branch ($first_commits commits)"
+                fi
+
+                if $VERBOSE; then
+                    echo ""
+                    echo "   All unmerged branches:"
+                    for entry in $UNMERGED_BRANCHES_LIST; do
+                        local branch="${entry%%:*}"
+                        local commits="${entry##*:}"
+                        echo "   • $branch ($commits commits ahead of main)"
+                    done
+                else
+                    echo "   Run with --verbose to see all branches"
+                fi
+                echo ""
+                echo "   To review: git log main..<branch-name>"
+                echo "   To merge: git checkout main && git merge <branch-name>"
+            elif [[ $MERGED_BRANCHES_COUNT -gt 0 ]]; then
+                echo -e "${YELLOW}⚠️  Needs Review${NC} (branches with unmerged work)"
+                echo "   • $MERGED_BRANCHES_COUNT merged orphans (+ 0 submodule)"
+                echo ""
+                echo "   These branches are fully merged to main and can be deleted:"
+                echo "   Run: jfl-doctor.sh --fix"
+            fi
         fi
 
         if $has_memory_init || $has_submodule_init; then
