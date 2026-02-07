@@ -324,10 +324,29 @@ const LogsView: React.FC<{ service?: Service; lines: string[] }> = ({ service, l
     return <Text dimColor>No service selected</Text>;
   }
 
+  const statusColor = service.status === 'running' ? 'green' :
+                     service.status === 'stopped' ? 'yellow' : 'red';
+  const statusIcon = service.status === 'running' ? '●' :
+                    service.status === 'stopped' ? '○' : '✗';
+
   return (
     <Box flexDirection="column" height="100%">
       <Box borderStyle="round" borderColor="yellow" paddingX={1} marginBottom={1}>
         <Text bold color="yellow">📋 Logs: {service.name}</Text>
+        <Text dimColor> | </Text>
+        <Text color={statusColor}>{statusIcon} {service.status}</Text>
+        {service.pid && (
+          <>
+            <Text dimColor> | PID: </Text>
+            <Text>{service.pid}</Text>
+          </>
+        )}
+        {service.port && (
+          <>
+            <Text dimColor> | Port: </Text>
+            <Text>{service.port}</Text>
+          </>
+        )}
       </Box>
 
       <Box flexDirection="column" flexGrow={1} overflow="hidden">

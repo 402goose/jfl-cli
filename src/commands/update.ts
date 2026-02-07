@@ -13,6 +13,7 @@ import * as fs from "fs"
 import * as path from "path"
 import * as readline from "readline"
 import { homedir } from "os"
+import { validateSettings, fixSettings } from "../utils/settings-validator.js"
 
 const TEMPLATE_REPO = "https://github.com/402goose/jfl-template.git"
 const TEMP_DIR = ".jfl-update-temp"
@@ -307,6 +308,27 @@ export async function updateCommand(options: { dry?: boolean; autoUpdate?: boole
     fs.rmSync(tempPath, { recursive: true })
 
     spinner.succeed("GTM template synced")
+
+    // Validate and fix .claude/settings.json after sync
+    const settingsPath = path.join(cwd, ".claude", "settings.json")
+    if (fs.existsSync(settingsPath)) {
+      const validationSpinner = ora("Validating .claude/settings.json...").start()
+      try {
+        const settingsContent = fs.readFileSync(settingsPath, "utf-8")
+        const settings = JSON.parse(settingsContent)
+        const errors = validateSettings(settings)
+
+        if (errors.length > 0) {
+          const fixed = fixSettings(settings)
+          fs.writeFileSync(settingsPath, JSON.stringify(fixed, null, 2) + "\n")
+          validationSpinner.succeed("Settings.json auto-fixed")
+        } else {
+          validationSpinner.succeed("Settings.json valid")
+        }
+      } catch (err) {
+        validationSpinner.warn("Could not validate settings.json")
+      }
+    }
 
     console.log(chalk.white("\n  Synced from jfl-template:"))
     for (const p of updated) {

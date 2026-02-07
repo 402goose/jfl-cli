@@ -10,6 +10,7 @@ import { existsSync, mkdirSync, writeFileSync, readFileSync } from "fs"
 import { join, basename } from "path"
 import { execSync } from "child_process"
 import { isAuthenticated, getUser, getAuthMethod, getX402Address } from "./login.js"
+import { validateSettings, fixSettings, getValidationReport } from "../utils/settings-validator.js"
 
 // Markers that indicate this is a JFL project
 const JFL_MARKERS = {
@@ -213,6 +214,43 @@ export async function repairCommand() {
   } catch (err) {
     console.log(chalk.red("✗ Config is malformed"))
     return
+  }
+
+  // Validate and optionally fix .claude/settings.json
+  const settingsPath = join(cwd, ".claude", "settings.json")
+  if (existsSync(settingsPath)) {
+    console.log(chalk.cyan("\nChecking .claude/settings.json..."))
+    try {
+      const settingsContent = readFileSync(settingsPath, "utf-8")
+      const settings = JSON.parse(settingsContent)
+      const errors = validateSettings(settings)
+
+      if (errors.length > 0) {
+        console.log(chalk.yellow("\n⚠️  Settings.json has schema issues:"))
+        console.log(chalk.gray(getValidationReport(settings)))
+
+        const { fixNow } = await inquirer.prompt([
+          {
+            type: "confirm",
+            name: "fixNow",
+            message: "Auto-fix settings.json?",
+            default: true,
+          },
+        ])
+
+        if (fixNow) {
+          const fixed = fixSettings(settings)
+          writeFileSync(settingsPath, JSON.stringify(fixed, null, 2) + "\n")
+          console.log(chalk.green("✓ Settings.json auto-fixed"))
+        } else {
+          console.log(chalk.yellow("⚠️  Settings.json issues remain"))
+        }
+      } else {
+        console.log(chalk.green("✓ Settings.json is valid"))
+      }
+    } catch (err) {
+      console.log(chalk.yellow("⚠️  Could not validate settings.json"))
+    }
   }
 
   console.log(chalk.bold.green("\n✅ Repair complete!\n"))

@@ -12,6 +12,7 @@ import { generateAgentDefinition, writeAgentDefinition } from "../lib/agent-gene
 import { writeSkillFiles } from "../lib/skill-generator.js"
 import { getProfile } from "./profile.js"
 import { generateClaudeMdFromProfile } from "../utils/claude-md-generator.js"
+import { validateSettings, fixSettings } from "../utils/settings-validator.js"
 
 const TEMPLATE_REPO = "https://github.com/402goose/jfl-template.git"
 
@@ -145,6 +146,27 @@ export async function initCommand(options?: { name?: string }) {
     execSync(`git init`, { cwd: projectPath, stdio: "pipe" })
 
     spinner.succeed("GTM workspace created!")
+
+    // Validate and fix .claude/settings.json
+    const settingsPath = join(projectPath, ".claude", "settings.json")
+    if (existsSync(settingsPath)) {
+      const validationSpinner = ora("Validating .claude/settings.json...").start()
+      try {
+        const settingsContent = readFileSync(settingsPath, "utf-8")
+        const settings = JSON.parse(settingsContent)
+        const errors = validateSettings(settings)
+
+        if (errors.length > 0) {
+          const fixed = fixSettings(settings)
+          writeFileSync(settingsPath, JSON.stringify(fixed, null, 2) + "\n")
+          validationSpinner.succeed("Settings.json auto-fixed")
+        } else {
+          validationSpinner.succeed("Settings.json valid")
+        }
+      } catch (err) {
+        validationSpinner.warn("Could not validate settings.json")
+      }
+    }
 
     const description = await p.text({
       message: "One-line description:",
