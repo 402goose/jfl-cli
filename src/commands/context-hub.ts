@@ -574,19 +574,39 @@ async function startDaemon(projectRoot: string, port: number): Promise<{ success
   // Generate auth token before starting
   const token = getOrCreateToken(projectRoot)
 
+  // Find jfl command (prefer global install)
+  let jflCmd = "jfl"
+  try {
+    // Try to find jfl in PATH
+    execSync("which jfl", { encoding: "utf-8" }).trim()
+  } catch {
+    // Fall back to current process
+    jflCmd = process.argv[1]
+  }
+
   // Start as detached process
-  const child = spawn(process.execPath, [process.argv[1], "context-hub", "serve", "--port", String(port)], {
+  const child = spawn(jflCmd, ["context-hub", "serve", "--port", String(port)], {
     cwd: projectRoot,
     detached: true,
-    stdio: ["ignore", fs.openSync(logFile, "a"), fs.openSync(logFile, "a")]
+    stdio: ["ignore", fs.openSync(logFile, "a"), fs.openSync(logFile, "a")],
+    env: { ...process.env, NODE_ENV: "production" }
   })
 
   child.unref()
 
+  // Wait a moment to ensure process started
+  await new Promise(resolve => setTimeout(resolve, 500))
+
   // Write PID file
   if (child.pid) {
-    fs.writeFileSync(pidFile, String(child.pid))
-    return { success: true, message: `Started (PID: ${child.pid}). Token: ${token.slice(0, 8)}...` }
+    // Verify process is still running
+    try {
+      process.kill(child.pid, 0)
+      fs.writeFileSync(pidFile, String(child.pid))
+      return { success: true, message: `Started (PID: ${child.pid}). Token: ${token.slice(0, 8)}...` }
+    } catch {
+      return { success: false, message: "Process started but immediately exited" }
+    }
   }
 
   return { success: false, message: "Failed to spawn daemon process" }
@@ -757,19 +777,72 @@ export async function contextHubCommand(
     case "serve": {
       // Run server in foreground (used by daemon)
       const server = createServer(projectRoot, port)
-      server.listen(port, () => {
-        console.log(`Context Hub listening on port ${port}`)
+      let isListening = false
+
+      // Error handling - keep process alive
+      process.on("uncaughtException", (err) => {
+        console.error(`Uncaught exception: ${err.message}`)
+        console.error(err.stack)
+        // Don't exit - log and continue
       })
 
-      // Handle shutdown
-      process.on("SIGTERM", () => {
-        server.close()
-        process.exit(0)
+      process.on("unhandledRejection", (reason, promise) => {
+        console.error(`Unhandled rejection at ${promise}: ${reason}`)
+        // Don't exit - log and continue
       })
-      process.on("SIGINT", () => {
-        server.close()
-        process.exit(0)
+
+      server.on("error", (err: any) => {
+        console.error(`Server error: ${err.message}`)
+        if (err.code === "EADDRINUSE") {
+          console.error(`Port ${port} is already in use. Exiting.`)
+          process.exit(1)
+        }
+        // For other errors, don't exit
       })
+
+      server.listen(port, () => {
+        isListening = true
+        console.log(`Context Hub listening on port ${port}`)
+        console.log(`PID: ${process.pid}`)
+        console.log(`Ready to serve requests`)
+      })
+
+      // Handle shutdown gracefully
+      const shutdown = () => {
+        if (!isListening) {
+          // Server never started, just exit
+          process.exit(0)
+          return
+        }
+        console.log("Shutting down...")
+        server.close(() => {
+          console.log("Server closed")
+          process.exit(0)
+        })
+        // Force exit after 5s if server doesn't close
+        setTimeout(() => {
+          console.log("Force exit after timeout")
+          process.exit(1)
+        }, 5000)
+      }
+
+      process.on("SIGTERM", shutdown)
+      process.on("SIGINT", shutdown)
+
+      // Keep process alive with heartbeat
+      const heartbeat = setInterval(() => {
+        // Heartbeat - ensures event loop stays active
+        // Also log periodically so we know it's alive
+        if (isListening && Date.now() % 300000 < 60000) { // Every 5 minutes
+          console.log(`Heartbeat: Still running (PID: ${process.pid})`)
+        }
+      }, 60000)
+
+      // Cleanup heartbeat on exit
+      process.on("exit", () => {
+        clearInterval(heartbeat)
+      })
+
       break
     }
 
