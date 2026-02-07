@@ -28,6 +28,7 @@ import { voiceCommand } from "./commands/voice.js"
 import { synopsisCommand } from "./commands/synopsis.js"
 import { onboardCommand } from "./commands/onboard.js"
 import { profileCommand } from "./commands/profile.js"
+import { migrateServices } from "./commands/migrate-services.js"
 import {
   listSkillsCommand,
   installSkillCommand,
@@ -144,6 +145,14 @@ program
   .option("-f, --file <path>", "File path for export/import/generate output")
   .action(async (action, options) => {
     await profileCommand(action, options)
+  })
+
+program
+  .command("migrate-services")
+  .description("Migrate services from references/ to service manager")
+  .argument("[gtm-path]", "Path to GTM project (default: current directory)")
+  .action(async (gtmPath) => {
+    await migrateServices(gtmPath)
   })
 
 // ============================================================================
