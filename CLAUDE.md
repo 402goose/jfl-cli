@@ -27,7 +27,7 @@ Don't make users fill out forms before they can build. Let them start immediatel
 
 **Complete ALL steps before saying anything to the user.**
 
-**1. CD to worktree** (from hook output)
+**1. Verify session branch** (from hook output)
 
 **2. Run session sync:**
 ```bash
@@ -114,35 +114,23 @@ If you need to search for something specific later:
 Call: mcp__jfl-context__context_search with query="your search"
 ```
 
-### CRITICAL: CD to Worktree
+### CRITICAL: Verify Session Branch
 
-**After SessionStart hook runs, you MUST cd to the worktree.**
+**After SessionStart hook runs, verify you're on the session branch.**
 
-The hook creates a worktree and outputs:
+The hook creates a session branch and outputs:
 ```
 ═══════════════════════════════════════════════════════════
-  CLAUDE: You MUST run: cd /path/to/worktree
+  Session: session-*
 ═══════════════════════════════════════════════════════════
 ```
 
-**YOU MUST RUN THAT CD COMMAND.** If you don't, you'll work on main branch and break multi-session isolation.
-
-If you missed the output, find the path:
+**Verify you're on session branch:**
 ```bash
-cat .jfl/current-worktree.txt
+git branch --show-current
 ```
 
-Then cd to it:
-```bash
-cd $(cat .jfl/current-worktree.txt)
-```
-
-**Verify you're in the worktree:**
-```bash
-pwd && git branch --show-current
-```
-
-Should show `/path/worktrees/session-*` and branch `session-*`, NOT `main`.
+Should show `session-*`, NOT `main`.
 
 ---
 

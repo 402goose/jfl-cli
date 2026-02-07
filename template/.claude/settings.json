@@ -69,7 +69,7 @@
           },
           {
             "type": "command",
-            "command": "./scripts/session/session-end.sh 2>&1 || (git add -A && git diff --cached --quiet || git commit -m 'auto: stop save') 2>/dev/null; echo '✓ Session ended'; exit 0"
+            "command": "./scripts/session/session-cleanup.sh >> .jfl/logs/session-cleanup.log 2>&1 || echo 'Cleanup skipped'; exit 0"
           }
         ]
       }
