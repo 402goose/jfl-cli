@@ -861,6 +861,22 @@ export async function contextHubCommand(
       break
     }
 
+    case "logs": {
+      // Launch TUI log viewer
+      const { spawn: spawnChild } = require("child_process")
+      const logViewer = spawnChild(process.execPath, [
+        path.join(__dirname, "../ui/context-hub-logs.js")
+      ], {
+        stdio: "inherit",
+        cwd: projectRoot
+      })
+
+      logViewer.on("exit", (code: number) => {
+        process.exit(code || 0)
+      })
+      break
+    }
+
     default: {
       console.log(chalk.bold("\n  Context Hub - Unified context for AI agents\n"))
       console.log(chalk.gray("  Commands:"))
@@ -868,6 +884,7 @@ export async function contextHubCommand(
       console.log("    jfl context-hub stop      Stop the daemon")
       console.log("    jfl context-hub restart   Restart the daemon")
       console.log("    jfl context-hub status    Check if running")
+      console.log("    jfl context-hub logs      Show real-time logs (TUI)")
       console.log("    jfl context-hub ensure    Start if not running (for hooks)")
       console.log("    jfl context-hub query     Quick context query")
       console.log()
