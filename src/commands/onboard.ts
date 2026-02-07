@@ -16,7 +16,7 @@ import ora from "ora"
 import * as p from "@clack/prompts"
 import { existsSync, readFileSync, writeFileSync } from "fs"
 import { execSync } from "child_process"
-import { join, resolve } from "path"
+import { join, resolve, basename } from "path"
 import { homedir } from "os"
 import {
   extractServiceMetadata,
@@ -326,42 +326,155 @@ export async function onboardCommand(
     console.log(chalk.gray(`Service Path: ${servicePath}\n`))
   }
 
-  // Auto-detect service metadata
+  // Auto-detect service metadata (but will ask user to confirm/override)
   const spinner = ora("Auto-detecting service metadata...").start()
 
-  let metadata: ServiceMetadata
+  let detectedMetadata: ServiceMetadata
 
   try {
-    metadata = extractServiceMetadata(servicePath)
+    detectedMetadata = extractServiceMetadata(servicePath)
     spinner.succeed("Service metadata detected")
   } catch (err: any) {
-    spinner.fail("Failed to detect metadata")
-    throw err
+    spinner.fail("Auto-detection failed, will ask for details")
+    // Create empty metadata
+    detectedMetadata = {
+      name: basename(servicePath),
+      type: "api",
+      description: "",
+      version: "0.1.0",
+      dependencies: [],
+      commands: {},
+      port: null
+    }
   }
 
-  // Allow overrides
-  if (options.name) {
-    metadata.name = options.name
-  }
-  if (options.type) {
-    metadata.type = options.type
-  }
-  if (options.description) {
-    metadata.description = options.description
+  console.log()
+  p.note(
+    `Auto-detected:\n` +
+    `  Name: ${chalk.cyan(detectedMetadata.name)}\n` +
+    `  Type: ${chalk.cyan(detectedMetadata.type)}\n` +
+    `  Description: ${chalk.gray(detectedMetadata.description || "N/A")}\n` +
+    `  Port: ${detectedMetadata.port ? chalk.cyan(detectedMetadata.port) : chalk.gray("N/A")}`,
+    "🔍 Detection Results"
+  )
+
+  console.log(chalk.cyan("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"))
+  console.log(chalk.cyan("  Service Configuration Wizard"))
+  console.log(chalk.cyan("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"))
+
+  // Interactive wizard
+  const serviceName = options.name || await p.text({
+    message: "Service name?",
+    placeholder: detectedMetadata.name,
+    initialValue: detectedMetadata.name,
+    validate: (value) => {
+      if (!value) return "Service name is required"
+      if (!/^[a-z0-9-]+$/.test(value)) return "Use lowercase, numbers, and hyphens only"
+      return undefined
+    }
+  })
+
+  if (p.isCancel(serviceName)) {
+    p.cancel("Onboarding cancelled")
+    return
   }
 
-  // Display detected metadata
+  const serviceType = options.type || await p.select({
+    message: "Service type?",
+    options: [
+      { value: "api", label: "API - REST/GraphQL service", hint: detectedMetadata.type === "api" ? "detected" : "" },
+      { value: "web", label: "Web - Frontend application", hint: detectedMetadata.type === "web" ? "detected" : "" },
+      { value: "worker", label: "Worker - Background jobs/queue", hint: detectedMetadata.type === "worker" ? "detected" : "" },
+      { value: "cli", label: "CLI - Command-line tool", hint: detectedMetadata.type === "cli" ? "detected" : "" },
+      { value: "infrastructure", label: "Infrastructure - Database, cache, etc.", hint: detectedMetadata.type === "infrastructure" ? "detected" : "" },
+      { value: "container", label: "Container - Docker service", hint: detectedMetadata.type === "container" ? "detected" : "" },
+    ],
+    initialValue: detectedMetadata.type
+  }) as ServiceMetadata["type"]
+
+  if (p.isCancel(serviceType)) {
+    p.cancel("Onboarding cancelled")
+    return
+  }
+
+  const description = options.description || await p.text({
+    message: "Service description?",
+    placeholder: detectedMetadata.description || "What does this service do?",
+    initialValue: detectedMetadata.description,
+    validate: (value) => {
+      if (!value) return "Description is required"
+      return undefined
+    }
+  })
+
+  if (p.isCancel(description)) {
+    p.cancel("Onboarding cancelled")
+    return
+  }
+
+  const hasPort = await p.confirm({
+    message: "Does this service expose a port?",
+    initialValue: !!detectedMetadata.port
+  })
+
+  if (p.isCancel(hasPort)) {
+    p.cancel("Onboarding cancelled")
+    return
+  }
+
+  let port: number | undefined
+  if (hasPort) {
+    const portInput = await p.text({
+      message: "Port number?",
+      placeholder: detectedMetadata.port?.toString() || "3000",
+      initialValue: detectedMetadata.port?.toString() || "",
+      validate: (value) => {
+        const num = parseInt(value, 10)
+        if (isNaN(num) || num < 1 || num > 65535) return "Enter a valid port (1-65535)"
+        return undefined
+      }
+    })
+
+    if (p.isCancel(portInput)) {
+      p.cancel("Onboarding cancelled")
+      return
+    }
+
+    port = parseInt(portInput as string, 10)
+  }
+
+  const enableMCP = await p.confirm({
+    message: "Enable MCP (Model Context Protocol) for AI agent coordination?",
+    initialValue: false
+  })
+
+  if (p.isCancel(enableMCP)) {
+    p.cancel("Onboarding cancelled")
+    return
+  }
+
+  // Build final metadata
+  const metadata: ServiceMetadata = {
+    name: serviceName as string,
+    type: serviceType,
+    description: description as string,
+    version: detectedMetadata.version,
+    dependencies: detectedMetadata.dependencies,
+    commands: detectedMetadata.commands,
+    port: port || null
+  }
+
+  console.log()
   p.note(
     `Name:         ${chalk.cyan(metadata.name)}\n` +
     `Type:         ${chalk.cyan(metadata.type)}\n` +
     `Description:  ${chalk.gray(metadata.description)}\n` +
-    `Port:         ${metadata.port ? chalk.cyan(metadata.port) : chalk.gray("N/A")}\n` +
-    `Version:      ${chalk.gray(metadata.version)}\n` +
-    `Dependencies: ${chalk.gray(metadata.dependencies.join(", ") || "None")}`,
-    chalk.hex("#00FF88")("📋 Service Metadata")
+    `Port:         ${metadata.port ? chalk.cyan(metadata.port) : chalk.gray("None")}\n` +
+    `MCP:          ${enableMCP ? chalk.green("Enabled") : chalk.gray("Disabled")}\n` +
+    `Version:      ${chalk.gray(metadata.version)}`,
+    chalk.hex("#00FF88")("📋 Final Configuration")
   )
 
-  // Confirm with user
   const confirmed = await p.confirm({
     message: "Proceed with onboarding?",
     initialValue: true,
@@ -370,6 +483,35 @@ export async function onboardCommand(
   if (p.isCancel(confirmed) || !confirmed) {
     p.cancel("Onboarding cancelled")
     return
+  }
+
+  // Write service.json with MCP config if enabled
+  if (enableMCP) {
+    const serviceJsonPath = join(servicePath, "service.json")
+    const serviceJson = {
+      name: metadata.name,
+      version: metadata.version,
+      type: metadata.type,
+      description: metadata.description,
+      mcp: {
+        enabled: true,
+        transport: "stdio",
+        capabilities: {
+          tools: true,
+          resources: true
+        }
+      }
+    }
+
+    if (existsSync(serviceJsonPath)) {
+      const existing = JSON.parse(readFileSync(serviceJsonPath, "utf-8"))
+      Object.assign(existing, serviceJson)
+      writeFileSync(serviceJsonPath, JSON.stringify(existing, null, 2) + "\n")
+    } else {
+      writeFileSync(serviceJsonPath, JSON.stringify(serviceJson, null, 2) + "\n")
+    }
+
+    console.log(chalk.green("✓ Created service.json with MCP config"))
   }
 
   console.log()
