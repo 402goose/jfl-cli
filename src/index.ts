@@ -56,17 +56,16 @@ const program = new Command()
 
 program
   .name("jfl")
-  .description("Just Fucking Launch - AI-powered GTM and development")
+  .description("Just Fucking Launch - AI gateway for GTM")
   .version("0.1.0")
   .option("--no-update", "Skip automatic update check")
-  .option("--no-auto-launch", "Don't auto-launch AI CLI (show selection menu)")
   .action(async (options) => {
     // Always update on session start (unless --no-update flag)
     if (options.update !== false) {
       await updateCommand({ autoUpdate: true })
       console.log() // Add spacing before session starts
     }
-    await sessionCommand({ autoLaunch: options.autoLaunch !== false })
+    await sessionCommand({})
   })
 
 // ============================================================================
