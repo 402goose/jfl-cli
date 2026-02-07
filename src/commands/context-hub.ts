@@ -215,6 +215,115 @@ function readKnowledgeDocs(projectRoot: string): ContextItem[] {
 }
 
 // ============================================================================
+// Service Discovery
+// ============================================================================
+
+interface ServiceInfo {
+  name: string
+  type: string
+  description: string
+  path: string
+  status: "running" | "stopped" | "unknown"
+  mcp?: {
+    enabled: boolean
+    transport: string
+  }
+  commands?: {
+    start?: string
+    stop?: string
+    logs?: string
+  }
+  healthcheck?: string
+  port?: number
+  dependencies?: string[]
+}
+
+function discoverServices(projectRoot: string): Record<string, ServiceInfo> {
+  const services: Record<string, ServiceInfo> = {}
+
+  // Look for .jfl/services.json in current project and parent directories
+  // Also search sibling GTM directories
+  const searchPaths = [
+    projectRoot,
+    path.join(projectRoot, ".."),
+    path.join(projectRoot, "../.."),
+  ]
+
+  // Add sibling directories (e.g., if in jfl-cli, check ../JFL-GTM)
+  const parentDir = path.join(projectRoot, "..")
+  if (fs.existsSync(parentDir)) {
+    try {
+      const siblings = fs.readdirSync(parentDir, { withFileTypes: true })
+      for (const sibling of siblings) {
+        if (sibling.isDirectory() && (sibling.name.includes("GTM") || sibling.name.includes("gtm"))) {
+          searchPaths.push(path.join(parentDir, sibling.name))
+        }
+      }
+    } catch {
+      // Ignore read errors
+    }
+  }
+
+  for (const searchPath of searchPaths) {
+    if (!fs.existsSync(searchPath)) continue
+
+    const servicesFile = path.join(searchPath, ".jfl/services.json")
+
+    if (fs.existsSync(servicesFile)) {
+      try {
+        const servicesData = JSON.parse(fs.readFileSync(servicesFile, "utf-8"))
+
+        for (const [serviceName, serviceData] of Object.entries(servicesData)) {
+          const data = serviceData as any
+
+          // Check if service has service.json with MCP info
+          let mcpInfo: ServiceInfo["mcp"] | undefined
+          const serviceJsonPath = path.join(data.path, "service.json")
+
+          if (fs.existsSync(serviceJsonPath)) {
+            try {
+              const serviceJson = JSON.parse(fs.readFileSync(serviceJsonPath, "utf-8"))
+              if (serviceJson.mcp) {
+                mcpInfo = {
+                  enabled: serviceJson.mcp.enabled || false,
+                  transport: serviceJson.mcp.transport || "stdio"
+                }
+              }
+            } catch {
+              // Ignore parse errors
+            }
+          }
+
+          // Determine service status (basic check - could be enhanced)
+          let status: ServiceInfo["status"] = "unknown"
+          if (data.port) {
+            // Could check if port is in use
+            status = "stopped"
+          }
+
+          services[serviceName] = {
+            name: serviceName,
+            type: data.type || "unknown",
+            description: data.description || "",
+            path: data.path,
+            status,
+            mcp: mcpInfo,
+            commands: data.commands,
+            healthcheck: data.healthcheck,
+            port: data.port,
+            dependencies: data.dependencies
+          }
+        }
+      } catch (err) {
+        console.error(`Failed to read services from ${servicesFile}:`, err)
+      }
+    }
+  }
+
+  return services
+}
+
+// ============================================================================
 // Code Context Reader
 // ============================================================================
 
@@ -510,6 +619,41 @@ function createServer(projectRoot: string, port: number): http.Server {
           res.end(JSON.stringify({ error: err.message }))
         }
       })
+      return
+    }
+
+    // Services registry
+    if (url.pathname === "/api/services" && req.method === "GET") {
+      try {
+        const services = discoverServices(projectRoot)
+        res.writeHead(200, { "Content-Type": "application/json" })
+        res.end(JSON.stringify(services))
+      } catch (err: any) {
+        res.writeHead(500, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ error: err.message }))
+      }
+      return
+    }
+
+    // Get specific service
+    if (url.pathname.startsWith("/api/services/") && req.method === "GET") {
+      try {
+        const serviceName = url.pathname.replace("/api/services/", "")
+        const services = discoverServices(projectRoot)
+        const service = services[serviceName]
+
+        if (!service) {
+          res.writeHead(404, { "Content-Type": "application/json" })
+          res.end(JSON.stringify({ error: "Service not found" }))
+          return
+        }
+
+        res.writeHead(200, { "Content-Type": "application/json" })
+        res.end(JSON.stringify(service))
+      } catch (err: any) {
+        res.writeHead(500, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ error: err.message }))
+      }
       return
     }
 
