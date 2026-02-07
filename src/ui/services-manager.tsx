@@ -26,6 +26,7 @@ interface Service {
   cpu?: string;
   description?: string;
   log_path?: string;
+  health_url?: string;
 }
 
 type View = 'dashboard' | 'logs' | 'chat' | 'add';
@@ -84,7 +85,8 @@ const ServicesManager = () => {
             memory: undefined,
             cpu: undefined,
             description: svc.description,
-            log_path: svc.log_path
+            log_path: svc.log_path,
+            health_url: svc.health_url
           };
         });
 
@@ -109,8 +111,16 @@ const ServicesManager = () => {
       if (services.length === 0) return;
 
       const healthPromises = services.map(async (service) => {
-        // Only check running services with a port
-        if (service.status !== 'running' || !service.port) {
+        // Only check running services
+        if (service.status !== 'running') {
+          return { name: service.name, health: 'unknown' as const };
+        }
+
+        // Use health_url if provided, otherwise construct from port
+        const healthUrl = service.health_url ||
+          (service.port ? `http://localhost:${service.port}/health` : null);
+
+        if (!healthUrl) {
           return { name: service.name, health: 'unknown' as const };
         }
 
@@ -118,7 +128,7 @@ const ServicesManager = () => {
           const controller = new AbortController();
           const timeoutId = setTimeout(() => controller.abort(), 2000);
 
-          const response = await fetch(`http://localhost:${service.port}/health`, {
+          const response = await fetch(healthUrl, {
             signal: controller.signal
           });
 
