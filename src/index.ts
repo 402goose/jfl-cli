@@ -12,6 +12,7 @@ import { spawn, execSync } from "child_process"
 import { existsSync, symlinkSync, mkdirSync, unlinkSync } from "fs"
 import { homedir } from "os"
 import { join } from "path"
+import * as path from "path"
 import { fileURLToPath } from "url"
 import { initCommand } from "./commands/init.js"
 import { repairCommand } from "./commands/repair.js"
@@ -119,12 +120,31 @@ program
 
 program
   .command("services")
-  .description("Manage services across all GTM projects")
-  .argument("[action]", "list, status, start, stop")
+  .description("Manage services across all GTM projects (interactive TUI or CLI)")
+  .argument("[action]", "list, status, start, stop, or leave empty for TUI")
   .argument("[service]", "Service name")
   .action(async (action, service) => {
-    const { servicesCommand } = await import("./commands/services.js")
-    await servicesCommand(action, service)
+    // If no action, launch interactive TUI
+    if (!action) {
+      const { spawn } = await import("child_process")
+      const { fileURLToPath } = await import("url")
+      const __filename = fileURLToPath(import.meta.url)
+      const __dirname = path.dirname(__filename)
+
+      const tui = spawn(process.execPath, [
+        path.join(__dirname, "../dist/ui/services-manager.js")
+      ], {
+        stdio: "inherit"
+      })
+
+      tui.on("exit", (code: number) => {
+        process.exit(code || 0)
+      })
+    } else {
+      // CLI mode
+      const { servicesCommand } = await import("./commands/services.js")
+      await servicesCommand(action, service)
+    }
   })
 
 program
