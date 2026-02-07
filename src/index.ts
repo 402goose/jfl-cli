@@ -26,6 +26,7 @@ import { updateCommand } from "./commands/update.js"
 import { contextHubCommand } from "./commands/context-hub.js"
 import { voiceCommand } from "./commands/voice.js"
 import { synopsisCommand } from "./commands/synopsis.js"
+import { onboardCommand } from "./commands/onboard.js"
 import {
   listSkillsCommand,
   installSkillCommand,
@@ -57,13 +58,14 @@ program
   .description("Just Fucking Launch - AI-powered GTM and development")
   .version("0.1.0")
   .option("--no-update", "Skip automatic update check")
+  .option("--no-auto-launch", "Don't auto-launch AI CLI (show selection menu)")
   .action(async (options) => {
     // Always update on session start (unless --no-update flag)
     if (options.update !== false) {
       await updateCommand({ autoUpdate: true })
       console.log() // Add spacing before session starts
     }
-    await sessionCommand()
+    await sessionCommand({ autoLaunch: options.autoLaunch !== false })
   })
 
 // ============================================================================
@@ -124,6 +126,17 @@ program
     await servicesCommand(action, service)
   })
 
+program
+  .command("onboard <path-or-url>")
+  .description("Onboard a service repo as a service agent")
+  .option("-n, --name <name>", "Override service name")
+  .option("-t, --type <type>", "Override service type (web, api, container, worker, cli, infrastructure)")
+  .option("-d, --description <desc>", "Override service description")
+  .option("--skip-git", "Skip git clone (treat URL as local path)")
+  .action(async (pathOrUrl, options) => {
+    await onboardCommand(pathOrUrl, options)
+  })
+
 // ============================================================================
 // PLATFORM COMMANDS (require login for full features)
 // ============================================================================
@@ -145,6 +158,32 @@ program
   .action(() => {
     logout()
     console.log(chalk.green("Logged out successfully."))
+  })
+
+program
+  .command("preferences")
+  .description("Manage JFL preferences")
+  .option("--clear-ai", "Clear saved AI CLI preference")
+  .option("--show", "Show current preferences")
+  .action((options) => {
+    const Conf = require("conf")
+    const config = new Conf({ projectName: "jfl" })
+
+    if (options.clearAi) {
+      config.delete("aiCLI")
+      console.log(chalk.green("\n✓ Cleared AI CLI preference"))
+      console.log(chalk.gray("  Next 'jfl' will show selection menu\n"))
+      return
+    }
+
+    if (options.show || !options.clearAi) {
+      console.log(chalk.bold("\n⚙️  JFL Preferences\n"))
+      console.log(chalk.gray("AI CLI:") + " " + (config.get("aiCLI") || chalk.gray("none")))
+      console.log(chalk.gray("Projects tracked:") + " " + ((config.get("projects") as string[] || []).length))
+      console.log()
+      console.log(chalk.gray("To clear AI preference: jfl preferences --clear-ai"))
+      console.log()
+    }
   })
 
 program
@@ -586,6 +625,8 @@ program
     console.log("    jfl update            Pull latest JFL updates")
     console.log("    jfl hud               Project dashboard")
     console.log("    jfl status            Project status")
+    console.log("    jfl onboard           Onboard service as agent")
+    console.log("    jfl services          Manage services")
     console.log("    jfl brand             Brand architect")
     console.log("    jfl content           Content creator")
     console.log("    jfl voice             Voice input commands")
