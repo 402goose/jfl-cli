@@ -731,6 +731,24 @@ export async function contextHubCommand(
         // Already running, nothing to do
         return
       }
+
+      // Check if port is blocked by orphaned process
+      const portInUse = await isPortInUse(port)
+      if (portInUse) {
+        // Port is in use but no PID file - orphaned process
+        // Try to find and kill it
+        try {
+          const lsofOutput = execSync(`lsof -ti :${port}`, { encoding: 'utf-8' }).trim()
+          if (lsofOutput) {
+            const orphanedPid = parseInt(lsofOutput.split('\n')[0], 10)
+            process.kill(orphanedPid, 'SIGTERM')
+            await new Promise(resolve => setTimeout(resolve, 500)) // Wait for cleanup
+          }
+        } catch {
+          // lsof failed or process already gone
+        }
+      }
+
       // Start silently
       await startDaemon(projectRoot, port)
       break
