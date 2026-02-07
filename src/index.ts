@@ -39,13 +39,6 @@ import {
 } from "./commands/skills.js"
 import { ralphCommand, showRalphHelp } from "./commands/ralph.js"
 import {
-  sessionCreate,
-  sessionExec,
-  sessionList,
-  sessionDestroy,
-  sessionInfo
-} from "./commands/session-mgmt.js"
-import {
   ensureDayPass,
   showDayPassStatus,
   requiresPayment,
@@ -476,88 +469,6 @@ program
       return
     }
     await ralphCommand(args)
-  })
-
-// ============================================================================
-// SESSION MANAGEMENT (multi-platform sessions)
-// ============================================================================
-
-const session = program
-  .command("session")
-  .description("Manage GTM sessions across platforms (CLI, Telegram, Slack, Web)")
-
-session
-  .command("create")
-  .description("Create or get existing session")
-  .requiredOption("-p, --platform <platform>", "Platform (cli, telegram, slack, web)")
-  .option("-t, --thread <id>", "Thread/channel ID")
-  .option("-u, --user <name>", "User name")
-  .action(async (options) => {
-    try {
-      const sessionId = await sessionCreate({
-        platform: options.platform,
-        thread: options.thread,
-        user: options.user
-      })
-      console.log(sessionId)
-    } catch (error: any) {
-      console.error(chalk.red(`Error: ${error.message}`))
-      process.exit(1)
-    }
-  })
-
-session
-  .command("exec")
-  .description("Execute command in session context")
-  .argument("<sessionId>", "Session ID")
-  .argument("<command>", "Command to execute")
-  .action(async (sessionId, command) => {
-    try {
-      const output = await sessionExec(sessionId, command)
-      console.log(output)
-    } catch (error: any) {
-      console.error(chalk.red(`Error: ${error.message}`))
-      process.exit(1)
-    }
-  })
-
-session
-  .command("list")
-  .description("List all active sessions")
-  .action(async () => {
-    try {
-      await sessionList()
-    } catch (error: any) {
-      console.error(chalk.red(`Error: ${error.message}`))
-      process.exit(1)
-    }
-  })
-
-session
-  .command("info")
-  .description("Show session information")
-  .argument("<sessionId>", "Session ID")
-  .action(async (sessionId) => {
-    try {
-      await sessionInfo(sessionId)
-    } catch (error: any) {
-      console.error(chalk.red(`Error: ${error.message}`))
-      process.exit(1)
-    }
-  })
-
-session
-  .command("destroy")
-  .description("Destroy session")
-  .argument("<sessionId>", "Session ID")
-  .option("-f, --force", "Force destroy even with uncommitted changes")
-  .action(async (sessionId, options) => {
-    try {
-      await sessionDestroy(sessionId, { force: options.force })
-    } catch (error: any) {
-      console.error(chalk.red(`Error: ${error.message}`))
-      process.exit(1)
-    }
   })
 
 // ============================================================================

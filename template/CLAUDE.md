@@ -38,7 +38,7 @@ Don't make users fill out forms before they can build. Let them start immediatel
 ```bash
 ./scripts/session/jfl-doctor.sh
 ```
-Note any warnings (orphaned worktrees, unmerged sessions, memory not initialized).
+Note any warnings (unmerged sessions, memory not initialized).
 
 **4. Get unified context via MCP (REQUIRED):**
 ```

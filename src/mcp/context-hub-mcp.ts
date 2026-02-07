@@ -122,7 +122,7 @@ const TOOLS = [
   },
   {
     name: "context_sessions",
-    description: "See activity from other sessions/worktrees (informational only).",
+    description: "See activity from other sessions (informational only).",
     inputSchema: {
       type: "object" as const,
       properties: {
@@ -304,28 +304,28 @@ function getSessionsActivity(hours: number): string {
   const sessions: SessionInfo[] = []
 
   try {
-    // Get all worktrees
-    const worktreeOutput = execSync('git worktree list --porcelain', { cwd: repoRoot, encoding: 'utf-8' })
-    const worktrees = parseWorktrees(worktreeOutput)
+    // Get all session branches
+    const branchOutput = execSync('git branch --list "session-*"', { cwd: repoRoot, encoding: 'utf-8' })
+    const branches = branchOutput.split('\n')
+      .map(b => b.trim().replace(/^\*\s+/, ''))
+      .filter(b => b.startsWith('session-'))
 
     // Get journal directory (should be in main repo)
     const journalDir = path.join(repoRoot, '.jfl', 'journal')
 
-    for (const wt of worktrees) {
-      if (!wt.branch.startsWith('session-')) continue
-
+    for (const branch of branches) {
       const session: SessionInfo = {
-        name: wt.branch,
-        path: wt.path,
-        branch: wt.branch,
-        isActive: checkIfActive(wt.path),
-        recentCommits: getRecentCommits(repoRoot, wt.branch, 3),
+        name: branch,
+        path: repoRoot, // All sessions work in main repo now
+        branch: branch,
+        isActive: branch === currentBranch, // Active if it's the current branch
+        recentCommits: getRecentCommits(repoRoot, branch, 3),
         journalSummary: '',
         workingOn: ''
       }
 
       // Read journal for this session
-      const journalFile = path.join(journalDir, `${wt.branch}.jsonl`)
+      const journalFile = path.join(journalDir, `${branch}.jsonl`)
       if (fs.existsSync(journalFile)) {
         const entries = readJournalEntries(journalFile, hours)
         if (entries.length > 0) {
@@ -405,46 +405,7 @@ function getSessionsActivity(hours: number): string {
   return lines.join('\n')
 }
 
-function parseWorktrees(output: string): { path: string, branch: string }[] {
-  const worktrees: { path: string, branch: string }[] = []
-  const lines = output.split('\n')
-
-  let currentPath = ''
-  for (const line of lines) {
-    if (line.startsWith('worktree ')) {
-      currentPath = line.substring(9)
-    } else if (line.startsWith('branch refs/heads/')) {
-      const branch = line.substring(18)
-      if (currentPath) {
-        worktrees.push({ path: currentPath, branch })
-      }
-    }
-  }
-
-  return worktrees
-}
-
-function checkIfActive(worktreePath: string): boolean {
-  // Check for auto-commit PID
-  const pidFile = path.join(worktreePath, '.jfl', 'auto-commit.pid')
-  if (fs.existsSync(pidFile)) {
-    try {
-      const pid = parseInt(fs.readFileSync(pidFile, 'utf-8').trim(), 10)
-      if (pid > 0) {
-        // Check if process is running
-        try {
-          process.kill(pid, 0) // Doesn't kill, just checks if it exists
-          return true
-        } catch {
-          // Process not running
-        }
-      }
-    } catch {
-      // Ignore read errors
-    }
-  }
-  return false
-}
+// Removed parseWorktrees and checkIfActive functions - no longer needed since we use branches instead of worktrees
 
 function getRecentCommits(repoRoot: string, branch: string, count: number): string[] {
   try {

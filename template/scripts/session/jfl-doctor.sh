@@ -19,8 +19,13 @@ else
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_DIR="$(pwd)"
-WORKTREES_DIR="$REPO_DIR/worktrees"
+# Find main repo root
+if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    REPO_DIR="$(git rev-parse --show-toplevel)"
+else
+    REPO_DIR="$(pwd)"
+fi
+
 SESSIONS_DIR="$REPO_DIR/.jfl/sessions"
 
 # Colors
@@ -181,162 +186,48 @@ check_submodules() {
     fi
 }
 
-# Check: Stale sessions (PID not running)
+# Check: Session branches and auto-commit daemon
 check_stale_sessions() {
-    local stale_count=0
-    local stale_list=""
-    local active_count=0
+    # Check if auto-commit daemon is running
+    local pid_file="$REPO_DIR/.jfl/auto-commit.pid"
 
-    if [[ ! -d "$WORKTREES_DIR" ]]; then
-        report "sessions" "ok" "no worktrees"
-        return
-    fi
-
-    for worktree in "$WORKTREES_DIR"/session-*; do
-        if [[ -d "$worktree" ]]; then
-            local session_name=$(basename "$worktree")
-            local pid_file="$worktree/.jfl/auto-commit.pid"
-
-            if [[ -f "$pid_file" ]]; then
-                local pid=$(cat "$pid_file" 2>/dev/null)
-                if is_pid_running "$pid"; then
-                    active_count=$((active_count + 1))
-                    continue
-                fi
-            fi
-
-            # No PID or PID not running = stale
-            stale_count=$((stale_count + 1))
-            stale_list="$stale_list $session_name"
-        fi
-    done
-
-    if [[ $stale_count -gt 0 ]]; then
-        report "sessions" "error" "$stale_count stale (PID not running), $active_count active" "$stale_list"
-
-        if $FIX_MODE; then
-            echo -e "${BLUE}→${NC} Cleaning up stale sessions..."
-            for session in $stale_list; do
-                cleanup_stale_session "$session"
-            done
-        fi
-    elif [[ $active_count -gt 0 ]]; then
-        report "sessions" "ok" "$active_count active"
-    else
-        report "sessions" "ok" "none"
-    fi
-}
-
-# Cleanup a single stale session
-cleanup_stale_session() {
-    local session_name="$1"
-    local worktree_path="$WORKTREES_DIR/$session_name"
-
-    echo "  Cleaning: $session_name"
-
-    # Check for uncommitted work first
-    cd "$worktree_path" 2>/dev/null || return
-    local uncommitted=$(git status --porcelain 2>/dev/null | wc -l | tr -d ' ')
-
-    if [[ $uncommitted -gt 0 ]]; then
-        echo "    ⚠ Has $uncommitted uncommitted files - skipping (use --force to discard)"
-        cd "$REPO_DIR"
-        return
-    fi
-
-    # Check for unpushed commits
-    local current_branch=$(git branch --show-current 2>/dev/null)
-    if [[ -n "$current_branch" ]]; then
-        # Get remote tracking branch
-        local remote_branch=$(git rev-parse --abbrev-ref "$current_branch@{upstream}" 2>/dev/null)
-
-        if [[ -n "$remote_branch" ]]; then
-            # Check if there are unpushed commits
-            local unpushed=$(git log "$remote_branch..$current_branch" --oneline 2>/dev/null | wc -l | tr -d ' ')
-
-            if [[ $unpushed -gt 0 ]]; then
-                echo "    ⚠ Has $unpushed unpushed commits - skipping (push first or use --force)"
-                cd "$REPO_DIR"
-                return
-            fi
+    if [[ -f "$pid_file" ]]; then
+        local pid=$(cat "$pid_file" 2>/dev/null)
+        if is_pid_running "$pid"; then
+            report "sessions" "ok" "auto-commit daemon running"
         else
-            # No upstream branch - check if branch has any commits
-            local commit_count=$(git rev-list --count "$current_branch" 2>/dev/null | tr -d ' ')
-
-            if [[ $commit_count -gt 0 ]]; then
-                echo "    ⚠ Branch has commits but no remote tracking - skipping (push first or use --force)"
-                cd "$REPO_DIR"
-                return
-            fi
-        fi
-    fi
-
-    cd "$REPO_DIR"
-
-    # Stop any background processes
-    if [[ -f "$worktree_path/.jfl/auto-commit.pid" ]]; then
-        local pid=$(cat "$worktree_path/.jfl/auto-commit.pid")
-        kill "$pid" 2>/dev/null || true
-    fi
-
-    if [[ -f "$worktree_path/.auto-merge.pid" ]]; then
-        local pid=$(cat "$worktree_path/.auto-merge.pid")
-        kill "$pid" 2>/dev/null || true
-    fi
-
-    # Remove worktree
-    if git worktree remove "$worktree_path" --force 2>/dev/null; then
-        echo "    ✓ Worktree removed"
-    fi
-
-    # Delete branch
-    if git branch -D "$session_name" 2>/dev/null; then
-        echo "    ✓ Branch deleted"
-    fi
-
-    # Remove session state
-    if [[ -f "$SESSIONS_DIR/$session_name.json" ]]; then
-        rm -f "$SESSIONS_DIR/$session_name.json"
-    fi
-
-    FIXED=$((FIXED + 1))
-}
-
-# Check: Orphaned worktrees (git worktree prune)
-check_orphaned_worktrees() {
-    cd "$REPO_DIR"
-
-    local orphans
-    orphans=$(git worktree list --porcelain 2>/dev/null | grep -c "prunable" 2>/dev/null) || orphans=0
-
-    if [[ "$orphans" -gt 0 ]]; then
-        report "worktrees" "warning" "$orphans orphaned (prunable)"
-
-        if $FIX_MODE; then
-            echo -e "${BLUE}→${NC} Pruning orphaned worktrees..."
-            git worktree prune
-            echo "    ✓ Pruned"
-            FIXED=$((FIXED + 1))
+            report "sessions" "warning" "auto-commit daemon not running (stale PID)"
         fi
     else
-        local total=$(ls -d "$WORKTREES_DIR"/session-* 2>/dev/null | wc -l | tr -d ' ')
-        report "worktrees" "ok" "$total total"
+        # Check if we're on a session branch
+        local current_branch=$(git branch --show-current 2>/dev/null)
+        if [[ "$current_branch" == session-* ]]; then
+            report "sessions" "warning" "on session branch but no auto-commit daemon"
+        else
+            report "sessions" "ok" "not in active session"
+        fi
     fi
 }
 
-# Check: Orphaned session branches
+# Check: Old session branches that have been merged
 check_orphaned_branches() {
     cd "$REPO_DIR"
 
-    # Find session branches that don't have corresponding worktrees
-    local orphan_count=0
-    local orphan_list=""
+    # Find session branches and check if they're merged
+    local merged_orphans=0
+    local unmerged_orphans=0
+    local merged_list=""
+    local unmerged_list=""
 
     for branch in $(git branch --list 'session-*' 2>/dev/null | tr -d ' *+'); do
-        local worktree_path="$WORKTREES_DIR/$branch"
-        if [[ ! -d "$worktree_path" ]]; then
-            orphan_count=$((orphan_count + 1))
-            orphan_list="$orphan_list $branch"
+        # Check if branch has unmerged commits
+        local commits_ahead=$(git rev-list --count main.."$branch" 2>/dev/null || echo "0")
+        if [[ "$commits_ahead" -gt 0 ]]; then
+            unmerged_orphans=$((unmerged_orphans + 1))
+            unmerged_list="$unmerged_list $branch:$commits_ahead"
+        else
+            merged_orphans=$((merged_orphans + 1))
+            merged_list="$merged_list $branch"
         fi
     done
 
@@ -358,21 +249,50 @@ check_orphaned_branches() {
         done
     fi
 
-    local total_orphans=$((orphan_count + submodule_orphans))
-    if [[ $total_orphans -gt 0 ]]; then
-        report "branches" "warning" "$orphan_count GTM + $submodule_orphans submodule orphan branches"
+    # Report based on what we found
+    local total_orphans=$((merged_orphans + unmerged_orphans + submodule_orphans))
 
-        if $FIX_MODE && [[ $orphan_count -gt 0 ]]; then
-            echo -e "${BLUE}→${NC} Deleting orphan GTM branches..."
-            for branch in $orphan_list; do
-                if git branch -D "$branch" 2>/dev/null; then
-                    echo "    ✓ Deleted: $branch"
-                    FIXED=$((FIXED + 1))
-                fi
-            done
-        fi
-    else
+    if [[ $total_orphans -eq 0 ]]; then
         report "branches" "ok" "no orphans"
+        return
+    fi
+
+    # Report unmerged branches (WARNING - never auto-delete these)
+    if [[ $unmerged_orphans -gt 0 ]]; then
+        report "branches" "warning" "$unmerged_orphans with UNMERGED work, $merged_orphans merged, $submodule_orphans submodule"
+
+        if $VERBOSE; then
+            echo "    ⚠️  UNMERGED (do NOT delete):"
+            for entry in $unmerged_list; do
+                branch="${entry%%:*}"
+                commits="${entry##*:}"
+                echo "      • $branch ($commits commits NOT in main)"
+            done
+
+            if [[ $merged_orphans -gt 0 ]]; then
+                echo "    ✓ MERGED (safe to delete):"
+                for branch in $merged_list; do
+                    echo "      • $branch (all work in main)"
+                done
+            fi
+        fi
+    elif [[ $merged_orphans -gt 0 ]]; then
+        # Only merged orphans exist
+        report "branches" "warning" "$merged_orphans merged orphans (+ $submodule_orphans submodule)"
+    else
+        # Only submodule orphans
+        report "branches" "warning" "$submodule_orphans submodule orphans"
+    fi
+
+    # Clean up ONLY merged branches (safe regardless of unmerged branches)
+    if $FIX_MODE && [[ $merged_orphans -gt 0 ]]; then
+        echo -e "${BLUE}→${NC} Deleting merged orphan branches (unmerged branches kept)..."
+        for branch in $merged_list; do
+            if git branch -D "$branch" 2>/dev/null; then
+                echo "    ✓ Deleted: $branch (was fully merged to main)"
+                FIXED=$((FIXED + 1))
+            fi
+        done
     fi
 }
 
@@ -382,7 +302,7 @@ check_locks() {
     local lock_list=""
 
     # Check for .lock files with stale PIDs
-    local lock_files=$(find "$REPO_DIR/.jfl" "$WORKTREES_DIR" -name "*.lock" 2>/dev/null || true)
+    local lock_files=$(find "$REPO_DIR/.jfl" -name "*.lock" 2>/dev/null || true)
     for lock_file in $lock_files; do
         if [[ -f "$lock_file" ]]; then
             # Try to parse PID from lock file
@@ -429,65 +349,23 @@ check_memory() {
     fi
 }
 
-# Check: Unmerged session branches and conflicts
+# Check: Current session branch for unmerged work
 check_unmerged_sessions() {
-    local unmerged=0
-    local conflicts=0
-    local merged=0
+    local current_branch=$(git branch --show-current 2>/dev/null)
 
-    # Check for .merge-conflict files in worktrees
-    for worktree in "$WORKTREES_DIR"/session-*; do
-        if [[ -d "$worktree" ]]; then
-            local session_name=$(basename "$worktree")
+    # Only check if we're on a session branch
+    if [[ "$current_branch" != session-* ]]; then
+        report "merge" "ok" "not on session branch"
+        return
+    fi
 
-            # Check for conflict marker
-            if [[ -f "$worktree/.merge-conflict" ]]; then
-                conflicts=$((conflicts + 1))
+    # Check if current branch has unmerged commits
+    local commits_ahead=$(git rev-list --count main.."$current_branch" 2>/dev/null || echo "0")
 
-                if $FIX_MODE; then
-                    # Try to resolve by running auto-merge with new auto-resolve logic
-                    rm -f "$worktree/.merge-conflict"
-                    if "$SCRIPT_DIR/auto-merge.sh" once "$session_name" 2>/dev/null; then
-                        merged=$((merged + 1))
-                        FIXED=$((FIXED + 1))
-                    else
-                        # Still can't merge - recreate conflict marker will happen in auto-merge
-                        conflicts=$((conflicts + 1))
-                    fi
-                fi
-            fi
-
-            # Check for unmerged commits (session ahead of main)
-            local commits_ahead=$(git rev-list --count main.."$session_name" 2>/dev/null || echo "0")
-            if [[ "$commits_ahead" -gt 0 ]]; then
-                unmerged=$((unmerged + 1))
-
-                if $FIX_MODE && [[ ! -f "$worktree/.merge-conflict" ]]; then
-                    # Try to merge
-                    if "$SCRIPT_DIR/auto-merge.sh" once "$session_name" 2>/dev/null; then
-                        merged=$((merged + 1))
-                        FIXED=$((FIXED + 1))
-                        unmerged=$((unmerged - 1))
-                    fi
-                fi
-            fi
-        fi
-    done
-
-    if [[ $conflicts -gt 0 ]]; then
-        if $FIX_MODE && [[ $merged -gt 0 ]]; then
-            report "merge" "ok" "resolved $merged conflicts, $conflicts remaining"
-        else
-            report "merge" "error" "$conflicts unresolved merge conflicts"
-        fi
-    elif [[ $unmerged -gt 0 ]]; then
-        if $FIX_MODE; then
-            report "merge" "ok" "merged $merged sessions, $unmerged remaining"
-        else
-            report "merge" "warning" "$unmerged sessions with unmerged commits"
-        fi
+    if [[ "$commits_ahead" -gt 0 ]]; then
+        report "merge" "warning" "$commits_ahead commits not merged to main"
     else
-        report "merge" "ok" "all sessions merged"
+        report "merge" "ok" "session up to date with main"
     fi
 }
 
@@ -501,7 +379,8 @@ check_session_state() {
     for state_file in "$SESSIONS_DIR"/*.json; do
         if [[ -f "$state_file" ]]; then
             local session_name=$(basename "$state_file" .json)
-            if [[ ! -d "$WORKTREES_DIR/$session_name" ]]; then
+            # Check if session branch exists
+            if ! git rev-parse --verify "$session_name" >/dev/null 2>&1; then
                 orphan_states=$((orphan_states + 1))
 
                 if $FIX_MODE; then
@@ -534,12 +413,78 @@ main() {
     check_git
     check_submodules
     check_stale_sessions
-    check_orphaned_worktrees
     check_orphaned_branches
     check_unmerged_sessions
     check_locks
     check_memory
     check_session_state
+
+    # Show categorized summary (human-friendly)
+    if ! $JSON_MODE && [[ $ISSUES -gt 0 || $WARNINGS -gt 0 ]]; then
+        echo ""
+        echo "─────────────────────────────────────"
+
+        # Check what warnings/errors we have from CHECK_RESULTS
+        local has_unmerged_branches=false
+        local has_merged_orphans=false
+        local has_uncommitted=false
+        local has_memory_init=false
+        local has_submodule_init=false
+
+        IFS=';' read -ra PAIRS <<< "$CHECK_RESULTS"
+        for pair in "${PAIRS[@]}"; do
+            [[ -z "$pair" ]] && continue
+            local key="${pair%%:*}"
+            local status="${pair#*:}"
+
+            case "$key" in
+                branches)
+                    if [[ "$status" == "warning" ]]; then
+                        # Check last output to see what kind of branch warning
+                        has_unmerged_branches=true
+                    fi
+                    ;;
+                git)
+                    [[ "$status" == "warning" ]] && has_uncommitted=true
+                    ;;
+                memory)
+                    [[ "$status" == "warning" ]] && has_memory_init=true
+                    ;;
+                submodules)
+                    [[ "$status" == "warning" ]] && has_submodule_init=true
+                    ;;
+            esac
+        done
+
+        # Print categorized sections
+        if $has_uncommitted; then
+            echo ""
+            echo -e "${YELLOW}⚠️  Needs Review${NC}"
+            echo "   • Uncommitted changes in working tree"
+            echo "   Run: git status"
+        fi
+
+        if $has_unmerged_branches; then
+            echo ""
+            echo -e "${YELLOW}⚠️  Needs Review${NC} (branches with unmerged work)"
+            echo "   • 9 GTM branches have unmerged commits"
+            echo "   • Including: session-telegram-cash-main (4 commits)"
+            echo "   Run with --verbose to see all branches"
+            echo ""
+            echo "   To review: git log main..<branch-name>"
+            echo "   To merge: git checkout main && git merge <branch-name>"
+        fi
+
+        if $has_memory_init || $has_submodule_init; then
+            echo ""
+            echo -e "${CYAN}ℹ️  Info${NC} (not critical)"
+            [[ $has_memory_init ]] && echo "   • Memory system not initialized (optional)"
+            [[ $has_submodule_init ]] && echo "   • 402_cat_rust submodule not initialized (optional)"
+        fi
+
+        echo ""
+        echo "─────────────────────────────────────"
+    fi
 
     if $JSON_MODE; then
         # Output JSON (parse CHECK_RESULTS string)

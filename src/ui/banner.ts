@@ -359,7 +359,7 @@ export function showHowItWorksNotice(): void {
   console.log("")
   console.log(theme.text("JFL creates isolated work sessions that sync automatically:"))
   console.log("")
-  console.log(theme.success("  ✓") + theme.text(" Your session runs in its own workspace (git worktree)"))
+  console.log(theme.success("  ✓") + theme.text(" Your session runs in its own branch (isolated workspace)"))
   console.log(theme.success("  ✓") + theme.text(" Changes auto-commit every 2 minutes (never lose work)"))
   console.log(theme.success("  ✓") + theme.text(" Context compounds across sessions (journal + knowledge docs)"))
   console.log(theme.success("  ✓") + theme.text(" Multiple teammates can work in parallel (see who's active)"))
