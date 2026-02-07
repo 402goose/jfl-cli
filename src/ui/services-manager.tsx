@@ -18,6 +18,7 @@ import * as path from 'path';
 interface Service {
   name: string;
   status: 'running' | 'stopped' | 'error';
+  health?: 'healthy' | 'unhealthy' | 'unknown';
   pid?: number;
   port?: number;
   uptime?: string;
@@ -74,6 +75,7 @@ const ServicesManager = () => {
             name: svc.name,
             status: svc.status === 'running' ? 'running' :
                    svc.status === 'stopped' ? 'stopped' : 'error',
+            health: 'unknown', // Will be updated by health check
             pid: svc.pid,
             port: svc.port,
             uptime,
@@ -100,6 +102,58 @@ const ServicesManager = () => {
 
     return () => clearInterval(interval);
   }, []);
+
+  // Periodic health checks
+  useEffect(() => {
+    const runHealthChecks = async () => {
+      if (services.length === 0) return;
+
+      const healthPromises = services.map(async (service) => {
+        // Only check running services with a port
+        if (service.status !== 'running' || !service.port) {
+          return { name: service.name, health: 'unknown' as const };
+        }
+
+        try {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 2000);
+
+          const response = await fetch(`http://localhost:${service.port}/health`, {
+            signal: controller.signal
+          });
+
+          clearTimeout(timeoutId);
+          return {
+            name: service.name,
+            health: response.ok ? 'healthy' as const : 'unhealthy' as const
+          };
+        } catch (error) {
+          return { name: service.name, health: 'unhealthy' as const };
+        }
+      });
+
+      const healthResults = await Promise.all(healthPromises);
+
+      // Update services with health status
+      setServices(prevServices =>
+        prevServices.map(service => {
+          const healthResult = healthResults.find(r => r.name === service.name);
+          return healthResult ? { ...service, health: healthResult.health } : service;
+        })
+      );
+    };
+
+    // Run initial health check after a short delay
+    const initialTimeout = setTimeout(runHealthChecks, 1000);
+
+    // Run health checks every 8 seconds
+    const interval = setInterval(runHealthChecks, 8000);
+
+    return () => {
+      clearTimeout(initialTimeout);
+      clearInterval(interval);
+    };
+  }, [services.length]);
 
   // Keyboard controls
   useInput((input, key) => {
@@ -261,15 +315,13 @@ const DashboardView: React.FC<{ services: Service[]; selectedIndex: number }> = 
         <Text dimColor>          </Text>
         <Text bold dimColor>STATUS</Text>
         <Text dimColor>     </Text>
+        <Text bold dimColor>HEALTH</Text>
+        <Text dimColor>    </Text>
         <Text bold dimColor>PID</Text>
         <Text dimColor>      </Text>
         <Text bold dimColor>PORT</Text>
         <Text dimColor>    </Text>
         <Text bold dimColor>UPTIME</Text>
-        <Text dimColor>    </Text>
-        <Text bold dimColor>MEM</Text>
-        <Text dimColor>     </Text>
-        <Text bold dimColor>CPU</Text>
       </Box>
 
       {services.length === 0 ? (
@@ -298,6 +350,11 @@ const ServiceRow: React.FC<{ service: Service; selected: boolean }> = ({ service
   const statusIcon = service.status === 'running' ? '●' :
                     service.status === 'stopped' ? '○' : '✗';
 
+  const healthColor = service.health === 'healthy' ? 'green' :
+                     service.health === 'unhealthy' ? 'red' : 'gray';
+  const healthIcon = service.health === 'healthy' ? '✓' :
+                    service.health === 'unhealthy' ? '✗' : '?';
+
   return (
     <Box>
       <Text color={selected ? 'cyan' : undefined} bold={selected}>
@@ -307,12 +364,13 @@ const ServiceRow: React.FC<{ service: Service; selected: boolean }> = ({ service
       <Text color={statusColor}>
         {statusIcon} {service.status.padEnd(10)}
       </Text>
+      <Text color={healthColor}>
+        {healthIcon} {(service.health || 'unknown').padEnd(10)}
+      </Text>
       <Text dimColor>
         {(service.pid?.toString() || 'N/A').padEnd(8)}
         {(service.port?.toString() || 'N/A').padEnd(8)}
         {(service.uptime || 'N/A').padEnd(10)}
-        {(service.memory || 'N/A').padEnd(8)}
-        {(service.cpu || 'N/A').padEnd(6)}
       </Text>
     </Box>
   );
