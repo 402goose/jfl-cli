@@ -15,6 +15,7 @@ import * as path from "path"
 import * as http from "http"
 import * as readline from "readline"
 import { homedir } from "os"
+import { fileURLToPath } from "url"
 
 const DEFAULT_PORT = 4242
 const PID_FILE = ".jfl/context-hub.pid"
@@ -863,8 +864,9 @@ export async function contextHubCommand(
 
     case "logs": {
       // Launch TUI log viewer
-      const { spawn: spawnChild } = require("child_process")
-      const logViewer = spawnChild(process.execPath, [
+      const __filename = fileURLToPath(import.meta.url)
+      const __dirname = path.dirname(__filename)
+      const logViewer = spawn(process.execPath, [
         path.join(__dirname, "../ui/context-hub-logs.js")
       ], {
         stdio: "inherit",
