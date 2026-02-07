@@ -1,1 +1,0 @@
-/bin/sh: ./product/scripts/session/worktree-session.sh: No such file or directory
