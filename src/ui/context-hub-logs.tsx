@@ -19,10 +19,18 @@ interface LogEntry {
   type: 'info' | 'error' | 'warn' | 'success';
 }
 
+interface CLITool {
+  name: string;
+  command: string;
+  available: boolean;
+  version?: string;
+}
+
 const ContextHubLogs = () => {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [status, setStatus] = useState<'running' | 'stopped' | 'unknown'>('unknown');
   const [pid, setPid] = useState<number | null>(null);
+  const [tools, setTools] = useState<CLITool[]>([]);
 
   // Get project root
   const projectRoot = process.cwd();
@@ -39,6 +47,55 @@ const ContextHubLogs = () => {
         setStatus('stopped');
       }
     });
+
+    // Check available CLI tools
+    const cliTools = [
+      { name: 'gh', command: 'gh --version' },
+      { name: 'fly', command: 'fly version' },
+      { name: 'vercel', command: 'vercel --version' },
+      { name: 'supabase', command: 'supabase --version' },
+      { name: 'docker', command: 'docker --version' },
+      { name: 'jfl', command: 'jfl --version' },
+      { name: 'git', command: 'git --version' },
+      { name: 'node', command: 'node --version' },
+    ];
+
+    const checkTools = async () => {
+      const results: CLITool[] = [];
+
+      for (const tool of cliTools) {
+        exec(`which ${tool.name}`, (error, stdout) => {
+          const available = !error && stdout.trim().length > 0;
+
+          if (available) {
+            // Get version
+            exec(tool.command, (vErr, vOut) => {
+              const version = vErr ? undefined : vOut.trim().split('\n')[0];
+              results.push({
+                name: tool.name,
+                command: tool.command,
+                available: true,
+                version
+              });
+              if (results.length === cliTools.length) {
+                setTools(results.sort((a, b) => a.name.localeCompare(b.name)));
+              }
+            });
+          } else {
+            results.push({
+              name: tool.name,
+              command: tool.command,
+              available: false
+            });
+            if (results.length === cliTools.length) {
+              setTools(results.sort((a, b) => a.name.localeCompare(b.name)));
+            }
+          }
+        });
+      }
+    };
+
+    checkTools();
 
     // Watch log file
     if (!fs.existsSync(logFile)) {
@@ -83,10 +140,34 @@ const ContextHubLogs = () => {
         )}
       </Box>
 
-      <Box flexDirection="column" marginTop={1}>
-        {logs.map((log, i) => (
-          <LogLine key={i} entry={log} />
-        ))}
+      <Box flexDirection="row" marginTop={1}>
+        {/* Logs section */}
+        <Box flexDirection="column" flexGrow={1} marginRight={1}>
+          {logs.map((log, i) => (
+            <LogLine key={i} entry={log} />
+          ))}
+        </Box>
+
+        {/* CLI Tools sidebar */}
+        <Box flexDirection="column" width={25} borderStyle="single" borderColor="gray" paddingX={1}>
+          <Text bold dimColor>Available CLIs</Text>
+          <Text dimColor>───────────────────</Text>
+          {tools.length === 0 ? (
+            <Text dimColor>Checking...</Text>
+          ) : (
+            tools.map((tool, i) => (
+              <Box key={i} marginTop={i > 0 ? 0 : 0}>
+                <Text color={tool.available ? 'green' : 'red'}>
+                  {tool.available ? '✓' : '✗'}
+                </Text>
+                <Text dimColor> </Text>
+                <Text color={tool.available ? undefined : 'dim'}>
+                  {tool.name}
+                </Text>
+              </Box>
+            ))
+          )}
+        </Box>
       </Box>
 
       <Box marginTop={1} borderStyle="single" borderColor="gray" paddingX={1}>
