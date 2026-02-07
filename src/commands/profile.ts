@@ -2,6 +2,7 @@ import chalk from "chalk"
 import * as p from "@clack/prompts"
 import { existsSync, readFileSync, writeFileSync } from "fs"
 import Conf from "conf"
+import Anthropic from "@anthropic-ai/sdk"
 
 const config = new Conf({ projectName: "jfl" })
 
@@ -47,7 +48,7 @@ export interface ProfileData {
   }
 }
 
-export async function profileCommand(action?: string, options?: { file?: string }) {
+export async function profileCommand(action?: string, options?: { file?: string; generate?: boolean }) {
   switch (action) {
     case "show":
       return showProfile()
@@ -57,6 +58,8 @@ export async function profileCommand(action?: string, options?: { file?: string 
       return exportProfile(options?.file)
     case "import":
       return importProfile(options?.file)
+    case "generate":
+      return generateClaudeMd(options?.file)
     default:
       return setProfile()
   }
@@ -479,6 +482,127 @@ async function importProfile(file?: string) {
   } catch (err: any) {
     console.log(chalk.red(`\n❌ Failed to import: ${err.message}\n`))
   }
+}
+
+async function generateClaudeMd(outputFile?: string) {
+  const apiKey = process.env.ANTHROPIC_API_KEY
+
+  if (!apiKey) {
+    console.log(chalk.red("\n❌ ANTHROPIC_API_KEY environment variable required"))
+    console.log(chalk.gray("   Get your key from: https://console.anthropic.com/"))
+    console.log(chalk.gray("   Then run: export ANTHROPIC_API_KEY=sk-...\n"))
+    return
+  }
+
+  const profile = config.get("profile") as ProfileData | undefined
+
+  if (!profile) {
+    console.log(chalk.yellow("\n⚠️  No profile set. Run 'jfl profile' first\n"))
+    return
+  }
+
+  console.log(chalk.cyan("\n⚡ Generating CLAUDE.md using Claude API...\n"))
+
+  try {
+    const anthropic = new Anthropic({ apiKey })
+
+    const prompt = buildClaudePrompt(profile)
+
+    const message = await anthropic.messages.create({
+      model: "claude-sonnet-4-20250514",
+      max_tokens: 4096,
+      messages: [
+        {
+          role: "user",
+          content: prompt,
+        },
+      ],
+    })
+
+    const claudeContent =
+      message.content[0].type === "text" ? message.content[0].text : ""
+
+    const output = outputFile || "CLAUDE.md"
+    writeFileSync(output, claudeContent, "utf-8")
+
+    console.log(chalk.green(`✓ CLAUDE.md generated successfully`))
+    console.log(chalk.gray(`  Saved to: ${output}\n`))
+  } catch (err: any) {
+    console.log(chalk.red(`\n❌ Failed to generate: ${err.message}\n`))
+  }
+}
+
+function buildClaudePrompt(profile: ProfileData): string {
+  const parts: string[] = []
+
+  parts.push("You are helping create a personalized CLAUDE.md file. This file will live in their project root and will tell Claude Code how to work with them effectively.")
+  parts.push("\n## Their Profile:\n")
+
+  if (profile.style) {
+    parts.push(`**Communication Style:** ${profile.style.precision} and ${profile.style.jargon}`)
+    parts.push(`**Comments:** ${profile.style.comments}`)
+    parts.push(`**Documentation:** ${profile.style.documentation}`)
+    parts.push("")
+  }
+
+  if (profile.languages?.primary) {
+    parts.push(`**Primary Languages:** ${profile.languages.primary.join(", ")}`)
+    parts.push("")
+  }
+
+  if (profile.frontend) {
+    parts.push("**Frontend:**")
+    if (profile.frontend.framework) parts.push(`- Framework: ${profile.frontend.framework}`)
+    if (profile.frontend.styling) parts.push(`- Styling: ${profile.frontend.styling.join(", ")}`)
+    if (profile.frontend.hosting) parts.push(`- Hosting: ${profile.frontend.hosting}`)
+    parts.push("")
+  }
+
+  if (profile.backend) {
+    parts.push("**Backend:**")
+    if (profile.backend.databases) parts.push(`- Databases: ${profile.backend.databases.join(", ")}`)
+    if (profile.backend.preferences) parts.push(`- Preferences: ${profile.backend.preferences.join(", ")}`)
+    parts.push("")
+  }
+
+  if (profile.infrastructure) {
+    parts.push("**Infrastructure:**")
+    if (profile.infrastructure.primary) parts.push(`- Primary: ${profile.infrastructure.primary}`)
+    if (profile.infrastructure.tools) parts.push(`- Tools: ${profile.infrastructure.tools.join(", ")}`)
+    if (profile.infrastructure.cicd) parts.push(`- CI/CD: ${profile.infrastructure.cicd}`)
+    parts.push("")
+  }
+
+  if (profile.git) {
+    parts.push("**Git Workflow:**")
+    if (profile.git.branches) {
+      parts.push(`- RC branch: ${profile.git.branches.rc}`)
+      parts.push(`- Stable branch: ${profile.git.branches.stable}`)
+    }
+    parts.push(`- Release notes: ${profile.git.releaseNotes ? "yes" : "no"}`)
+    parts.push("")
+  }
+
+  parts.push("\n## Instructions:\n")
+  parts.push("Create a comprehensive CLAUDE.md file that includes:")
+  parts.push("")
+  parts.push("1. **UNIX Philosophy** - Include the standard UNIX philosophy section")
+  parts.push("2. **How to Work With Me** - Communication style, preferences, biases")
+  parts.push("3. **Tech Stack** - Their specific stack and tools")
+  parts.push("4. **Workflow Rules** - Specific behavioral rules based on their preferences")
+  parts.push("5. **Git Workflow** - Branch model and release practices")
+  parts.push("")
+  parts.push("Make it:")
+  parts.push("- **Behavioral and actionable** - Focus on HOW Claude should work with them")
+  parts.push("- **Specific to their workflow** - Reference their actual tools and preferences")
+  parts.push("- **Well-structured** with clear markdown sections")
+  parts.push("- **Concise** - No fluff, just rules and context")
+  parts.push("")
+  parts.push("**CRITICAL:** This is instructions for Claude Code on how to behave when working with this person. Focus on rules, preferences, and workflow.")
+  parts.push("")
+  parts.push("Generate the CLAUDE.md file now. Return ONLY the markdown content, no preamble.")
+
+  return parts.join("\n")
 }
 
 // Helper to get profile for other commands

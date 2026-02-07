@@ -141,8 +141,8 @@ program
 program
   .command("profile [action]")
   .description("Manage your JFL profile (stored in config)")
-  .argument("[action]", "show, edit, export, import")
-  .option("-f, --file <path>", "File path for export/import")
+  .argument("[action]", "show, edit, export, import, generate")
+  .option("-f, --file <path>", "File path for export/import/generate output")
   .action(async (action, options) => {
     await profileCommand(action, options)
   })
@@ -634,6 +634,7 @@ program
     console.log("    jfl repair            Repair missing .jfl directory")
     console.log("    jfl update            Pull latest JFL updates")
     console.log("    jfl profile           Manage your profile")
+    console.log("    jfl profile generate  Generate CLAUDE.md w/ AI")
     console.log("    jfl hud               Project dashboard")
     console.log("    jfl status            Project status")
     console.log("    jfl onboard           Onboard service as agent")
