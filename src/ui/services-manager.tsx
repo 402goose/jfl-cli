@@ -9,7 +9,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { render, Box, Text, useInput, useApp } from 'ink';
+import { render, Box, Text, useInput, useApp, useStdout } from 'ink';
 import { exec } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -24,6 +24,7 @@ interface Service {
   memory?: string;
   cpu?: string;
   description?: string;
+  log_path?: string;
 }
 
 type View = 'dashboard' | 'logs' | 'chat' | 'add';
@@ -36,42 +37,62 @@ const ServicesManager = () => {
   const [chatMessages, setChatMessages] = useState<string[]>([]);
   const [input, setInput] = useState('');
   const { exit } = useApp();
+  const { stdout } = useStdout();
+  const terminalHeight = (stdout?.rows || 24) - 2; // Leave 2 lines of breathing room
 
-  // Load services
+  // Load services from Service Manager API
   useEffect(() => {
-    const loadServices = () => {
-      exec('jfl services list', (error, stdout) => {
-        if (error) {
+    const loadServices = async () => {
+      try {
+        // Check if Service Manager is running
+        const healthResponse = await fetch('http://localhost:3401/health');
+        if (!healthResponse.ok) {
+          console.error('Service Manager not responding. Start it with:');
+          console.error('  jfl service-manager start');
           setServices([]);
           return;
         }
 
-        // Parse service list
-        const lines = stdout.split('\n').filter(l => l.trim());
-        const parsed: Service[] = [];
+        // Fetch services from API
+        const response = await fetch('http://localhost:3401/services');
+        const data = await response.json();
 
-        for (const line of lines) {
-          // Example format: "service-name  ● running  1234  8080  2h30m  128MB  1.2%  Description"
-          const parts = line.trim().split(/\s{2,}/);
-          if (parts.length >= 2) {
-            const status = parts[1]?.includes('running') ? 'running' :
-                          parts[1]?.includes('stopped') ? 'stopped' : 'error';
-
-            parsed.push({
-              name: parts[0],
-              status,
-              pid: parts[2] ? parseInt(parts[2]) : undefined,
-              port: parts[3] ? parseInt(parts[3]) : undefined,
-              uptime: parts[4],
-              memory: parts[5],
-              cpu: parts[6],
-              description: parts[7]
-            });
+        // Map API response to TUI format
+        const mapped: Service[] = data.services.map((svc: any) => {
+          // Calculate uptime if service is running
+          let uptime: string | undefined;
+          if (svc.started_at && svc.status === 'running') {
+            const startTime = new Date(svc.started_at);
+            const now = new Date();
+            const diffMs = now.getTime() - startTime.getTime();
+            const hours = Math.floor(diffMs / (1000 * 60 * 60));
+            const minutes = Math.floor((diffMs % (1000 * 60 * 60)) / (1000 * 60));
+            uptime = hours > 0 ? `${hours}h${minutes}m` : `${minutes}m`;
           }
-        }
 
-        setServices(parsed);
-      });
+          return {
+            name: svc.name,
+            status: svc.status === 'running' ? 'running' :
+                   svc.status === 'stopped' ? 'stopped' : 'error',
+            pid: svc.pid,
+            port: svc.port,
+            uptime,
+            // Memory and CPU stats not available yet from Service Manager
+            // Could be added later via process stats
+            memory: undefined,
+            cpu: undefined,
+            description: svc.description,
+            log_path: svc.log_path
+          };
+        });
+
+        setServices(mapped);
+      } catch (error) {
+        console.error('Failed to fetch services:', error);
+        console.error('Make sure Service Manager is running:');
+        console.error('  jfl service-manager start');
+        setServices([]);
+      }
     };
 
     loadServices();
@@ -82,7 +103,16 @@ const ServicesManager = () => {
 
   // Keyboard controls
   useInput((input, key) => {
-    if (key.escape || (input === 'q' && view === 'dashboard')) {
+    // If not in dashboard, ESC goes back to dashboard
+    if (view !== 'dashboard' && key.escape) {
+      setView('dashboard');
+      setLogLines([]);
+      setChatMessages([]);
+      return;
+    }
+
+    // If in dashboard, ESC or q exits the app
+    if (view === 'dashboard' && (key.escape || input === 'q')) {
       exit();
       return;
     }
@@ -108,18 +138,14 @@ const ServicesManager = () => {
       } else if (input === 'd') {
         removeService();
       }
-    } else if (key.escape) {
-      setView('dashboard');
-      setLogLines([]);
-      setChatMessages([]);
     }
   });
 
   const loadLogs = () => {
     const service = services[selectedIndex];
-    if (!service) return;
+    if (!service || !service.log_path) return;
 
-    const logFile = `.jfl/logs/${service.name}.log`;
+    const logFile = service.log_path;
     if (fs.existsSync(logFile)) {
       const content = fs.readFileSync(logFile, 'utf-8');
       const lines = content.split('\n').slice(-50);
@@ -135,36 +161,60 @@ const ServicesManager = () => {
     }
   };
 
-  const startService = () => {
+  const startService = async () => {
     const service = services[selectedIndex];
     if (service) {
-      exec(`jfl services start ${service.name}`, () => {});
+      try {
+        await fetch(`http://localhost:3401/services/${service.name}/start`, {
+          method: 'POST'
+        });
+      } catch (error) {
+        console.error('Failed to start service:', error);
+      }
     }
   };
 
-  const stopService = () => {
+  const stopService = async () => {
     const service = services[selectedIndex];
     if (service) {
-      exec(`jfl services stop ${service.name}`, () => {});
+      try {
+        await fetch(`http://localhost:3401/services/${service.name}/stop`, {
+          method: 'POST'
+        });
+      } catch (error) {
+        console.error('Failed to stop service:', error);
+      }
     }
   };
 
-  const restartService = () => {
+  const restartService = async () => {
     const service = services[selectedIndex];
     if (service) {
-      exec(`jfl services restart ${service.name}`, () => {});
+      try {
+        await fetch(`http://localhost:3401/services/${service.name}/restart`, {
+          method: 'POST'
+        });
+      } catch (error) {
+        console.error('Failed to restart service:', error);
+      }
     }
   };
 
-  const removeService = () => {
+  const removeService = async () => {
     const service = services[selectedIndex];
     if (service) {
-      exec(`jfl services remove ${service.name}`, () => {});
+      try {
+        await fetch(`http://localhost:3401/services/${service.name}`, {
+          method: 'DELETE'
+        });
+      } catch (error) {
+        console.error('Failed to remove service:', error);
+      }
     }
   };
 
   return (
-    <Box flexDirection="column" padding={1}>
+    <Box flexDirection="column" height={terminalHeight}>
       {/* Header */}
       <Box borderStyle="double" borderColor="cyan" paddingX={2}>
         <Text bold color="cyan">⚡ JFL Services Manager</Text>
@@ -175,7 +225,7 @@ const ServicesManager = () => {
       </Box>
 
       {/* Main Content */}
-      <Box flexDirection="column" marginTop={1}>
+      <Box flexDirection="column" flexGrow={1}>
         {view === 'dashboard' && <DashboardView services={services} selectedIndex={selectedIndex} />}
         {view === 'logs' && <LogsView service={services[selectedIndex]} lines={logLines} />}
         {view === 'chat' && <ChatView service={services[selectedIndex]} messages={chatMessages} />}
@@ -183,7 +233,7 @@ const ServicesManager = () => {
       </Box>
 
       {/* Footer / Controls */}
-      <Box marginTop={1} borderStyle="single" borderColor="gray" paddingX={1}>
+      <Box borderStyle="single" borderColor="gray" paddingX={1}>
         {view === 'dashboard' && (
           <Text dimColor>
             ↑↓: Select | <Text color="green">s</Text>: Start | <Text color="red">x</Text>: Stop |
@@ -275,12 +325,12 @@ const LogsView: React.FC<{ service?: Service; lines: string[] }> = ({ service, l
   }
 
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" height="100%">
       <Box borderStyle="round" borderColor="yellow" paddingX={1} marginBottom={1}>
         <Text bold color="yellow">📋 Logs: {service.name}</Text>
       </Box>
 
-      <Box flexDirection="column" height={30}>
+      <Box flexDirection="column" flexGrow={1} overflow="hidden">
         {lines.length === 0 ? (
           <Text dimColor>No logs available</Text>
         ) : (
@@ -300,12 +350,12 @@ const ChatView: React.FC<{ service?: Service; messages: string[] }> = ({ service
   }
 
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" height="100%">
       <Box borderStyle="round" borderColor="magenta" paddingX={1} marginBottom={1}>
         <Text bold color="magenta">💬 Chat with {service.name} agent</Text>
       </Box>
 
-      <Box flexDirection="column" height={25}>
+      <Box flexDirection="column" flexGrow={1} overflow="hidden">
         {messages.length === 0 ? (
           <Box flexDirection="column">
             <Text dimColor>Start a conversation with the {service.name} agent.</Text>
