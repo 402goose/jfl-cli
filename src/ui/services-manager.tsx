@@ -36,6 +36,8 @@ const ServicesManager = () => {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [view, setView] = useState<View>('dashboard');
   const [logLines, setLogLines] = useState<string[]>([]);
+  const [logScrollOffset, setLogScrollOffset] = useState(0);
+  const [autoScrollLogs, setAutoScrollLogs] = useState(true);
   const [chatMessages, setChatMessages] = useState<string[]>([]);
   const [input, setInput] = useState('');
   const { exit } = useApp();
@@ -46,17 +48,20 @@ const ServicesManager = () => {
   useEffect(() => {
     const loadServices = async () => {
       try {
+        // TODO: Make port configurable (currently 3402 due to PM2 conflict on 3401)
+        const SERVICE_MANAGER_PORT = 3402;
+
         // Check if Service Manager is running
-        const healthResponse = await fetch('http://localhost:3401/health');
+        const healthResponse = await fetch(`http://localhost:${SERVICE_MANAGER_PORT}/health`);
         if (!healthResponse.ok) {
           console.error('Service Manager not responding. Start it with:');
-          console.error('  jfl service-manager start');
+          console.error(`  jfl service-manager start --port ${SERVICE_MANAGER_PORT}`);
           setServices([]);
           return;
         }
 
         // Fetch services from API
-        const response = await fetch('http://localhost:3401/services');
+        const response = await fetch(`http://localhost:${SERVICE_MANAGER_PORT}/services`);
         const data = await response.json();
 
         // Map API response to TUI format
@@ -163,6 +168,8 @@ const ServicesManager = () => {
     if (view !== 'dashboard' && key.escape) {
       setView('dashboard');
       setLogLines([]);
+      setLogScrollOffset(0);
+      setAutoScrollLogs(true);
       setChatMessages([]);
       return;
     }
@@ -180,6 +187,8 @@ const ServicesManager = () => {
         setSelectedIndex(Math.min(services.length - 1, selectedIndex + 1));
       } else if (input === 'l') {
         setView('logs');
+        setLogScrollOffset(0);
+        setAutoScrollLogs(true);
         loadLogs();
       } else if (input === 'c') {
         setView('chat');
@@ -194,6 +203,39 @@ const ServicesManager = () => {
       } else if (input === 'd') {
         removeService();
       }
+    } else if (view === 'logs') {
+      // Scroll controls for logs view
+      const visibleHeight = terminalHeight - 6; // Account for header/footer
+      const maxScroll = Math.max(0, logLines.length - visibleHeight);
+
+      if (key.upArrow) {
+        setLogScrollOffset(Math.max(0, logScrollOffset - 1));
+        setAutoScrollLogs(false); // Disable auto-scroll when manually scrolling
+      } else if (key.downArrow) {
+        const newOffset = Math.min(maxScroll, logScrollOffset + 1);
+        setLogScrollOffset(newOffset);
+        // Re-enable auto-scroll if we've scrolled to the bottom
+        if (newOffset === maxScroll) {
+          setAutoScrollLogs(true);
+        }
+      } else if (key.pageUp) {
+        setLogScrollOffset(Math.max(0, logScrollOffset - visibleHeight));
+        setAutoScrollLogs(false);
+      } else if (key.pageDown) {
+        const newOffset = Math.min(maxScroll, logScrollOffset + visibleHeight);
+        setLogScrollOffset(newOffset);
+        if (newOffset === maxScroll) {
+          setAutoScrollLogs(true);
+        }
+      } else if (input === 'g') {
+        // Go to top
+        setLogScrollOffset(0);
+        setAutoScrollLogs(false);
+      } else if (input === 'G') {
+        // Go to bottom (and re-enable auto-scroll)
+        setLogScrollOffset(maxScroll);
+        setAutoScrollLogs(true);
+      }
     }
   });
 
@@ -204,16 +246,34 @@ const ServicesManager = () => {
     const logFile = service.log_path;
     if (fs.existsSync(logFile)) {
       const content = fs.readFileSync(logFile, 'utf-8');
-      const lines = content.split('\n').slice(-50);
+      const lines = content.split('\n').filter(line => line.trim().length > 0);
       setLogLines(lines);
 
-      // Watch for updates
+      // Auto-scroll to bottom if enabled
+      if (autoScrollLogs) {
+        const visibleHeight = terminalHeight - 6;
+        setLogScrollOffset(Math.max(0, lines.length - visibleHeight));
+      }
+
+      // Watch for updates and tail the log
       const watcher = fs.watch(logFile, () => {
-        const newContent = fs.readFileSync(logFile, 'utf-8');
-        setLogLines(newContent.split('\n').slice(-50));
+        try {
+          const newContent = fs.readFileSync(logFile, 'utf-8');
+          const newLines = newContent.split('\n').filter(line => line.trim().length > 0);
+          setLogLines(newLines);
+
+          // Auto-scroll to bottom if enabled
+          if (autoScrollLogs) {
+            const visibleHeight = terminalHeight - 6;
+            setLogScrollOffset(Math.max(0, newLines.length - visibleHeight));
+          }
+        } catch (err) {
+          // File might have been rotated or deleted
+        }
       });
 
-      setTimeout(() => watcher.close(), 30000); // Auto-close after 30s
+      // Keep watcher active while in logs view
+      return () => watcher.close();
     }
   };
 
@@ -221,7 +281,8 @@ const ServicesManager = () => {
     const service = services[selectedIndex];
     if (service) {
       try {
-        await fetch(`http://localhost:3401/services/${service.name}/start`, {
+        const SERVICE_MANAGER_PORT = 3402; // TODO: Make configurable
+        await fetch(`http://localhost:${SERVICE_MANAGER_PORT}/services/${service.name}/start`, {
           method: 'POST'
         });
       } catch (error) {
@@ -234,7 +295,8 @@ const ServicesManager = () => {
     const service = services[selectedIndex];
     if (service) {
       try {
-        await fetch(`http://localhost:3401/services/${service.name}/stop`, {
+        const SERVICE_MANAGER_PORT = 3402; // TODO: Make configurable
+        await fetch(`http://localhost:${SERVICE_MANAGER_PORT}/services/${service.name}/stop`, {
           method: 'POST'
         });
       } catch (error) {
@@ -247,7 +309,8 @@ const ServicesManager = () => {
     const service = services[selectedIndex];
     if (service) {
       try {
-        await fetch(`http://localhost:3401/services/${service.name}/restart`, {
+        const SERVICE_MANAGER_PORT = 3402; // TODO: Make configurable
+        await fetch(`http://localhost:${SERVICE_MANAGER_PORT}/services/${service.name}/restart`, {
           method: 'POST'
         });
       } catch (error) {
@@ -260,7 +323,8 @@ const ServicesManager = () => {
     const service = services[selectedIndex];
     if (service) {
       try {
-        await fetch(`http://localhost:3401/services/${service.name}`, {
+        const SERVICE_MANAGER_PORT = 3402; // TODO: Make configurable
+        await fetch(`http://localhost:${SERVICE_MANAGER_PORT}/services/${service.name}`, {
           method: 'DELETE'
         });
       } catch (error) {
@@ -283,7 +347,15 @@ const ServicesManager = () => {
       {/* Main Content */}
       <Box flexDirection="column" flexGrow={1}>
         {view === 'dashboard' && <DashboardView services={services} selectedIndex={selectedIndex} />}
-        {view === 'logs' && <LogsView service={services[selectedIndex]} lines={logLines} />}
+        {view === 'logs' && (
+          <LogsView
+            service={services[selectedIndex]}
+            lines={logLines}
+            scrollOffset={logScrollOffset}
+            autoScroll={autoScrollLogs}
+            visibleHeight={terminalHeight - 6}
+          />
+        )}
         {view === 'chat' && <ChatView service={services[selectedIndex]} messages={chatMessages} />}
         {view === 'add' && <AddServiceView />}
       </Box>
@@ -298,7 +370,14 @@ const ServicesManager = () => {
             <Text color="red">d</Text>: Remove | <Text bold>q</Text>: Quit
           </Text>
         )}
-        {view !== 'dashboard' && (
+        {view === 'logs' && (
+          <Text dimColor>
+            ↑↓: Scroll | <Text color="cyan">PgUp/PgDn</Text>: Page |
+            <Text color="green">g</Text>: Top | <Text color="green">G</Text>: Bottom (tail) |
+            <Text bold>ESC</Text>: Back
+          </Text>
+        )}
+        {view !== 'dashboard' && view !== 'logs' && (
           <Text dimColor>
             <Text bold>ESC</Text>: Back to dashboard
           </Text>
@@ -379,7 +458,13 @@ const ServiceRow: React.FC<{ service: Service; selected: boolean }> = ({ service
 };
 
 // Logs View
-const LogsView: React.FC<{ service?: Service; lines: string[] }> = ({ service, lines }) => {
+const LogsView: React.FC<{
+  service?: Service;
+  lines: string[];
+  scrollOffset: number;
+  autoScroll: boolean;
+  visibleHeight: number;
+}> = ({ service, lines, scrollOffset, autoScroll, visibleHeight }) => {
   if (!service) {
     return <Text dimColor>No service selected</Text>;
   }
@@ -388,6 +473,12 @@ const LogsView: React.FC<{ service?: Service; lines: string[] }> = ({ service, l
                      service.status === 'stopped' ? 'yellow' : 'red';
   const statusIcon = service.status === 'running' ? '●' :
                     service.status === 'stopped' ? '○' : '✗';
+
+  // Calculate visible portion of logs
+  const visibleLines = lines.slice(scrollOffset, scrollOffset + visibleHeight);
+  const totalLines = lines.length;
+  const canScrollUp = scrollOffset > 0;
+  const canScrollDown = scrollOffset + visibleHeight < totalLines;
 
   return (
     <Box flexDirection="column" height="100%">
@@ -407,15 +498,24 @@ const LogsView: React.FC<{ service?: Service; lines: string[] }> = ({ service, l
             <Text>{service.port}</Text>
           </>
         )}
+        <Text dimColor> | </Text>
+        <Text dimColor>Lines: {scrollOffset + 1}-{Math.min(scrollOffset + visibleHeight, totalLines)}/{totalLines}</Text>
+        {autoScroll && <Text color="green"> [TAILING]</Text>}
       </Box>
 
       <Box flexDirection="column" flexGrow={1} overflow="hidden">
+        {canScrollUp && (
+          <Text dimColor backgroundColor="gray">▲ More above (↑/PgUp to scroll, g for top)</Text>
+        )}
         {lines.length === 0 ? (
           <Text dimColor>No logs available</Text>
         ) : (
-          lines.map((line, i) => (
-            <Text key={i}>{line}</Text>
+          visibleLines.map((line, i) => (
+            <Text key={scrollOffset + i}>{line}</Text>
           ))
+        )}
+        {canScrollDown && (
+          <Text dimColor backgroundColor="gray">▼ More below (↓/PgDn to scroll, G for bottom)</Text>
         )}
       </Box>
     </Box>

@@ -10,6 +10,25 @@ interface ContextHubConfig {
 }
 
 /**
+ * Check if context-hub is healthy by pinging health endpoint
+ */
+async function isContextHubHealthy(port: number): Promise<boolean> {
+  try {
+    const controller = new AbortController()
+    const timeoutId = setTimeout(() => controller.abort(), 2000)
+
+    const response = await fetch(`http://localhost:${port}/health`, {
+      signal: controller.signal
+    })
+
+    clearTimeout(timeoutId)
+    return response.ok
+  } catch {
+    return false
+  }
+}
+
+/**
  * Ensure Context Hub is running
  * Silently starts it if not running, respecting user preferences
  */
@@ -25,7 +44,14 @@ export async function ensureContextHub(): Promise<void> {
   const port = contextHubConfig?.port ?? 4242
 
   try {
-    // Silently ensure it's running
+    // First check if it's already running AND healthy
+    const healthy = await isContextHubHealthy(port)
+    if (healthy) {
+      // Already running and responding - nothing to do
+      return
+    }
+
+    // Not healthy - ensure it's running (will clean up orphaned processes if needed)
     await contextHubCommand("ensure", { port, global: mode === "global" })
   } catch (err) {
     // Silently fail - context-hub is optional infrastructure

@@ -112,6 +112,18 @@ program
   })
 
 program
+  .command("service-manager")
+  .description("Manage Service Manager API daemon")
+  .argument("[action]", "start, stop, restart, status, serve")
+  .option("-p, --port <port>", "Port to run on (default: 3401)", "3401")
+  .action(async (action, options) => {
+    const { serviceManagerCommand } = await import("./commands/service-manager.js")
+    await serviceManagerCommand(action, {
+      port: parseInt(options.port, 10)
+    })
+  })
+
+program
   .command("services")
   .description("Manage services across all GTM projects (interactive TUI or CLI)")
   .argument("[action]", "list, status, start, stop, or leave empty for TUI")
