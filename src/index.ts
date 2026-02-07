@@ -115,11 +115,11 @@ program
   .command("service-manager")
   .description("Manage Service Manager API daemon")
   .argument("[action]", "start, stop, restart, status, serve")
-  .option("-p, --port <port>", "Port to run on (default: 3401)", "3401")
+  .option("-p, --port <port>", "Port to run on (default: from config or 3402)")
   .action(async (action, options) => {
     const { serviceManagerCommand } = await import("./commands/service-manager.js")
     await serviceManagerCommand(action, {
-      port: parseInt(options.port, 10)
+      port: options.port ? parseInt(options.port, 10) : undefined
     })
   })
 

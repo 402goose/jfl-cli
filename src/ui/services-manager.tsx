@@ -13,6 +13,7 @@ import { render, Box, Text, useInput, useApp, useStdout } from 'ink';
 import { exec } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
+import { homedir } from 'os';
 
 // Types
 interface Service {
@@ -31,6 +32,31 @@ interface Service {
 
 type View = 'dashboard' | 'logs' | 'chat' | 'add';
 
+interface ServiceManagerConfig {
+  port: number;
+}
+
+const DEFAULT_PORT = 3402;
+const CONFIG_FILE = path.join(homedir(), '.jfl', 'service-manager.json');
+
+function getServiceManagerPort(): number {
+  if (process.env.JFL_SERVICE_MANAGER_PORT) {
+    return parseInt(process.env.JFL_SERVICE_MANAGER_PORT, 10);
+  }
+
+  try {
+    if (fs.existsSync(CONFIG_FILE)) {
+      const content = fs.readFileSync(CONFIG_FILE, 'utf-8');
+      const config: ServiceManagerConfig = JSON.parse(content);
+      return config.port;
+    }
+  } catch {
+    // Fallback to default
+  }
+
+  return DEFAULT_PORT;
+}
+
 const ServicesManager = () => {
   const [services, setServices] = useState<Service[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -48,8 +74,7 @@ const ServicesManager = () => {
   useEffect(() => {
     const loadServices = async () => {
       try {
-        // TODO: Make port configurable (currently 3402 due to PM2 conflict on 3401)
-        const SERVICE_MANAGER_PORT = 3402;
+        const SERVICE_MANAGER_PORT = getServiceManagerPort();
 
         // Check if Service Manager is running
         const healthResponse = await fetch(`http://localhost:${SERVICE_MANAGER_PORT}/health`);
@@ -281,7 +306,7 @@ const ServicesManager = () => {
     const service = services[selectedIndex];
     if (service) {
       try {
-        const SERVICE_MANAGER_PORT = 3402; // TODO: Make configurable
+        const SERVICE_MANAGER_PORT = getServiceManagerPort();
         await fetch(`http://localhost:${SERVICE_MANAGER_PORT}/services/${service.name}/start`, {
           method: 'POST'
         });
@@ -295,7 +320,7 @@ const ServicesManager = () => {
     const service = services[selectedIndex];
     if (service) {
       try {
-        const SERVICE_MANAGER_PORT = 3402; // TODO: Make configurable
+        const SERVICE_MANAGER_PORT = getServiceManagerPort();
         await fetch(`http://localhost:${SERVICE_MANAGER_PORT}/services/${service.name}/stop`, {
           method: 'POST'
         });
@@ -309,7 +334,7 @@ const ServicesManager = () => {
     const service = services[selectedIndex];
     if (service) {
       try {
-        const SERVICE_MANAGER_PORT = 3402; // TODO: Make configurable
+        const SERVICE_MANAGER_PORT = getServiceManagerPort();
         await fetch(`http://localhost:${SERVICE_MANAGER_PORT}/services/${service.name}/restart`, {
           method: 'POST'
         });
@@ -323,7 +348,7 @@ const ServicesManager = () => {
     const service = services[selectedIndex];
     if (service) {
       try {
-        const SERVICE_MANAGER_PORT = 3402; // TODO: Make configurable
+        const SERVICE_MANAGER_PORT = getServiceManagerPort();
         await fetch(`http://localhost:${SERVICE_MANAGER_PORT}/services/${service.name}`, {
           method: 'DELETE'
         });

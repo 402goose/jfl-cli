@@ -742,14 +742,20 @@ async function startDaemon(projectRoot: string, port: number): Promise<{ success
   // Wait a moment to ensure process started
   await new Promise(resolve => setTimeout(resolve, 500))
 
-  // Write PID file
+  // Write PID file EARLY to avoid race conditions
   if (child.pid) {
-    // Verify process is still running
+    // Write PID file immediately
+    fs.writeFileSync(pidFile, String(child.pid))
+
+    // Then verify process is still running
     try {
       process.kill(child.pid, 0)
-      fs.writeFileSync(pidFile, String(child.pid))
+      // Give it a bit more time to be ready
+      await new Promise(resolve => setTimeout(resolve, 300))
       return { success: true, message: `Started (PID: ${child.pid}). Token: ${token.slice(0, 8)}...` }
     } catch {
+      // Process died, clean up PID file
+      fs.unlinkSync(pidFile)
       return { success: false, message: "Process started but immediately exited" }
     }
   }
@@ -893,21 +899,48 @@ export async function contextHubCommand(
     case "ensure": {
       const status = isRunning(projectRoot)
       if (status.running) {
-        // Already running, nothing to do
-        return
+        // Already running, verify it's healthy
+        try {
+          const response = await fetch(`http://localhost:${port}/health`, {
+            signal: AbortSignal.timeout(2000)
+          })
+          if (response.ok) {
+            // Healthy and running, nothing to do
+            return
+          }
+        } catch {
+          // Process exists but not responding, fall through to cleanup
+        }
       }
 
       // Check if port is blocked by orphaned process
       const portInUse = await isPortInUse(port)
       if (portInUse) {
-        // Port is in use but no PID file - orphaned process
-        // Try to find and kill it
+        // Port is in use - check if it's actually Context Hub
+        try {
+          const response = await fetch(`http://localhost:${port}/health`, {
+            signal: AbortSignal.timeout(2000)
+          })
+          if (response.ok) {
+            // It's a healthy Context Hub but PID file is missing/wrong
+            // Don't kill it - just return
+            return
+          }
+        } catch {
+          // Process on port is not responding to health check
+          // Only kill if we're confident it's not a Context Hub
+        }
+
+        // Port in use but not responding - try to clean up
         try {
           const lsofOutput = execSync(`lsof -ti :${port}`, { encoding: 'utf-8' }).trim()
           if (lsofOutput) {
             const orphanedPid = parseInt(lsofOutput.split('\n')[0], 10)
-            process.kill(orphanedPid, 'SIGTERM')
-            await new Promise(resolve => setTimeout(resolve, 500)) // Wait for cleanup
+            // Only kill if it's different from our tracked PID
+            if (!status.pid || orphanedPid !== status.pid) {
+              process.kill(orphanedPid, 'SIGTERM')
+              await new Promise(resolve => setTimeout(resolve, 500)) // Wait for cleanup
+            }
           }
         } catch {
           // lsof failed or process already gone
@@ -953,12 +986,16 @@ export async function contextHubCommand(
       })
 
       // Handle shutdown gracefully
-      const shutdown = () => {
+      const shutdown = (signal: string) => {
         if (!isListening) {
           // Server never started, just exit
           process.exit(0)
           return
         }
+        // Log who sent the signal for debugging
+        const stack = new Error().stack
+        console.log(`[${new Date().toISOString()}] Received ${signal}`)
+        console.log(`PID: ${process.pid}, Parent PID: ${process.ppid}`)
         console.log("Shutting down...")
         server.close(() => {
           console.log("Server closed")
@@ -971,8 +1008,8 @@ export async function contextHubCommand(
         }, 5000)
       }
 
-      process.on("SIGTERM", shutdown)
-      process.on("SIGINT", shutdown)
+      process.on("SIGTERM", () => shutdown("SIGTERM"))
+      process.on("SIGINT", () => shutdown("SIGINT"))
 
       // Keep process alive with heartbeat
       const heartbeat = setInterval(() => {

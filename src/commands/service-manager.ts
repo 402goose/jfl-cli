@@ -19,14 +19,19 @@ import { exec } from "child_process"
 
 const execAsync = promisify(exec)
 
-const DEFAULT_PORT = 3401
+const DEFAULT_PORT = 3402
 const PID_FILE = ".jfl/service-manager.pid"
 const LOG_FILE = ".jfl/logs/service-manager.log"
+const CONFIG_FILE = path.join(homedir(), ".jfl", "service-manager.json")
 const GLOBAL_SERVICES_FILE = path.join(homedir(), ".jfl", "services.json")
 
 // ============================================================================
 // Types
 // ============================================================================
+
+interface ServiceManagerConfig {
+  port: number
+}
 
 interface Service {
   name: string
@@ -57,6 +62,40 @@ interface ServiceStatus {
 interface ServicesConfig {
   version: string
   services: Record<string, Service>
+}
+
+// ============================================================================
+// Config Management
+// ============================================================================
+
+function loadConfig(): ServiceManagerConfig {
+  if (!fs.existsSync(CONFIG_FILE)) {
+    const defaultConfig: ServiceManagerConfig = { port: DEFAULT_PORT }
+    saveConfig(defaultConfig)
+    return defaultConfig
+  }
+
+  try {
+    const content = fs.readFileSync(CONFIG_FILE, "utf-8")
+    return JSON.parse(content)
+  } catch {
+    return { port: DEFAULT_PORT }
+  }
+}
+
+function saveConfig(config: ServiceManagerConfig): void {
+  const dir = path.dirname(CONFIG_FILE)
+  if (!fs.existsSync(dir)) {
+    fs.mkdirSync(dir, { recursive: true })
+  }
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2))
+}
+
+function getPort(): number {
+  if (process.env.JFL_SERVICE_MANAGER_PORT) {
+    return parseInt(process.env.JFL_SERVICE_MANAGER_PORT, 10)
+  }
+  return loadConfig().port
 }
 
 // ============================================================================
@@ -151,6 +190,7 @@ async function getServiceStatus(name: string, service: Service): Promise<Service
 
   const vars: Record<string, string> = {
     HOME: homedir(),
+    PORT: service.port?.toString() || "",
   }
 
   return {
@@ -162,7 +202,7 @@ async function getServiceStatus(name: string, service: Service): Promise<Service
     started_at,
     description: service.description,
     log_path: service.log_file ? substituteVariables(service.log_file, vars) : undefined,
-    health_url: service.health_url
+    health_url: service.health_url ? substituteVariables(service.health_url, vars) : undefined
   }
 }
 
@@ -525,7 +565,7 @@ export async function serviceManagerCommand(
   action?: string,
   options: { port?: number } = {}
 ) {
-  const port = options.port || DEFAULT_PORT
+  const port = options.port || getPort()
 
   switch (action) {
     case "start": {
