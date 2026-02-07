@@ -52,7 +52,7 @@ const program = new Command()
 program
   .name("jfl")
   .description("Just Fucking Launch - AI gateway for GTM")
-  .version("0.1.0")
+  .version("0.1.1")
   .option("--no-update", "Skip automatic update check")
   .action(async (options) => {
     // Always update on session start (unless --no-update flag)

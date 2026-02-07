@@ -187,8 +187,9 @@ export async function updateCommand(options: { dry?: boolean; autoUpdate?: boole
   await checkNpmPackageUpdate(isAutoUpdate)
   const cwd = process.cwd()
 
-  // Check if we're in a JFL project
-  if (!fs.existsSync(path.join(cwd, ".jfl"))) {
+  // Check if we're in a JFL project (must have config.json, not just .jfl/)
+  const configPath = path.join(cwd, ".jfl", "config.json")
+  if (!fs.existsSync(configPath)) {
     // Check if this LOOKS like a JFL project (has markers)
     const hasJflMarkers =
       fs.existsSync(path.join(cwd, ".claude", "skills")) &&
@@ -196,28 +197,28 @@ export async function updateCommand(options: { dry?: boolean; autoUpdate?: boole
       fs.existsSync(path.join(cwd, "CLAUDE.md"))
 
     if (hasJflMarkers) {
-      console.log(chalk.yellow("This looks like a JFL project, but .jfl/ is missing."))
+      console.log(chalk.yellow("This looks like a JFL project, but .jfl/config.json is missing."))
       console.log(chalk.cyan("\nTo fix this, run:"))
       console.log(chalk.gray("  jfl repair"))
       console.log(chalk.gray("\nThis will create .jfl/config.json with your project details."))
-    } else {
+    } else if (!isAutoUpdate) {
+      // Don't spam on auto-update, only show when manually running
       console.log(chalk.red("Not in a JFL project. Run this from your project root."))
     }
     return
   }
 
   // Check if this IS the product repo (don't update product with itself)
-  const configPath = path.join(cwd, ".jfl", "config.json")
-  if (fs.existsSync(configPath)) {
-    try {
-      const config = JSON.parse(fs.readFileSync(configPath, "utf-8"))
-      if (config.type === "product") {
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath, "utf-8"))
+    if (config.type === "product") {
+      if (!isAutoUpdate) {
         console.log(chalk.yellow("This is the product repo. Nothing to update from."))
-        return
       }
-    } catch (err) {
-      console.log(chalk.yellow("Warning: .jfl/config.json is malformed. Proceeding with update."))
+      return
     }
+  } catch (err) {
+    console.log(chalk.yellow("Warning: .jfl/config.json is malformed. Proceeding with update."))
   }
 
   const isDryRun = options.dry || false
