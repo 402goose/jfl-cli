@@ -392,7 +392,7 @@ node dist/journal/cli.js synopsis --author "Andrew" # Filter by git author name
 ### What It Returns
 
 The synopsis aggregates:
-1. **Journal entries** from all sessions/worktrees
+1. **Journal entries** from all sessions
 2. **Git commits** from all branches
 3. **File headers** (@purpose, @spec, @decision tags)
 4. **Time audit** with category breakdown and multipliers
