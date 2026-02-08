@@ -980,9 +980,10 @@ export async function contextHubCommand(
 
       server.listen(port, () => {
         isListening = true
-        console.log(`Context Hub listening on port ${port}`)
-        console.log(`PID: ${process.pid}`)
-        console.log(`Ready to serve requests`)
+        const timestamp = new Date().toISOString()
+        console.log(`[${timestamp}] Context Hub listening on port ${port}`)
+        console.log(`[${timestamp}] PID: ${process.pid}`)
+        console.log(`[${timestamp}] Ready to serve requests`)
       })
 
       // Handle shutdown gracefully
@@ -993,17 +994,17 @@ export async function contextHubCommand(
           return
         }
         // Log who sent the signal for debugging
-        const stack = new Error().stack
-        console.log(`[${new Date().toISOString()}] Received ${signal}`)
-        console.log(`PID: ${process.pid}, Parent PID: ${process.ppid}`)
-        console.log("Shutting down...")
+        const timestamp = new Date().toISOString()
+        console.log(`[${timestamp}] Received ${signal}`)
+        console.log(`[${timestamp}] PID: ${process.pid}, Parent PID: ${process.ppid}`)
+        console.log(`[${timestamp}] Shutting down...`)
         server.close(() => {
-          console.log("Server closed")
+          console.log(`[${new Date().toISOString()}] Server closed`)
           process.exit(0)
         })
         // Force exit after 5s if server doesn't close
         setTimeout(() => {
-          console.log("Force exit after timeout")
+          console.log(`[${new Date().toISOString()}] Force exit after timeout`)
           process.exit(1)
         }, 5000)
       }
@@ -1016,7 +1017,8 @@ export async function contextHubCommand(
         // Heartbeat - ensures event loop stays active
         // Also log periodically so we know it's alive
         if (isListening && Date.now() % 300000 < 60000) { // Every 5 minutes
-          console.log(`Heartbeat: Still running (PID: ${process.pid})`)
+          const timestamp = new Date().toISOString()
+          console.log(`[${timestamp}] Heartbeat: Still running (PID: ${process.pid})`)
         }
       }, 60000)
 
@@ -1060,16 +1062,44 @@ export async function contextHubCommand(
       break
     }
 
+    case "clear-logs": {
+      // Clear both global and local log files
+      const globalLogFile = path.join(homedir(), ".jfl", "logs", "context-hub.log")
+      const localLogFile = getLogFile(projectRoot)
+
+      let cleared = 0
+
+      if (fs.existsSync(globalLogFile)) {
+        fs.writeFileSync(globalLogFile, '')
+        console.log(chalk.green('✓ Global Context Hub logs cleared'))
+        console.log(chalk.gray(`  File: ${globalLogFile}`))
+        cleared++
+      }
+
+      if (fs.existsSync(localLogFile) && localLogFile !== globalLogFile) {
+        fs.writeFileSync(localLogFile, '')
+        console.log(chalk.green('✓ Local Context Hub logs cleared'))
+        console.log(chalk.gray(`  File: ${localLogFile}`))
+        cleared++
+      }
+
+      if (cleared === 0) {
+        console.log(chalk.yellow('No log files found'))
+      }
+      break
+    }
+
     default: {
       console.log(chalk.bold("\n  Context Hub - Unified context for AI agents\n"))
       console.log(chalk.gray("  Commands:"))
-      console.log("    jfl context-hub start     Start the daemon")
-      console.log("    jfl context-hub stop      Stop the daemon")
-      console.log("    jfl context-hub restart   Restart the daemon")
-      console.log("    jfl context-hub status    Check if running")
-      console.log("    jfl context-hub logs      Show real-time logs (TUI)")
-      console.log("    jfl context-hub ensure    Start if not running (for hooks)")
-      console.log("    jfl context-hub query     Quick context query")
+      console.log("    jfl context-hub start       Start the daemon")
+      console.log("    jfl context-hub stop        Stop the daemon")
+      console.log("    jfl context-hub restart     Restart the daemon")
+      console.log("    jfl context-hub status      Check if running")
+      console.log("    jfl context-hub logs        Show real-time logs (TUI)")
+      console.log("    jfl context-hub clear-logs  Clear log file")
+      console.log("    jfl context-hub ensure      Start if not running (for hooks)")
+      console.log("    jfl context-hub query       Quick context query")
       console.log()
       console.log(chalk.gray("  Options:"))
       console.log("    --port <port>   Port to run on (default: 4242)")
