@@ -6,7 +6,8 @@
   "main": "dist/index.js",
   "bin": {
     "jfl": "dist/index.js",
-    "jfl-context-hub-mcp": "dist/mcp/context-hub-mcp.js"
+    "jfl-context-hub-mcp": "dist/mcp/context-hub-mcp.js",
+    "jfl-service-registry-mcp": "dist/mcp/service-registry-mcp.js"
   },
   "files": [
     "dist",
