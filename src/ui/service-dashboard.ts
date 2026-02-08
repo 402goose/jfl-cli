@@ -90,12 +90,15 @@ export async function startDashboard(): Promise<void> {
   const grid = new contrib.grid({ rows: 12, cols: 12, screen })
 
   // Service list (left side)
-  const serviceList = grid.set(0, 0, 8, 4, blessed.listtable, {
+  const serviceList = grid.set(0, 0, 8, 4, contrib.table, {
     label: " Services ",
     tags: true,
     keys: true,
     vi: true,
     mouse: true,
+    interactive: true,
+    columnSpacing: 2,
+    columnWidth: [20, 15, 8, 12],
     style: {
       header: {
         fg: "cyan",
@@ -222,8 +225,8 @@ export async function startDashboard(): Promise<void> {
       const statusText = service.status === "running" ? "●" : service.status === "stopped" ? "○" : "✗"
 
       return [
-        service.name.substring(0, 20),
-        `${statusColor}${statusText}{/} ${service.status}`,
+        (service.name || "unknown").substring(0, 20),
+        `${statusColor}${statusText}{/} ${service.status || "unknown"}`,
         service.port?.toString() || "-",
         service.uptime || "-",
       ]
@@ -234,7 +237,10 @@ export async function startDashboard(): Promise<void> {
       rows.push(["{gray-fg}No services found{/}", "{gray-fg}Start Service Manager{/}", "-", "-"])
     }
 
-    serviceList.setData([...headers, ...rows])
+    serviceList.setData({
+      headers: headers[0],
+      data: rows,
+    })
     screen.render()
   }
 
@@ -317,13 +323,10 @@ export async function startDashboard(): Promise<void> {
   }
 
   // Handle service selection
-  serviceList.on("select", async (item: any, index: number) => {
-    if (index === 0) return // Header row
+  serviceList.rows.on("select", async (item: any, index: number) => {
+    if (index < 0 || index >= services.length) return
 
-    const serviceIndex = index - 1
-    if (serviceIndex < 0 || serviceIndex >= services.length) return
-
-    selectedService = services[serviceIndex].name
+    selectedService = services[index].name
     await updateServiceDetails(selectedService)
     updateDependencies(selectedService)
   })
