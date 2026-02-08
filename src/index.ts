@@ -31,6 +31,12 @@ import { onboardCommand } from "./commands/onboard.js"
 import { profileCommand } from "./commands/profile.js"
 import { migrateServices } from "./commands/migrate-services.js"
 import {
+  memoryInitCommand,
+  memoryStatusCommand,
+  memorySearchCommand,
+  memoryIndexCommand
+} from "./commands/memory.js"
+import {
   listSkillsCommand,
   installSkillCommand,
   removeSkillCommand,
@@ -126,9 +132,21 @@ program
 program
   .command("services")
   .description("Manage services across all GTM projects (interactive TUI or CLI)")
-  .argument("[action]", "list, status, start, stop, or leave empty for TUI")
+  .argument("[action]", "scan, list, status, start, stop, or leave empty for TUI")
   .argument("[service]", "Service name")
-  .action(async (action, service) => {
+  .option("--dry-run", "Preview what would be discovered (for scan)")
+  .option("--path <path>", "Path to scan (default: current directory)")
+  .action(async (action, service, options) => {
+    // Handle scan action
+    if (action === "scan") {
+      const { scanServices } = await import("./commands/services-scan.js")
+      await scanServices({
+        path: options.path,
+        dryRun: options.dryRun
+      })
+      return
+    }
+
     // If no action, launch interactive TUI
     if (!action) {
       const { spawn } = await import("child_process")
@@ -161,6 +179,51 @@ program
   .option("--skip-git", "Skip git clone (treat URL as local path)")
   .action(async (pathOrUrl, options) => {
     await onboardCommand(pathOrUrl, options)
+  })
+
+program
+  .command("service-agent <action> [name]")
+  .description("Manage service MCP agents (init, generate, register, list)")
+  .action(async (action, name) => {
+    const { init, generate, generateAll, register, unregister, list, clean } = await import("./commands/service-agent.js")
+
+    switch (action) {
+      case "init":
+        await init(name) // name is optional path
+        break
+      case "generate":
+        if (!name) {
+          console.log(chalk.red("Error: service name required"))
+          console.log(chalk.gray("Usage: jfl service-agent generate <service-name>"))
+          process.exit(1)
+        }
+        await generate(name)
+        break
+      case "generate-all":
+        await generateAll()
+        break
+      case "register":
+        await register(name)
+        break
+      case "unregister":
+        if (!name) {
+          console.log(chalk.red("Error: service name required"))
+          console.log(chalk.gray("Usage: jfl service-agent unregister <service-name>"))
+          process.exit(1)
+        }
+        await unregister(name)
+        break
+      case "list":
+        await list()
+        break
+      case "clean":
+        await clean()
+        break
+      default:
+        console.log(chalk.red(`Unknown action: ${action}`))
+        console.log(chalk.gray("Available actions: init, generate, generate-all, register, unregister, list, clean"))
+        process.exit(1)
+    }
   })
 
 program
@@ -438,6 +501,45 @@ voice
     await voiceCommand(undefined, undefined, undefined, {
       device: options.device,
     })
+  })
+
+// ============================================================================
+// MEMORY SYSTEM (work offline)
+// ============================================================================
+
+const memory = program.command("memory").description("Memory system management")
+
+memory
+  .command("init")
+  .description("Initialize memory database")
+  .action(memoryInitCommand)
+
+memory
+  .command("status")
+  .description("Show memory statistics")
+  .action(memoryStatusCommand)
+
+memory
+  .command("search <query>")
+  .description("Search memories")
+  .option("-t, --type <type>", "Filter by type (feature, fix, decision, etc.)")
+  .option("-n, --max <n>", "Maximum results", "10")
+  .action(memorySearchCommand)
+
+memory
+  .command("index")
+  .description("Reindex journal entries")
+  .option("-f, --force", "Force full reindex")
+  .action(memoryIndexCommand)
+
+// Alias: jfl ask <question> → jfl memory search <question>
+program
+  .command("ask <question>")
+  .description("Ask a question - searches memory system")
+  .option("-t, --type <type>", "Filter by type (feature, fix, decision, etc.)")
+  .option("-n, --max <n>", "Maximum results", "5")
+  .action(async (question, options) => {
+    await memorySearchCommand(question, options)
   })
 
 // ============================================================================
