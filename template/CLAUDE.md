@@ -66,9 +66,59 @@ This displays the full status, pipeline, tasks, and guides next action.
 
 **ONLY AFTER completing all 6 steps**, respond to the user with the HUD output.
 
-If you need to search for something specific later:
+**CRITICAL: Automatic Tool Invocation**
+
+**When the user asks questions, AUTOMATICALLY use the right tool:**
+
+| User Question | Auto-Invoke | Don't Ask |
+|---------------|-------------|-----------|
+| "What did we decide about X?" | `memory_search: X` | Just do it |
+| "When did we implement Y?" | `memory_search: Y` | Just do it |
+| "Why did we choose Z?" | `memory_search: Z decision` | Just do it |
+| "Search for pricing" | `memory_search: pricing` | Just do it |
+| "Show me database features" | `memory_search: database + type=feature` | Just do it |
+| "What files have X?" | `context_search: X` | Just do it |
+| "Find code about Y" | `context_search: Y` | Just do it |
+
+**The user should NEVER have to type MCP tool names.** You detect the intent and invoke automatically.
+
+**Examples:**
+
+User: "What did we decide about Service Manager?"
+You: *silently calls `memory_search: "Service Manager decision"`*
+Then: "We decided that [results from memory]..."
+
+User: "When did we fix the PID bug?"
+You: *silently calls `memory_search: "PID bug" with type="fix"`*
+Then: "We fixed the PID bug on [date]: [details]..."
+
+User: "Search for pricing decisions"
+You: *silently calls `memory_search: "pricing" with type="decision"`*
+Then: "Found 2 pricing decisions: [results]..."
+
+**Tool Selection Logic:**
+
 ```
-Call: mcp__jfl-context__context_search with query="your search"
+if question contains ("decide", "decided", "choice", "why we"):
+    → memory_search with type="decision"
+
+if question contains ("when did we", "implemented", "built", "added"):
+    → memory_search with type="feature"
+
+if question contains ("bug", "fix", "error"):
+    → memory_search with type="fix"
+
+if question contains ("learn", "insight", "discovery"):
+    → memory_search (check learned field)
+
+if question about "files" or "code":
+    → context_search
+
+if question about "current" or "now":
+    → context_get
+
+else:
+    → memory_search (general - hybrid search finds relevant)
 ```
 
 ### CRITICAL: Verify Session Branch
@@ -322,10 +372,83 @@ cat .jfl/journal/session-goose-20260125-xxxx.jsonl
 
 ### Integration with Memory System
 
-The memory pipeline indexes `.jfl/journal/` automatically. Entries become searchable via:
-- Memory semantic search
-- PageIndex tree queries ("when did we decide X?")
-- HUD recent work display
+**The memory system automatically indexes all journal entries for fast semantic search.**
+
+Every journal entry you write is indexed into `.jfl/memory.db` with:
+- TF-IDF tokens for fast keyword search
+- OpenAI embeddings for semantic understanding (if OPENAI_API_KEY is set)
+- Metadata extraction (files, decisions, learnings)
+
+**Using Memory via MCP Tools:**
+
+When the user asks questions about past work, use the MCP tools:
+
+```
+# Search for past decisions, features, or learnings
+Call: mcp__jfl-context__memory_search with query="pricing decision"
+Call: mcp__jfl-context__memory_search with query="Service Manager features" and type="feature"
+Call: mcp__jfl-context__memory_search with query="what did we decide about X" and maxItems=5
+
+# Get memory system status
+Call: mcp__jfl-context__memory_status
+
+# Add a manual memory/note
+Call: mcp__jfl-context__memory_add with title="Important insight" and content="..."
+```
+
+**Available MCP Tools:**
+
+1. **`memory_search`** - Search indexed journal entries
+   - `query` (required): Search query
+   - `type` (optional): Filter by type (feature, fix, decision, discovery, milestone)
+   - `maxItems` (optional): Max results (default: 10)
+   - `since` (optional): ISO date - only entries after this date
+
+2. **`memory_status`** - Get memory system statistics
+   - Returns: total memories, by type, date range, embedding status
+
+3. **`memory_add`** - Manually add a memory
+   - `title` (required): Short title
+   - `content` (required): Full content
+   - `tags` (optional): Array of tags
+
+**When to Use Memory Search:**
+
+Use `memory_search` when the user asks:
+- "What did we decide about X?"
+- "When did we implement Y?"
+- "Search for past work on Z"
+- "What decisions were made about pricing?"
+- "Show me features related to database"
+
+**Search Quality:**
+
+The hybrid search combines:
+- **TF-IDF** (fast, keyword-based) - weighted 40%
+- **Embeddings** (semantic, contextual) - weighted 60%
+
+Results are scored by relevance (high/medium/low) with boosting for:
+- Recent entries (1.3x if < 7 days old)
+- Decisions (1.4x multiplier)
+- Features (1.2x multiplier)
+
+**Automatic Indexing:**
+
+- Runs on Context Hub startup
+- Scans for new entries every 60 seconds
+- No manual reindexing needed
+
+**If Memory Not Initialized:**
+
+The doctor script will warn and can auto-fix:
+```bash
+./scripts/session/jfl-doctor.sh --fix
+```
+
+Or manually initialize:
+```bash
+jfl memory init
+```
 
 ---
 

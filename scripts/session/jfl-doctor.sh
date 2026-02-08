@@ -346,6 +346,21 @@ check_memory() {
 
     if [[ ! -f "$memory_db" ]]; then
         report "memory" "warning" "not initialized"
+
+        if $FIX_MODE; then
+            echo -e "${BLUE}→${NC} Initializing memory system..."
+            jfl memory init > /dev/null 2>&1
+            if [[ $? -eq 0 ]]; then
+                # Get count after initialization
+                if command -v sqlite3 &>/dev/null; then
+                    local count=$(sqlite3 "$memory_db" "SELECT COUNT(*) FROM memories;" 2>/dev/null || echo 0)
+                    report "memory" "ok" "initialized ($count memories indexed)"
+                else
+                    report "memory" "ok" "initialized"
+                fi
+                FIXED=$((FIXED + 1))
+            fi
+        fi
         return
     fi
 
