@@ -132,10 +132,12 @@ program
 program
   .command("services")
   .description("Manage services across all GTM projects (interactive TUI or CLI)")
-  .argument("[action]", "scan, list, status, start, stop, or leave empty for TUI")
+  .argument("[action]", "scan, list, status, start, stop, deps, or leave empty for TUI")
   .argument("[service]", "Service name")
   .option("--dry-run", "Preview what would be discovered (for scan)")
   .option("--path <path>", "Path to scan (default: current directory)")
+  .option("--force", "Force operation (for stop with dependents)")
+  .option("--verbose", "Verbose output")
   .action(async (action, service, options) => {
     // Handle scan action
     if (action === "scan") {
@@ -144,6 +146,28 @@ program
         path: options.path,
         dryRun: options.dryRun
       })
+      return
+    }
+
+    // Handle dependency actions
+    if (action === "deps" || action === "dependencies") {
+      const { buildDependencyGraph, visualizeDependencies, validateDependencies } = await import("./lib/service-dependencies.js")
+      const fs = await import("fs")
+      const os = await import("os")
+      const servicesConfig = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".jfl", "services.json"), "utf-8"))
+
+      if (service === "validate") {
+        const result = validateDependencies(servicesConfig.services)
+        if (result.valid) {
+          console.log(chalk.green("\n✓ All dependencies valid\n"))
+        } else {
+          console.log(chalk.red("\n✗ Dependency validation failed:\n"))
+          result.errors.forEach(err => console.log(chalk.red(`  - ${err}`)))
+          console.log()
+        }
+      } else {
+        console.log(visualizeDependencies(servicesConfig.services))
+      }
       return
     }
 
@@ -199,6 +223,14 @@ program
     } else {
       await listOrchestrations()
     }
+  })
+
+program
+  .command("dashboard")
+  .description("Launch interactive service monitoring dashboard")
+  .action(async () => {
+    const { startDashboard } = await import("./ui/service-dashboard.js")
+    await startDashboard()
   })
 
 program
