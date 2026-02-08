@@ -182,6 +182,26 @@ program
   })
 
 program
+  .command("orchestrate [name]")
+  .description("Execute multi-service orchestration workflows")
+  .option("--dry-run", "Preview orchestration steps without executing")
+  .option("--list", "List available orchestrations")
+  .option("--create <name>", "Create new orchestration template")
+  .action(async (name, options) => {
+    const { orchestrate, listOrchestrations, createOrchestration } = await import("./commands/orchestrate.js")
+
+    if (options.list) {
+      await listOrchestrations()
+    } else if (options.create) {
+      await createOrchestration(options.create)
+    } else if (name) {
+      await orchestrate(name, { dryRun: options.dryRun })
+    } else {
+      await listOrchestrations()
+    }
+  })
+
+program
   .command("service-agent <action> [name]")
   .description("Manage service MCP agents (init, generate, register, list)")
   .action(async (action, name) => {
