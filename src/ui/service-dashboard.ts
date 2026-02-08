@@ -13,6 +13,7 @@ import contrib from "blessed-contrib"
 import * as fs from "fs"
 import * as path from "path"
 import { homedir } from "os"
+import { fileURLToPath } from "url"
 
 const GLOBAL_SERVICES_FILE = path.join(homedir(), ".jfl", "services.json")
 const SERVICE_MANAGER_URL = "http://localhost:3402"
@@ -228,6 +229,11 @@ export async function startDashboard(): Promise<void> {
       ]
     })
 
+    // If no services, show a placeholder row
+    if (rows.length === 0) {
+      rows.push(["{gray-fg}No services found{/}", "{gray-fg}Start Service Manager{/}", "-", "-"])
+    }
+
     serviceList.setData([...headers, ...rows])
     screen.render()
   }
@@ -400,7 +406,8 @@ export async function startDashboard(): Promise<void> {
 // Main
 // ============================================================================
 
-if (require.main === module) {
+// ESM compatibility: Check if this module is being run directly
+if (import.meta.url === `file://${process.argv[1]}`) {
   startDashboard().catch((error) => {
     console.error("Failed to start dashboard:", error)
     process.exit(1)
