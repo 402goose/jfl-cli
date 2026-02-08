@@ -16,6 +16,13 @@ import * as http from "http"
 import * as readline from "readline"
 import { homedir } from "os"
 import { fileURLToPath } from "url"
+import {
+  initializeDatabase,
+  getMemoryStats,
+  insertMemory
+} from "../lib/memory-db.js"
+import { searchMemories } from "../lib/memory-search.js"
+import { indexJournalEntries, startPeriodicIndexing } from "../lib/memory-indexer.js"
 
 const DEFAULT_PORT = 4242
 const PID_FILE = ".jfl/context-hub.pid"
@@ -657,6 +664,75 @@ function createServer(projectRoot: string, port: number): http.Server {
       return
     }
 
+    // Memory search
+    if (url.pathname === "/api/memory/search" && req.method === "POST") {
+      let body = ""
+      req.on("data", chunk => body += chunk)
+      req.on("end", async () => {
+        try {
+          const { query, type, maxItems = 10, since } = JSON.parse(body || "{}")
+          if (!query) {
+            res.writeHead(400, { "Content-Type": "application/json" })
+            res.end(JSON.stringify({ error: "query required" }))
+            return
+          }
+
+          const results = await searchMemories(query, { type, maxItems, since })
+
+          res.writeHead(200, { "Content-Type": "application/json" })
+          res.end(JSON.stringify({ results }))
+        } catch (err: any) {
+          res.writeHead(500, { "Content-Type": "application/json" })
+          res.end(JSON.stringify({ error: err.message }))
+        }
+      })
+      return
+    }
+
+    // Memory status
+    if (url.pathname === "/api/memory/status" && req.method === "GET") {
+      getMemoryStats()
+        .then(stats => {
+          res.writeHead(200, { "Content-Type": "application/json" })
+          res.end(JSON.stringify(stats))
+        })
+        .catch((err: any) => {
+          res.writeHead(500, { "Content-Type": "application/json" })
+          res.end(JSON.stringify({ error: err.message }))
+        })
+      return
+    }
+
+    // Memory add
+    if (url.pathname === "/api/memory/add" && req.method === "POST") {
+      let body = ""
+      req.on("data", chunk => body += chunk)
+      req.on("end", async () => {
+        try {
+          const { title, content, tags } = JSON.parse(body || "{}")
+          if (!title || !content) {
+            res.writeHead(400, { "Content-Type": "application/json" })
+            res.end(JSON.stringify({ error: "title and content required" }))
+            return
+          }
+
+          const id = await insertMemory({
+            source: 'manual',
+            title,
+            content,
+            created_at: new Date().toISOString()
+          })
+
+          res.writeHead(201, { "Content-Type": "application/json" })
+          res.end(JSON.stringify({ id }))
+        } catch (err: any) {
+          res.writeHead(500, { "Content-Type": "application/json" })
+          res.end(JSON.stringify({ error: err.message }))
+        }
+      })
+      return
+    }
+
     // 404
     res.writeHead(404, { "Content-Type": "application/json" })
     res.end(JSON.stringify({ error: "Not found" }))
@@ -978,11 +1054,31 @@ export async function contextHubCommand(
         // For other errors, don't exit
       })
 
-      server.listen(port, () => {
+      server.listen(port, async () => {
         isListening = true
         const timestamp = new Date().toISOString()
         console.log(`[${timestamp}] Context Hub listening on port ${port}`)
         console.log(`[${timestamp}] PID: ${process.pid}`)
+
+        // Initialize memory system
+        try {
+          await initializeDatabase()
+          console.log(`[${timestamp}] Memory database initialized`)
+
+          // Index existing journal entries
+          const stats = await indexJournalEntries()
+          if (stats.added > 0) {
+            console.log(`[${timestamp}] Indexed ${stats.added} new journal entries`)
+          }
+
+          // Start periodic indexing (every 60 seconds)
+          startPeriodicIndexing(60000)
+          console.log(`[${timestamp}] Periodic memory indexing started`)
+        } catch (err: any) {
+          console.error(`[${timestamp}] Failed to initialize memory system:`, err.message)
+          // Don't exit - memory is optional
+        }
+
         console.log(`[${timestamp}] Ready to serve requests`)
       })
 

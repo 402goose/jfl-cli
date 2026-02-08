@@ -132,6 +132,64 @@ const TOOLS = [
         }
       }
     }
+  },
+  {
+    name: "memory_search",
+    description: "Search through indexed journal entries and memories. Finds relevant past work, decisions, and learnings across all sessions.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        query: {
+          type: "string",
+          description: "Search query (e.g., 'what did we decide about pricing?')"
+        },
+        type: {
+          type: "string",
+          enum: ["feature", "fix", "decision", "discovery", "milestone", "all"],
+          description: "Filter by entry type (optional)"
+        },
+        maxItems: {
+          type: "number",
+          description: "Maximum results to return (default: 10)"
+        },
+        since: {
+          type: "string",
+          description: "ISO date - only return entries after this date (optional)"
+        }
+      },
+      required: ["query"]
+    }
+  },
+  {
+    name: "memory_add",
+    description: "Manually add a memory or note. Useful for capturing insights not in journal.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        title: {
+          type: "string",
+          description: "Short title for the memory"
+        },
+        content: {
+          type: "string",
+          description: "Full content/description"
+        },
+        tags: {
+          type: "array",
+          items: { type: "string" },
+          description: "Tags for categorization (optional)"
+        }
+      },
+      required: ["title", "content"]
+    }
+  },
+  {
+    name: "memory_status",
+    description: "Get memory system statistics and health.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {}
+    }
   }
 ]
 
@@ -200,6 +258,61 @@ function formatContextItems(items: ContextItem[]): string {
   }
 
   return sections.join("\n\n")
+}
+
+interface MemoryResult {
+  memory: {
+    id: number
+    source: string
+    source_id: string | null
+    type: string | null
+    title: string
+    content: string
+    summary: string | null
+    metadata: string | null
+    created_at: string
+    indexed_at: string
+  }
+  score: number
+  relevance: 'high' | 'medium' | 'low'
+}
+
+function formatMemoryResults(results: MemoryResult[]): string {
+  if (results.length === 0) {
+    return "No memories found."
+  }
+
+  const items = results.map((result, index) => {
+    const { memory, score, relevance } = result
+
+    // Format relevance badge
+    const relevanceBadge = relevance === 'high' ? '●' : relevance === 'medium' ? '◐' : '○'
+
+    // Format type
+    const type = memory.type || 'unknown'
+
+    // Format date
+    const date = new Date(memory.created_at).toISOString().split('T')[0]
+
+    // Extract files from metadata
+    let files = ''
+    if (memory.metadata) {
+      try {
+        const metadata = JSON.parse(memory.metadata)
+        if (metadata.files && metadata.files.length > 0) {
+          files = `\n  Files: ${metadata.files.slice(0, 3).join(', ')}${metadata.files.length > 3 ? '...' : ''}`
+        }
+      } catch {
+        // Ignore parse errors
+      }
+    }
+
+    return `${index + 1}. [${type}] ${memory.title}
+   ${date} | ${relevanceBadge} Relevance: ${score.toFixed(2)}
+   ${memory.summary || memory.content.slice(0, 150)}${files}`
+  }).join('\n\n')
+
+  return `Found ${results.length} ${results.length === 1 ? 'memory' : 'memories'}:\n\n${items}`
 }
 
 // ============================================================================
@@ -502,6 +615,41 @@ async function handleToolCall(name: string, args: any): Promise<string> {
 
     case "context_sessions": {
       return getSessionsActivity(args.hours || 24)
+    }
+
+    case "memory_search": {
+      if (!args.query) {
+        throw new Error("query is required")
+      }
+      const result = await callContextHub("/api/memory/search", {
+        query: args.query,
+        type: args.type,
+        maxItems: args.maxItems || 10,
+        since: args.since
+      })
+      return formatMemoryResults(result.results)
+    }
+
+    case "memory_add": {
+      if (!args.title || !args.content) {
+        throw new Error("title and content are required")
+      }
+      const result = await callContextHub("/api/memory/add", {
+        title: args.title,
+        content: args.content,
+        tags: args.tags || []
+      })
+      return `Memory added successfully (ID: ${result.id})`
+    }
+
+    case "memory_status": {
+      const result = await callContextHub("/api/memory/status")
+      return `Memory System Status:
+- Total memories: ${result.total_memories}
+- By type: ${Object.entries(result.by_type).map(([k, v]) => `${k}(${v})`).join(', ')}
+- Date range: ${result.date_range.earliest ? new Date(result.date_range.earliest as string).toISOString().split('T')[0] : 'N/A'} to ${result.date_range.latest ? new Date(result.date_range.latest as string).toISOString().split('T')[0] : 'N/A'}
+- Embeddings: ${result.embeddings.available ? `✓ ${result.embeddings.count} indexed` : '✗ Not available'}
+- Last index: ${result.last_index ? new Date(result.last_index as string).toISOString() : 'N/A'}`
     }
 
     default:
