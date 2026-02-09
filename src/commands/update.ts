@@ -188,6 +188,16 @@ export async function updateCommand(options: { dry?: boolean; autoUpdate?: boole
   await checkNpmPackageUpdate(isAutoUpdate)
   const cwd = process.cwd()
 
+  // CRITICAL: Never sync to home directory (namespace violation)
+  if (cwd === homedir()) {
+    if (!isAutoUpdate) {
+      console.log(chalk.red("❌ Cannot update from home directory"))
+      console.log(chalk.yellow("This would overwrite ~/CLAUDE.md (your global config)"))
+      console.log(chalk.gray("\nRun 'jfl update' from a JFL project directory instead."))
+    }
+    return
+  }
+
   // Check if we're in a JFL project (must have config.json, not just .jfl/)
   const configPath = path.join(cwd, ".jfl", "config.json")
   if (!fs.existsSync(configPath)) {
