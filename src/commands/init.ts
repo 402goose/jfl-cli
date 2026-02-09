@@ -534,7 +534,11 @@ export async function initCommand(options?: { name?: string }) {
               }
 
               const repoName = match[1]
-              const cloneDir = join(homedir(), "code/formation")
+
+              // Use user's code directory preference
+              const { getCodeDirectory } = await import("../utils/jfl-config.js")
+              const codeDir = await getCodeDirectory()
+              const cloneDir = join(codeDir, "repos")
 
               // Check if already exists
               const repoPath = join(cloneDir, repoName)

@@ -15,13 +15,13 @@ import { homedir } from "os"
 import { execSync } from "child_process"
 import { fileURLToPath } from "url"
 import { dirname } from "path"
+import { getMCPConfigFile, findProjectRoot } from "../utils/jfl-config.js"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
 const GLOBAL_SERVICES_FILE = path.join(homedir(), ".jfl", "services.json")
 const SERVICE_AGENTS_DIR = path.join(homedir(), ".jfl", "service-agents")
-const MCP_CONFIG_FILE = path.join(homedir(), ".mcp.json")
 
 // ============================================================================
 // Types
@@ -140,21 +140,31 @@ child.on('exit', (code) => {
 // ============================================================================
 
 function loadMCPConfig(): MCPConfig {
-  if (!fs.existsSync(MCP_CONFIG_FILE)) {
+  const mcpConfigFile = getMCPConfigFile()
+
+  if (!fs.existsSync(mcpConfigFile)) {
     return { mcpServers: {} }
   }
 
   try {
-    const content = fs.readFileSync(MCP_CONFIG_FILE, "utf-8")
+    const content = fs.readFileSync(mcpConfigFile, "utf-8")
     return JSON.parse(content)
   } catch (error) {
-    console.warn(chalk.yellow(`Failed to parse ${MCP_CONFIG_FILE}, starting fresh`))
+    console.warn(chalk.yellow(`Failed to parse ${mcpConfigFile}, starting fresh`))
     return { mcpServers: {} }
   }
 }
 
 function saveMCPConfig(config: MCPConfig): void {
-  fs.writeFileSync(MCP_CONFIG_FILE, JSON.stringify(config, null, 2) + "\n")
+  const mcpConfigFile = getMCPConfigFile()
+
+  // Ensure parent directory exists
+  const mcpDir = path.dirname(mcpConfigFile)
+  if (!fs.existsSync(mcpDir)) {
+    fs.mkdirSync(mcpDir, { recursive: true })
+  }
+
+  fs.writeFileSync(mcpConfigFile, JSON.stringify(config, null, 2) + "\n")
 }
 
 function registerServiceAgent(serviceName: string, serverPath: string): void {
@@ -278,8 +288,21 @@ export async function register(serviceName?: string): Promise<void> {
       registered++
     }
 
-    spinner.succeed(`Registered ${registered} service agent(s) in ${MCP_CONFIG_FILE}`)
-    console.log(chalk.dim("\nRestart Claude Code to activate the new MCP servers"))
+    const mcpConfigFile = getMCPConfigFile()
+    const projectRoot = findProjectRoot()
+
+    spinner.succeed(`Registered ${registered} service agent(s) in ${mcpConfigFile}`)
+
+    if (projectRoot) {
+      console.log(chalk.green(`\n✓ MCP config written to project: ${path.relative(process.cwd(), mcpConfigFile)}`))
+      console.log(chalk.dim("Claude Code will automatically detect this project-local config"))
+    } else {
+      console.log(chalk.yellow(`\n⚠️  MCP config written to: ${mcpConfigFile}`))
+      console.log(chalk.dim("This is in JFL's namespace. To use in a project:\n"))
+      console.log(chalk.cyan(`  ln -s ${mcpConfigFile} <project>/.mcp.json\n`))
+    }
+
+    console.log(chalk.dim("Restart Claude Code to activate the new MCP servers"))
   } catch (error) {
     spinner.fail("Failed to register service agents")
     console.error(chalk.red(error instanceof Error ? error.message : String(error)))
@@ -291,8 +314,9 @@ export async function unregister(serviceName: string): Promise<void> {
   const spinner = ora(`Unregistering ${serviceName}...`).start()
 
   try {
+    const mcpConfigFile = getMCPConfigFile()
     unregisterServiceAgent(serviceName)
-    spinner.succeed(`Unregistered ${serviceName} from ${MCP_CONFIG_FILE}`)
+    spinner.succeed(`Unregistered ${serviceName} from ${mcpConfigFile}`)
   } catch (error) {
     spinner.fail("Failed to unregister service agent")
     console.error(chalk.red(error instanceof Error ? error.message : String(error)))

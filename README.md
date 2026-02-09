@@ -53,7 +53,7 @@ JFL provides three core systems:
 
 **Synopsis** — Generates work summaries by rolling up journal entries, git commits, and file headers. Answers questions like "what happened this week?" or "what did Alex work on?" with structured reports and time breakdowns.
 
-**Session Management** — Git worktree-based isolation for parallel work. Each session auto-commits, auto-merges, and cleans up. Hooks enforce journal entries and handle cleanup automatically.
+**Session Management** — Automatic session isolation for parallel work. Single sessions work directly on your branch for simplicity. Multiple concurrent sessions use isolated worktrees to prevent conflicts. Auto-commit saves work every 2 minutes, and sessions auto-merge when finished.
 
 ---
 

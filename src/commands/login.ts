@@ -1,8 +1,8 @@
 import chalk from "chalk"
 import ora from "ora"
 import inquirer from "inquirer"
-import Conf from "conf"
 import { execSync } from "child_process"
+import { getConfig, setConfig, getConfigValue, deleteConfigKey } from "../utils/jfl-config.js"
 import {
   generateSeedPhrase,
   seedPhraseToPrivateKey,
@@ -24,7 +24,6 @@ import {
 } from "../utils/platform-auth.js"
 import type { Hex } from "viem"
 
-const config = new Conf({ projectName: "jfl" })
 const PLATFORM_URL = process.env.JFL_PLATFORM_URL || "https://jfl.run"
 
 /**
@@ -163,10 +162,10 @@ export async function loginCommand(options: LoginOptions = {}) {
   else if (options.platform) plan = "platform"
 
   // Check if already logged in (with signing capability)
-  const existingToken = config.get("token")
+  const existingToken = getConfigValue("token")
   const existingPlatformToken = getPlatformToken()
-  const existingWallet = config.get("x402Address") as string | undefined
-  const hasSigningKey = config.get("x402PrivateKey") || config.get("x402SeedPhrase")
+  const existingWallet = getConfigValue("x402Address") as string | undefined
+  const hasSigningKey = getConfigValue("x402PrivateKey") || getConfigValue("x402SeedPhrase")
 
   // If already authenticated and no specific plan requested, show account status
   if ((existingToken || existingPlatformToken || (existingWallet && hasSigningKey)) && !options.force && !plan) {
@@ -258,8 +257,8 @@ async function loginWithX402(isInteractive: boolean = true) {
   console.log(chalk.dim(`Network: ${networkName}\n`))
 
   // Check if wallet already exists
-  const existingWallet = config.get("x402Address") as string | undefined
-  const hasSigningKey = config.get("x402PrivateKey") || config.get("x402SeedPhrase")
+  const existingWallet = getConfigValue("x402Address") as string | undefined
+  const hasSigningKey = getConfigValue("x402PrivateKey") || getConfigValue("x402SeedPhrase")
 
   // If wallet exists with signing capability, just check balance and activate
   if (existingWallet && hasSigningKey) {
@@ -379,13 +378,13 @@ async function loginWithX402(isInteractive: boolean = true) {
     console.log()
 
     // Save wallet to config first (so it persists even if they close)
-    config.set("x402Address", address)
-    config.set("authMethod", "x402")
+    setConfig("x402Address", address)
+    setConfig("authMethod", "x402")
     if (privateKey) {
       // Store encrypted private key (in production, use proper encryption)
-      config.set("x402PrivateKey", privateKey)
+      setConfig("x402PrivateKey", privateKey)
     }
-    config.delete("token") // Clear platform token if any
+    deleteConfigKey("token") // Clear platform token if any
 
     // Check if they have enough
     if (usdcNum < 5) {
@@ -463,7 +462,7 @@ async function createNewWallet(): Promise<{ address: string; privateKey: Hex }> 
   console.log(chalk.white("  • You are in full control of your funds"))
   console.log()
   console.log(chalk.white("  • Your seed phrase will be stored encrypted at:"))
-  console.log(chalk.cyan(`    ${config.path}`))
+  console.log(chalk.cyan(`    ${getConfig().path || "~/.jfl/config.json"}`))
   console.log()
   console.log(chalk.bold.red("⚠️  If you lose your seed phrase, you lose access to your wallet"))
   console.log(chalk.bold.red("   There is no recovery. Write it down and store it safely."))
@@ -541,9 +540,9 @@ async function createNewWallet(): Promise<{ address: string; privateKey: Hex }> 
   console.log()
 
   // Save seed phrase
-  config.set("x402SeedPhrase", seedPhrase)
+  setConfig("x402SeedPhrase", seedPhrase)
 
-  console.log(chalk.dim("💾 Config saved to: ") + chalk.cyan(config.path))
+  console.log(chalk.dim("💾 Config saved to: ") + chalk.cyan(getConfig().path || "~/.jfl/config.json"))
   console.log()
 
   return { address, privateKey }
@@ -578,7 +577,7 @@ async function importFromSeedPhrase(): Promise<{ address: string; privateKey: He
   console.log(chalk.gray(`  Address: ${address}\n`))
 
   // Save seed phrase
-  config.set("x402SeedPhrase", seedPhrase.trim())
+  setConfig("x402SeedPhrase", seedPhrase.trim())
 
   return { address, privateKey }
 }
@@ -678,10 +677,10 @@ async function loginWithGitHub(plan: string = "solo", isInteractive: boolean = t
     const user = await res.json()
 
     // Save token
-    config.set("token", token)
-    config.set("user", user)
-    config.set("authMethod", "github")
-    config.delete("x402Address") // Clear x402 if any
+    setConfig("token", token)
+    setConfig("user", user)
+    setConfig("authMethod", "github")
+    deleteConfigKey("x402Address") // Clear x402 if any
 
     spinner.succeed(`Logged in as ${user.name || user.email}`)
 
@@ -890,15 +889,15 @@ async function handleTeammateJoin(): Promise<void> {
 // ============================================================================
 
 export function getToken(): string | undefined {
-  return config.get("token") as string | undefined
+  return getConfigValue("token") as string | undefined
 }
 
 export function getX402Address(): string | undefined {
-  return config.get("x402Address") as string | undefined
+  return getConfigValue("x402Address") as string | undefined
 }
 
 export function getAuthMethod(): "github" | "x402" | "platform" | undefined {
-  return config.get("authMethod") as "github" | "x402" | "platform" | undefined
+  return getConfigValue("authMethod") as "github" | "x402" | "platform" | undefined
 }
 
 export function getUser(): { id: string; name?: string; email: string; tier?: string } | undefined {
@@ -914,27 +913,27 @@ export function getUser(): { id: string; name?: string; email: string; tier?: st
   }
 
   // Fall back to legacy GitHub auth user
-  return config.get("user") as { id: string; name?: string; email: string; tier?: string } | undefined
+  return getConfigValue("user") as { id: string; name?: string; email: string; tier?: string } | undefined
 }
 
 export function isAuthenticated(): boolean {
   // For x402, need signing capability (not just view-only address)
-  const hasX402Signing = getX402Address() && (config.get("x402PrivateKey") || config.get("x402SeedPhrase"))
+  const hasX402Signing = getX402Address() && (getConfigValue("x402PrivateKey") || getConfigValue("x402SeedPhrase"))
   const hasPlatformAuth = getPlatformToken()
   return !!(getToken() || hasX402Signing || hasPlatformAuth)
 }
 
 export function isViewOnly(): boolean {
-  return !!(getX402Address() && !config.get("x402PrivateKey") && !config.get("x402SeedPhrase"))
+  return !!(getX402Address() && !getConfigValue("x402PrivateKey") && !getConfigValue("x402SeedPhrase"))
 }
 
 export function logout() {
-  config.delete("token")
-  config.delete("user")
-  config.delete("x402Address")
-  config.delete("x402PrivateKey")
-  config.delete("x402SeedPhrase")
-  config.delete("platformToken")
-  config.delete("platformUser")
-  config.delete("authMethod")
+  deleteConfigKey("token")
+  deleteConfigKey("user")
+  deleteConfigKey("x402Address")
+  deleteConfigKey("x402PrivateKey")
+  deleteConfigKey("x402SeedPhrase")
+  deleteConfigKey("platformToken")
+  deleteConfigKey("platformUser")
+  deleteConfigKey("authMethod")
 }

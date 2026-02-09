@@ -27,14 +27,12 @@ Don't make users fill out forms before they can build. Let them start immediatel
 
 **Complete ALL steps before saying anything to the user.**
 
-**1. CD to worktree** (from hook output)
-
-**2. Run session sync:**
+**1. Run session sync:**
 ```bash
 ./scripts/session/session-sync.sh
 ```
 
-**3. Run doctor check (ONLY for existing projects):**
+**2. Run doctor check (ONLY for existing projects):**
 
 **IMPORTANT: Skip doctor for fresh projects.** Detect fresh project:
 ```bash
@@ -60,9 +58,9 @@ fi
 ```
 
 **For existing projects:** After running doctor, you MUST ask the user before continuing.
-**For fresh projects:** Skip directly to step 4.
+**For fresh projects:** Skip directly to step 3.
 
-**4. Get unified context via MCP (REQUIRED):**
+**3. Get unified context via MCP (REQUIRED):**
 ```
 Call: mcp__jfl-context__context_get
 ```
@@ -95,54 +93,55 @@ Current project: /Users/alectaggart/case
 
 **DO NOT read individual markdown files.** The context MCP tool aggregates everything. This is why we built Context Hub.
 
-**5. Show recent journal entries:**
+**4. Show recent journal entries:**
 ```bash
 cat .jfl/journal/*.jsonl 2>/dev/null | tail -10
 ```
 
-**6. Run /hud to show project dashboard:**
+**5. Run /hud to show project dashboard:**
 ```
 Invoke: /hud skill
 ```
 
 This displays the full status, pipeline, tasks, and guides next action.
 
-**ONLY AFTER completing all 6 steps**, respond to the user with the HUD output.
+**ONLY AFTER completing all 5 steps**, respond to the user with the HUD output.
 
 If you need to search for something specific later:
 ```
 Call: mcp__jfl-context__context_search with query="your search"
 ```
 
-### CRITICAL: CD to Worktree
+## Session Management
 
-**After SessionStart hook runs, you MUST cd to the worktree.**
+JFL automatically manages session isolation. You don't need to worry about worktrees or CD commands - it's handled for you.
 
-The hook creates a worktree and outputs:
-```
-═══════════════════════════════════════════════════════════
-  CLAUDE: You MUST run: cd /path/to/worktree
-═══════════════════════════════════════════════════════════
-```
+### How It Works
 
-**YOU MUST RUN THAT CD COMMAND.** If you don't, you'll work on main branch and break multi-session isolation.
+- **Single session**: You work directly on your branch (simple, fast)
+- **Multiple sessions**: JFL creates isolated worktrees automatically (prevents conflicts)
+- **Auto-commit**: Work is saved every 2 minutes (prevents data loss)
+- **Auto-merge**: When you finish, work merges to your working branch automatically
 
-If you missed the output, find the path:
-```bash
-cat .jfl/current-worktree.txt
-```
+### Session Branch
 
-Then cd to it:
-```bash
-cd $(cat .jfl/current-worktree.txt)
+Sessions branch from your working branch (default: `main`, configurable in `.jfl/config.json`):
+
+```json
+{
+  "working_branch": "develop"
+}
 ```
 
-**Verify you're in the worktree:**
-```bash
-pwd && git branch --show-current
-```
+Session branches are named: `session-<user>-<date>-<time>-<random>`
 
-Should show `/path/worktrees/session-*` and branch `session-*`, NOT `main`.
+### Ending a Session
+
+When user says "done", "that's it", or "/end":
+- Run the `/end` skill to clean up properly
+- This commits, merges, and pushes your work
+
+If session crashes, uncommitted work is auto-saved via background auto-commit.
 
 ---
 

@@ -323,12 +323,11 @@ program
   .description("Manage JFL preferences")
   .option("--clear-ai", "Clear saved AI CLI preference")
   .option("--show", "Show current preferences")
-  .action((options) => {
-    const Conf = require("conf")
-    const config = new Conf({ projectName: "jfl" })
+  .action(async (options) => {
+    const { getConfigValue, deleteConfigKey, getConfig } = await import("./utils/jfl-config.js")
 
     if (options.clearAi) {
-      config.delete("aiCLI")
+      deleteConfigKey("aiCLI")
       console.log(chalk.green("\n✓ Cleared AI CLI preference"))
       console.log(chalk.gray("  Next 'jfl' will show selection menu\n"))
       return
@@ -336,8 +335,8 @@ program
 
     if (options.show || !options.clearAi) {
       console.log(chalk.bold("\n⚙️  JFL Preferences\n"))
-      console.log(chalk.gray("AI CLI:") + " " + (config.get("aiCLI") || chalk.gray("none")))
-      console.log(chalk.gray("Projects tracked:") + " " + ((config.get("projects") as string[] || []).length))
+      console.log(chalk.gray("AI CLI:") + " " + (getConfigValue("aiCLI") || chalk.gray("none")))
+      console.log(chalk.gray("Projects tracked:") + " " + ((getConfigValue("projects") as string[] || []).length))
       console.log()
       console.log(chalk.gray("To clear AI preference: jfl preferences --clear-ai"))
       console.log()

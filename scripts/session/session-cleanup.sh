@@ -1,11 +1,24 @@
 #!/bin/bash
 #
-# Session Cleanup - Auto-merge and remove worktree if safe
+# Session Cleanup - Auto-merge session and cleanup
 #
-# Called by Stop hook to clean up session branches automatically.
+# Called by Stop hook or /end skill to clean up sessions.
+# Handles both worktree mode (multiple sessions) and direct mode (single session).
 # Only keeps branches that have real conflicts or uncommitted work.
 
 set -e
+
+# Get working branch from config (fallback to main)
+get_working_branch() {
+    local config_branch=$(jq -r '.working_branch // empty' .jfl/config.json 2>/dev/null)
+    if [[ -n "$config_branch" ]]; then
+        echo "$config_branch"
+    else
+        echo "main"
+    fi
+}
+
+WORKING_BRANCH=$(get_working_branch)
 
 # Stop background processes first
 echo "Stopping background processes..."
@@ -60,6 +73,15 @@ if [[ ! "$BRANCH" =~ ^session- ]]; then
   exit 0
 fi
 
+# Detect mode: are we in a worktree or working directly?
+IN_WORKTREE=false
+if [[ "$(pwd)" == *"/worktrees/session-"* ]]; then
+  IN_WORKTREE=true
+  echo "Cleaning up worktree session: $BRANCH"
+else
+  echo "Cleaning up direct session: $BRANCH"
+fi
+
 # Auto-commit any uncommitted changes first
 if ! git diff --quiet || ! git diff --cached --quiet; then
   echo "Auto-committing changes..."
@@ -78,14 +100,20 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
   fi
 fi
 
-# Detect main repo location (we're in a worktree)
-MAIN_REPO=$(git rev-parse --git-common-dir 2>/dev/null | sed 's|/\.git$||')
-if [ -z "$MAIN_REPO" ] || [ ! -d "$MAIN_REPO" ]; then
-  # Fallback: find parent directory
-  MAIN_REPO=$(git worktree list | grep "(bare)" | awk '{print $1}' | head -1)
-  if [ -z "$MAIN_REPO" ]; then
-    MAIN_REPO=$(git worktree list | head -1 | awk '{print $1}')
+# Detect main repo location
+if [ "$IN_WORKTREE" = true ]; then
+  # We're in a worktree - find main repo
+  MAIN_REPO=$(git rev-parse --git-common-dir 2>/dev/null | sed 's|/\.git$||')
+  if [ -z "$MAIN_REPO" ] || [ ! -d "$MAIN_REPO" ]; then
+    # Fallback: find parent directory
+    MAIN_REPO=$(git worktree list | grep "(bare)" | awk '{print $1}' | head -1)
+    if [ -z "$MAIN_REPO" ]; then
+      MAIN_REPO=$(git worktree list | head -1 | awk '{print $1}')
+    fi
   fi
+else
+  # We're in direct mode - already in main repo
+  MAIN_REPO=$(pwd)
 fi
 
 # Pre-merge cleanup: Remove files that will definitely conflict
@@ -102,14 +130,18 @@ if ! git diff --quiet HEAD 2>/dev/null; then
   git commit -m "cleanup: remove session metadata before merge" 2>/dev/null || true
 fi
 
-# Try to merge to main
-echo "Attempting to merge $BRANCH to main..."
+# Try to merge to working branch
+echo "Attempting to merge $BRANCH to $WORKING_BRANCH..."
 cd "$MAIN_REPO"
 
-# Checkout main in the main repo
-if ! git checkout main 2>/dev/null; then
-  echo "⚠ Could not checkout main, skipping merge"
+# Checkout working branch in the main repo
+if ! git checkout "$WORKING_BRANCH" 2>/dev/null; then
+  echo "⚠ Could not checkout $WORKING_BRANCH, skipping merge"
   echo "  Session branch $BRANCH preserved for manual merge"
+  # Notify jfl-services that session ended
+  if command -v curl >/dev/null 2>&1; then
+    curl -s -X DELETE "http://localhost:3401/sessions/$BRANCH" >/dev/null 2>&1 || true
+  fi
   exit 0
 fi
 
@@ -118,10 +150,10 @@ MERGE_OUTPUT=$(git merge --no-edit -X ours "$BRANCH" 2>&1)
 MERGE_STATUS=$?
 
 if [ $MERGE_STATUS -eq 0 ]; then
-  echo "✓ Merged $BRANCH to main"
+  echo "✓ Merged $BRANCH to $WORKING_BRANCH"
 
   # Push to origin
-  git push origin main 2>/dev/null || echo "⚠ Push failed - run manually: git push origin main"
+  git push origin "$WORKING_BRANCH" 2>/dev/null || echo "⚠ Push failed - run manually: git push origin $WORKING_BRANCH"
 
   # Remove worktree if it exists
   WORKTREE_PATH=$(git worktree list | grep "$BRANCH" | awk '{print $1}' | head -1)
@@ -135,7 +167,12 @@ if [ $MERGE_STATUS -eq 0 ]; then
   echo "Deleting branch $BRANCH..."
   git branch -D "$BRANCH" 2>/dev/null || true
 
-  echo "✓ Session cleanup complete - merged to main and pushed"
+  echo "✓ Session cleanup complete - merged to $WORKING_BRANCH and pushed"
+
+  # Notify jfl-services that session ended
+  if command -v curl >/dev/null 2>&1; then
+    curl -s -X DELETE "http://localhost:3401/sessions/$BRANCH" >/dev/null 2>&1 || true
+  fi
 else
   # Merge failed - try auto-resolving common conflicts
   echo "Initial merge failed, attempting auto-resolve..."
@@ -162,13 +199,13 @@ else
         ;;
       product)
         # Product directory conflict (likely symlink vs dir)
-        # Keep main's version (which should be platform symlink or nothing)
-        echo "  Auto-resolving: $file (keeping main's version)"
+        # Keep working branch's version (which should be platform symlink or nothing)
+        echo "  Auto-resolving: $file (keeping $WORKING_BRANCH's version)"
         git checkout --ours "$file" 2>/dev/null || git rm -f "$file" 2>/dev/null || true
         ;;
       platform|cli|runner)
-        # Submodule conflicts - keep main's version
-        echo "  Auto-resolving: $file (keeping main's submodule state)"
+        # Submodule conflicts - keep working branch's version
+        echo "  Auto-resolving: $file (keeping $WORKING_BRANCH's submodule state)"
         git checkout --ours "$file" 2>/dev/null || true
         ;;
       *)
@@ -185,10 +222,10 @@ else
     git add -A
     git commit --no-edit 2>/dev/null || true
 
-    echo "✓ Merged $BRANCH to main (with auto-resolution)"
+    echo "✓ Merged $BRANCH to $WORKING_BRANCH (with auto-resolution)"
 
     # Push to origin
-    git push origin main 2>/dev/null || echo "⚠ Push failed - run manually: git push origin main"
+    git push origin "$WORKING_BRANCH" 2>/dev/null || echo "⚠ Push failed - run manually: git push origin $WORKING_BRANCH"
 
     # Remove worktree
     WORKTREE_PATH=$(git worktree list | grep "$BRANCH" | awk '{print $1}' | head -1)
@@ -202,15 +239,30 @@ else
     echo "Deleting branch $BRANCH..."
     git branch -D "$BRANCH" 2>/dev/null || true
 
-    echo "✓ Session cleanup complete - merged to main and pushed"
+    echo "✓ Session cleanup complete - merged to $WORKING_BRANCH and pushed"
+
+    # Notify jfl-services that session ended
+    if command -v curl >/dev/null 2>&1; then
+      curl -s -X DELETE "http://localhost:3401/sessions/$BRANCH" >/dev/null 2>&1 || true
+    fi
   else
     # Still have unresolved conflicts
     echo "⚠ Merge conflicts remain, keeping branch $BRANCH"
-    echo "  Review later with: git log main..$BRANCH"
+    echo "  Review later with: git log $WORKING_BRANCH..$BRANCH"
     echo "  Conflicting files:"
     git diff --name-only --diff-filter=U 2>/dev/null | sed 's/^/    - /'
     git merge --abort 2>/dev/null || true
+
+    # Notify jfl-services that session ended (even though we kept the branch)
+    if command -v curl >/dev/null 2>&1; then
+      curl -s -X DELETE "http://localhost:3401/sessions/$BRANCH" >/dev/null 2>&1 || true
+    fi
   fi
+fi
+
+# Final notification to jfl-services (in case we skipped merge paths)
+if command -v curl >/dev/null 2>&1; then
+  curl -s -X DELETE "http://localhost:3401/sessions/$BRANCH" >/dev/null 2>&1 || true
 fi
 
 exit 0

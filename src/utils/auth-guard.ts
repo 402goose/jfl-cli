@@ -10,7 +10,7 @@
 import chalk from 'chalk'
 import ora from 'ora'
 import inquirer from 'inquirer'
-import Conf from 'conf'
+import { getConfigValue, setConfig } from './jfl-config.js'
 import {
   getDayPass,
   getDayPassTimeRemaining,
@@ -31,8 +31,6 @@ import {
 } from './project-config.js'
 import type { Hex } from 'viem'
 
-const config = new Conf({ projectName: 'jfl' })
-
 export interface AuthResult {
   authenticated: boolean
   dayPass?: DayPass
@@ -44,13 +42,13 @@ export interface AuthResult {
  */
 function getPrivateKey(): Hex | null {
   // Try seed phrase first
-  const seedPhrase = config.get('x402SeedPhrase') as string | undefined
+  const seedPhrase = getConfigValue('x402SeedPhrase') as string | undefined
   if (seedPhrase) {
     return seedPhraseToPrivateKey(seedPhrase, 0)
   }
 
   // Try direct private key
-  const privateKey = config.get('x402PrivateKey') as Hex | undefined
+  const privateKey = getConfigValue('x402PrivateKey') as Hex | undefined
   if (privateKey) {
     return privateKey
   }
@@ -62,8 +60,8 @@ function getPrivateKey(): Hex | null {
  * Check if user is authenticated (has wallet with signing capability)
  */
 export function hasWallet(): boolean {
-  const address = config.get('x402Address')
-  const hasKey = config.get('x402PrivateKey') || config.get('x402SeedPhrase')
+  const address = getConfigValue('x402Address')
+  const hasKey = getConfigValue('x402PrivateKey') || getConfigValue('x402SeedPhrase')
   return !!(address && hasKey)
 }
 
@@ -71,7 +69,7 @@ export function hasWallet(): boolean {
  * Get user's wallet address
  */
 export function getWalletAddress(): string | null {
-  return config.get('x402Address') as string | null
+  return getConfigValue('x402Address') as string | null
 }
 
 /**
@@ -332,7 +330,7 @@ export async function requireDayPass<T>(
  */
 export function isTrialMode(): boolean {
   // Check if user has completed foundation
-  const foundationComplete = config.get('foundationComplete') as boolean | undefined
+  const foundationComplete = getConfigValue('foundationComplete') as boolean | undefined
   if (foundationComplete) return false
 
   // Check if any teammates have actually joined (authenticated)
@@ -402,7 +400,7 @@ export function markTeammateJoined(username: string): boolean {
  * Mark foundation as complete (triggers payment requirement)
  */
 export function markFoundationComplete(): void {
-  config.set('foundationComplete', true)
+  setConfig('foundationComplete', true)
 }
 
 /**

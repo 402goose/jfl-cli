@@ -200,151 +200,93 @@ if [[ -d "$WORKTREES_DIR" ]]; then
 fi
 
 # ==============================================================================
-# Step 2.9: Check for concurrent sessions via jfl-services
+# Step 3: Create new worktree
 # ==============================================================================
 
-# Generate session details first
+# Generate session name with collision protection
 user=$(git config user.name 2>/dev/null | tr ' ' '-' | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-' || echo "user")
+# Truncate long usernames to prevent path issues
 user="${user:0:30}"
 date_str=$(date +%Y%m%d)
 time_str=$(date +%H%M)
-random_id=$(openssl rand -hex 3 2>/dev/null || printf "%06x" $RANDOM$RANDOM)
-session_name="session-${user}-${date_str}-${time_str}-${random_id}"
 
-# Get working branch (from config or current branch)
-working_branch=$(jq -r '.working_branch // empty' .jfl/config.json 2>/dev/null)
-if [[ -z "$working_branch" ]]; then
-    working_branch=$(git branch --show-current)
+# Generate unique session name, retry if collision detected
+max_attempts=5
+attempt=0
+while [[ $attempt -lt $max_attempts ]]; do
+    random_id=$(openssl rand -hex 3 2>/dev/null || printf "%06x" $RANDOM$RANDOM)
+    session_name="session-${user}-${date_str}-${time_str}-${random_id}"
+
+    # Check for collision: journal file or worktree already exists
+    if [[ -f "$REPO_DIR/.jfl/journal/${session_name}.jsonl" ]] || [[ -d "$WORKTREES_DIR/$session_name" ]]; then
+        echo -e "${YELLOW}⚠${NC}  Session name collision, regenerating..."
+        attempt=$((attempt + 1))
+        sleep 0.1  # Brief pause before retry
+    else
+        break
+    fi
+done
+
+if [[ $attempt -ge $max_attempts ]]; then
+    echo -e "${RED}✗${NC}  Failed to generate unique session name after $max_attempts attempts"
+    exit 1
 fi
 
-# Check for concurrent sessions via jfl-services API
-use_worktree=false
-api_response=""
-if command -v curl >/dev/null 2>&1; then
-    api_response=$(curl -s -X GET "http://localhost:3401/sessions/active?projectPath=$(pwd)" 2>/dev/null || echo "")
+worktree_path="$WORKTREES_DIR/$session_name"
 
-    if [[ -n "$api_response" ]] && echo "$api_response" | jq -e '.count' >/dev/null 2>&1; then
-        session_count=$(echo "$api_response" | jq -r '.count // 0')
+echo ""
+echo "Creating session: $session_name"
 
-        if [[ $session_count -gt 0 ]]; then
-            use_worktree=true
-            echo -e "${YELLOW}→${NC}  Multiple sessions detected ($session_count active) - using worktree for isolation"
-        else
-            echo -e "${GREEN}→${NC}  Single session - working directly on branch $working_branch"
-        fi
-    else
-        # API unavailable - fall back to local detection
-        echo -e "${YELLOW}→${NC}  jfl-services unavailable - checking locally..."
-        local_sessions=$(ps aux | grep -c "claude.*$(pwd)" 2>/dev/null || echo "1")
-        if [[ $local_sessions -gt 2 ]]; then
-            use_worktree=true
-            echo -e "${YELLOW}→${NC}  Multiple processes detected - using worktree for isolation"
-        fi
-    fi
+# Create worktree
+if git worktree add "$worktree_path" -b "$session_name" 2>&1 | head -3; then
+    echo -e "${GREEN}✓${NC}  Worktree created"
 else
-    # No curl - assume single session
-    echo -e "${GREEN}→${NC}  Working directly on branch $working_branch"
+    echo -e "${RED}✗${NC}  Failed to create worktree"
+    # Fall back to main branch
+    echo "main" > "$REPO_DIR/.jfl/current-worktree.txt"
+    echo "main" > "$REPO_DIR/.jfl/current-session-branch.txt"
+    exit 0
 fi
 
-# Register this session with jfl-services
-if command -v curl >/dev/null 2>&1; then
-    curl -s -X POST "http://localhost:3401/sessions/start" \
-        -H "Content-Type: application/json" \
-        -d "{\"id\":\"$session_name\",\"projectPath\":\"$(pwd)\",\"branch\":\"$working_branch\",\"user\":\"$user\",\"pid\":$$,\"worktree\":\"$use_worktree\"}" \
-        >/dev/null 2>&1 || true
+# Initialize submodules in worktree (quick, no network)
+cd "$worktree_path"
+if [[ -f ".gitmodules" ]]; then
+    if [[ ! -d "product/.git" ]] && [[ ! -f "product/.git" ]]; then
+        echo "→  Initializing submodules..."
+        git submodule update --init --depth 1 product 2>/dev/null || true
+    fi
 fi
+
+# Create session directories
+mkdir -p .jfl/logs
+
+# CRITICAL: Symlink journal to main repo so entries persist after worktree cleanup
+# Without this, journal entries written in worktree are lost when worktree is removed!
+rm -rf .jfl/journal 2>/dev/null || true
+ln -sf "$REPO_DIR/.jfl/journal" .jfl/journal
+echo -e "${GREEN}✓${NC}  Journal symlinked to main repo"
+
+# Start auto-commit in background
+if [[ -x "$SCRIPT_DIR/auto-commit.sh" ]]; then
+    "$SCRIPT_DIR/auto-commit.sh" start >> .jfl/logs/auto-commit.log 2>&1 &
+    echo -e "${GREEN}✓${NC}  Auto-commit started"
+fi
+
+cd "$REPO_DIR"
 
 # ==============================================================================
-# Step 3: Create worktree (if needed) or work directly
+# Step 4: Save state and output instructions
 # ==============================================================================
 
-if [[ "$use_worktree" == "true" ]]; then
-    # WORKTREE MODE: Multiple sessions detected
-    echo ""
-    echo "Creating worktree session: $session_name"
+# Save paths
+echo "$worktree_path" > "$REPO_DIR/.jfl/current-worktree.txt"
+echo "$session_name" > "$REPO_DIR/.jfl/current-session-branch.txt"
 
-    worktree_path="$WORKTREES_DIR/$session_name"
+# Also save in worktree
+echo "$session_name" > "$worktree_path/.jfl/current-session-branch.txt"
 
-    # Create worktree
-    if git worktree add "$worktree_path" -b "$session_name" 2>&1 | head -3; then
-        echo -e "${GREEN}✓${NC}  Worktree created"
-    else
-        echo -e "${RED}✗${NC}  Failed to create worktree"
-        # Fall back to direct branch mode
-        use_worktree=false
-    fi
-
-    if [[ "$use_worktree" == "true" ]]; then
-        # Initialize submodules in worktree (quick, no network)
-        cd "$worktree_path"
-        if [[ -f ".gitmodules" ]]; then
-            if [[ ! -d "product/.git" ]] && [[ ! -f "product/.git" ]]; then
-                echo "→  Initializing submodules..."
-                git submodule update --init --depth 1 product 2>/dev/null || true
-            fi
-        fi
-
-        # Create session directories
-        mkdir -p .jfl/logs
-
-        # CRITICAL: Symlink journal to main repo so entries persist after worktree cleanup
-        rm -rf .jfl/journal 2>/dev/null || true
-        ln -sf "$REPO_DIR/.jfl/journal" .jfl/journal
-        echo -e "${GREEN}✓${NC}  Journal symlinked to main repo"
-
-        # Start auto-commit in background
-        if [[ -x "$SCRIPT_DIR/auto-commit.sh" ]]; then
-            "$SCRIPT_DIR/auto-commit.sh" start >> .jfl/logs/auto-commit.log 2>&1 &
-            echo -e "${GREEN}✓${NC}  Auto-commit started"
-        fi
-
-        cd "$REPO_DIR"
-
-        # Save paths
-        echo "$worktree_path" > "$REPO_DIR/.jfl/current-worktree.txt"
-        echo "$session_name" > "$REPO_DIR/.jfl/current-session-branch.txt"
-        echo "$session_name" > "$worktree_path/.jfl/current-session-branch.txt"
-
-        echo ""
-        echo -e "${GREEN}✓${NC}  Session ready in worktree: $worktree_path"
-        echo ""
-    fi
-fi
-
-if [[ "$use_worktree" != "true" ]]; then
-    # DIRECT MODE: Single session, work on current branch
-    echo ""
-    echo "Direct session mode: $session_name"
-
-    # Ensure we're on working branch
-    current_branch=$(git branch --show-current)
-    if [[ "$current_branch" != "$working_branch" ]]; then
-        echo "→  Switching to working branch: $working_branch"
-        git checkout "$working_branch" 2>&1 | head -3
-    fi
-
-    # Create session branch from working branch
-    if git checkout -b "$session_name" 2>&1 | head -3; then
-        echo -e "${GREEN}✓${NC}  Session branch created: $session_name"
-    else
-        echo -e "${YELLOW}⚠${NC}  Continuing on branch: $current_branch"
-        session_name="$current_branch"
-    fi
-
-    # Create session directories
-    mkdir -p .jfl/logs
-
-    # Start auto-commit in background
-    if [[ -x "$SCRIPT_DIR/auto-commit.sh" ]]; then
-        "$SCRIPT_DIR/auto-commit.sh" start >> .jfl/logs/auto-commit.log 2>&1 &
-        echo -e "${GREEN}✓${NC}  Auto-commit started"
-    fi
-
-    # Save session info (no worktree path in direct mode)
-    echo "direct" > "$REPO_DIR/.jfl/current-worktree.txt"
-    echo "$session_name" > "$REPO_DIR/.jfl/current-session-branch.txt"
-
-    echo ""
-    echo -e "${GREEN}✓${NC}  Session ready on branch: $session_name"
-    echo ""
-fi
+echo ""
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo -e "  ${CYAN}CLAUDE: You MUST run:${NC} cd $worktree_path"
+echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+echo ""

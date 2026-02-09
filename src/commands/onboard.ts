@@ -68,7 +68,7 @@ function findGTMDirectory(): string | null {
 /**
  * Clone git repository to standard location
  */
-function cloneRepository(url: string, targetDir?: string): string {
+async function cloneRepository(url: string, targetDir?: string): Promise<string> {
   // Extract repo name from URL
   const match = url.match(/\/([^\/]+?)(\.git)?$/)
   if (!match) {
@@ -77,8 +77,15 @@ function cloneRepository(url: string, targetDir?: string): string {
 
   const repoName = match[1]
 
-  // Default clone directory
-  const cloneDir = targetDir || join(homedir(), "code/formation")
+  // Default clone directory - use user's code directory preference
+  let cloneDir: string
+  if (targetDir) {
+    cloneDir = targetDir
+  } else {
+    const { getCodeDirectory } = await import("../utils/jfl-config.js")
+    const codeDir = await getCodeDirectory()
+    cloneDir = join(codeDir, "repos")
+  }
 
   // Check if repo already exists
   const repoPath = join(cloneDir, repoName)
@@ -311,7 +318,7 @@ export async function onboardCommand(
   if (isGitURL && !options.skipGit) {
     // Clone the repository
     console.log(chalk.cyan("📦 Git repository detected"))
-    servicePath = cloneRepository(pathOrUrl)
+    servicePath = await cloneRepository(pathOrUrl)
     console.log()
   } else {
     // Resolve local path

@@ -1,10 +1,8 @@
 import chalk from "chalk"
-import Conf from "conf"
 import inquirer from "inquirer"
 import { existsSync } from "fs"
 import { join } from "path"
-
-const config = new Conf({ projectName: "jfl" })
+import { getConfigValue, setConfig } from "./jfl-config.js"
 
 /**
  * Check if we're in a JFL project. If not, offer to navigate to known projects.
@@ -23,7 +21,7 @@ export async function ensureInProject(): Promise<boolean> {
   }
 
   // Not in a project - check for known projects
-  const knownProjects = (config.get("projects") as string[]) || []
+  const knownProjects = (getConfigValue("projects") as string[]) || []
   const existingProjects = knownProjects.filter(
     (p) => existsSync(join(p, "CLAUDE.md")) || existsSync(join(p, "knowledge"))
   )
@@ -67,7 +65,7 @@ export async function ensureInProject(): Promise<boolean> {
 
   // Navigate to selected project
   // Update config with cleaned list
-  config.set("projects", existingProjects)
+  setConfig("projects", existingProjects)
 
   process.chdir(selected)
   console.log(chalk.gray(`\nOpened ${selected}\n`))

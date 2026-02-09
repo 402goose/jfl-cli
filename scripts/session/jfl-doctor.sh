@@ -247,7 +247,8 @@ cleanup_stale_session() {
     local uncommitted=$(git status --porcelain 2>/dev/null | wc -l | tr -d ' ')
 
     if [[ $uncommitted -gt 0 ]]; then
-        echo "    ⚠ Has $uncommitted uncommitted files - skipping (use --force to discard)"
+        echo "    ⚠ Crash recovery: $uncommitted uncommitted files detected"
+        echo "       Run session-init.sh to handle this interactively, or use --force to discard"
         cd "$REPO_DIR"
         return
     fi
@@ -305,6 +306,11 @@ cleanup_stale_session() {
     # Remove session state
     if [[ -f "$SESSIONS_DIR/$session_name.json" ]]; then
         rm -f "$SESSIONS_DIR/$session_name.json"
+    fi
+
+    # Remove from jfl-services session tracking
+    if command -v curl >/dev/null 2>&1; then
+        curl -s -X DELETE "http://localhost:3401/sessions/$session_name" >/dev/null 2>&1 || true
     fi
 
     FIXED=$((FIXED + 1))

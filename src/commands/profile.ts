@@ -1,10 +1,8 @@
 import chalk from "chalk"
 import * as p from "@clack/prompts"
 import { existsSync, readFileSync, writeFileSync } from "fs"
-import Conf from "conf"
 import Anthropic from "@anthropic-ai/sdk"
-
-const config = new Conf({ projectName: "jfl" })
+import { getConfig, setConfig, getConfigValue } from "../utils/jfl-config.js"
 
 // Profile schema
 export interface ProfileData {
@@ -66,7 +64,7 @@ export async function profileCommand(action?: string, options?: { file?: string;
 }
 
 async function showProfile() {
-  const profile = config.get("profile") as ProfileData | undefined
+  const profile = getConfigValue("profile") as ProfileData | undefined
 
   if (!profile) {
     console.log(chalk.yellow("\n⚠️  No profile set"))
@@ -423,7 +421,7 @@ async function setProfile() {
   }
 
   // Save profile
-  config.set("profile", profile)
+  setConfig("profile", profile)
 
   p.outro(chalk.green("✓ Profile saved! Used in all JFL projects."))
   console.log()
@@ -433,7 +431,7 @@ async function setProfile() {
 }
 
 async function editProfile() {
-  const existing = config.get("profile") as ProfileData | undefined
+  const existing = getConfigValue("profile") as ProfileData | undefined
 
   if (!existing) {
     console.log(chalk.yellow("\n⚠️  No profile set. Running initial setup...\n"))
@@ -447,7 +445,7 @@ async function editProfile() {
 }
 
 async function exportProfile(file?: string) {
-  const profile = config.get("profile") as ProfileData | undefined
+  const profile = getConfigValue("profile") as ProfileData | undefined
 
   if (!profile) {
     console.log(chalk.yellow("\n⚠️  No profile set"))
@@ -477,7 +475,7 @@ async function importProfile(file?: string) {
     const content = readFileSync(file, "utf-8")
     const profile = JSON.parse(content) as ProfileData
 
-    config.set("profile", profile)
+    setConfig("profile", profile)
     console.log(chalk.green("\n✓ Profile imported successfully\n"))
   } catch (err: any) {
     console.log(chalk.red(`\n❌ Failed to import: ${err.message}\n`))
@@ -494,7 +492,7 @@ async function generateClaudeMd(outputFile?: string) {
     return
   }
 
-  const profile = config.get("profile") as ProfileData | undefined
+  const profile = getConfigValue("profile") as ProfileData | undefined
 
   if (!profile) {
     console.log(chalk.yellow("\n⚠️  No profile set. Run 'jfl profile' first\n"))
@@ -607,5 +605,5 @@ function buildClaudePrompt(profile: ProfileData): string {
 
 // Helper to get profile for other commands
 export function getProfile(): ProfileData | undefined {
-  return config.get("profile") as ProfileData | undefined
+  return getConfigValue("profile") as ProfileData | undefined
 }
