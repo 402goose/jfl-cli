@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Session Cleanup - Auto-merge session branch to main
+# Session Cleanup - Auto-merge and remove worktree if safe
 #
 # Called by Stop hook to clean up session branches automatically.
 # Only keeps branches that have real conflicts or uncommitted work.
@@ -72,13 +72,30 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
     git add -A
     # Unstage session metadata files that should never be committed
     git reset HEAD .jfl/current-session-branch.txt 2>/dev/null || true
+    git reset HEAD .jfl/current-worktree.txt 2>/dev/null || true
+    git reset HEAD .jfl/worktree-path.txt 2>/dev/null || true
     git commit -m "session: end $(date +%Y-%m-%d\ %H:%M)" || true
+  fi
+fi
+
+# Detect main repo location (we're in a worktree)
+MAIN_REPO=$(git rev-parse --git-common-dir 2>/dev/null | sed 's|/\.git$||')
+if [ -z "$MAIN_REPO" ] || [ ! -d "$MAIN_REPO" ]; then
+  # Fallback: find parent directory
+  MAIN_REPO=$(git worktree list | grep "(bare)" | awk '{print $1}' | head -1)
+  if [ -z "$MAIN_REPO" ]; then
+    MAIN_REPO=$(git worktree list | head -1 | awk '{print $1}')
   fi
 fi
 
 # Pre-merge cleanup: Remove files that will definitely conflict
 echo "Pre-merge cleanup..."
 git rm -f .jfl/current-session-branch.txt 2>/dev/null || true
+git rm -f .jfl/current-worktree.txt 2>/dev/null || true
+git rm -f .jfl/worktree-path.txt 2>/dev/null || true
+
+# Remove any git conflict artifacts from previous failed merges
+find .jfl -name "journal~*" -type f -delete 2>/dev/null || true
 
 # Commit cleanup if there are changes
 if ! git diff --quiet HEAD 2>/dev/null; then
@@ -87,8 +104,9 @@ fi
 
 # Try to merge to main
 echo "Attempting to merge $BRANCH to main..."
+cd "$MAIN_REPO"
 
-# Checkout main
+# Checkout main in the main repo
 if ! git checkout main 2>/dev/null; then
   echo "⚠ Could not checkout main, skipping merge"
   echo "  Session branch $BRANCH preserved for manual merge"
@@ -104,6 +122,14 @@ if [ $MERGE_STATUS -eq 0 ]; then
 
   # Push to origin
   git push origin main 2>/dev/null || echo "⚠ Push failed - run manually: git push origin main"
+
+  # Remove worktree if it exists
+  WORKTREE_PATH=$(git worktree list | grep "$BRANCH" | awk '{print $1}' | head -1)
+  if [ -n "$WORKTREE_PATH" ] && [ -d "$WORKTREE_PATH" ]; then
+    echo "Removing worktree at $WORKTREE_PATH..."
+    rm -rf "$WORKTREE_PATH" 2>/dev/null || true
+    git worktree prune 2>/dev/null || true
+  fi
 
   # Delete the branch
   echo "Deleting branch $BRANCH..."
@@ -124,9 +150,14 @@ else
     fi
 
     case "$file" in
-      .jfl/current-session-branch.txt)
+      .jfl/current-session-branch.txt|.jfl/current-worktree.txt|.jfl/worktree-path.txt)
         # Session metadata - just remove it
         echo "  Auto-resolving: $file (removing)"
+        git rm -f "$file" 2>/dev/null || true
+        ;;
+      .jfl/journal~*)
+        # Git conflict artifact - remove it
+        echo "  Auto-resolving: $file (removing artifact)"
         git rm -f "$file" 2>/dev/null || true
         ;;
       product)
@@ -159,6 +190,14 @@ else
     # Push to origin
     git push origin main 2>/dev/null || echo "⚠ Push failed - run manually: git push origin main"
 
+    # Remove worktree
+    WORKTREE_PATH=$(git worktree list | grep "$BRANCH" | awk '{print $1}' | head -1)
+    if [ -n "$WORKTREE_PATH" ] && [ -d "$WORKTREE_PATH" ]; then
+      echo "Removing worktree at $WORKTREE_PATH..."
+      rm -rf "$WORKTREE_PATH" 2>/dev/null || true
+      git worktree prune 2>/dev/null || true
+    fi
+
     # Delete the branch
     echo "Deleting branch $BRANCH..."
     git branch -D "$BRANCH" 2>/dev/null || true
@@ -173,8 +212,5 @@ else
     git merge --abort 2>/dev/null || true
   fi
 fi
-
-# Clean up tracking file
-rm -f .jfl/current-session-branch.txt
 
 exit 0
