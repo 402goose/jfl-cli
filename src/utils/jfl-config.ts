@@ -1,10 +1,10 @@
 /**
  * JFL Configuration Management
  *
- * Centralized config storage in ~/.jfl/config.json
+ * Centralized config storage in XDG-compliant directories
  * Replaces Conf library to keep all state in JFL's namespace.
  *
- * @purpose Global JFL configuration management in ~/.jfl/ namespace
+ * @purpose Global JFL configuration management in XDG directories
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs"
@@ -13,18 +13,17 @@ import { homedir } from "os"
 import path from "path"
 import chalk from "chalk"
 import inquirer from "inquirer"
+import { JFL_PATHS, JFL_FILES, ensureJflDirs } from "./jfl-paths.js"
 
-const JFL_DIR = join(homedir(), ".jfl")
-const CONFIG_FILE = join(JFL_DIR, "config.json")
+// Use XDG-compliant config path
+const CONFIG_FILE = JFL_FILES.config
 
 // ============================================================================
 // Config Operations
 // ============================================================================
 
 export function ensureJFLDir(): void {
-  if (!existsSync(JFL_DIR)) {
-    mkdirSync(JFL_DIR, { recursive: true })
-  }
+  ensureJflDirs()
 }
 
 export function getConfig(): Record<string, any> {
@@ -132,6 +131,6 @@ export function getMCPConfigFile(): string {
     return path.join(projectRoot, ".mcp.json")
   }
 
-  // Global mode - store in JFL's namespace (not Claude's!)
-  return path.join(JFL_DIR, "mcp-config.json")
+  // Global mode - store in JFL's config dir (XDG compliant)
+  return path.join(JFL_PATHS.config, "mcp-config.json")
 }

@@ -14,6 +14,7 @@ import { exec } from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 import { homedir } from 'os';
+import { JFL_PATHS } from '../utils/jfl-paths.js';
 
 // Types
 interface Service {
@@ -37,7 +38,7 @@ interface ServiceManagerConfig {
 }
 
 const DEFAULT_PORT = 3402;
-const CONFIG_FILE = path.join(homedir(), '.jfl', 'service-manager.json');
+const CONFIG_FILE = path.join(JFL_PATHS.config, 'service-manager.json');
 
 function getServiceManagerPort(): number {
   if (process.env.JFL_SERVICE_MANAGER_PORT) {

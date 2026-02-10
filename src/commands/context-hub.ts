@@ -900,13 +900,17 @@ export async function contextHubCommand(
   const projectRoot = isGlobal ? homedir() : process.cwd()
   const port = options.port || DEFAULT_PORT
 
-  // Ensure .jfl directory exists
-  const jflDir = isGlobal
-    ? path.join(homedir(), ".jfl")
-    : path.join(projectRoot, ".jfl")
-
-  if (!fs.existsSync(jflDir)) {
-    fs.mkdirSync(jflDir, { recursive: true })
+  // Ensure directories exist
+  if (isGlobal) {
+    // Global mode: use XDG directories
+    const { JFL_PATHS, ensureJflDirs } = await import("../utils/jfl-paths.js")
+    ensureJflDirs()
+  } else {
+    // Project mode: use .jfl/
+    const jflDir = path.join(projectRoot, ".jfl")
+    if (!fs.existsSync(jflDir)) {
+      fs.mkdirSync(jflDir, { recursive: true })
+    }
   }
 
   switch (action) {
@@ -1160,7 +1164,8 @@ export async function contextHubCommand(
 
     case "clear-logs": {
       // Clear both global and local log files
-      const globalLogFile = path.join(homedir(), ".jfl", "logs", "context-hub.log")
+      const { JFL_FILES } = await import("../utils/jfl-paths.js")
+      const globalLogFile = path.join(JFL_FILES.servicesLogs, "context-hub.log")
       const localLogFile = getLogFile(projectRoot)
 
       let cleared = 0

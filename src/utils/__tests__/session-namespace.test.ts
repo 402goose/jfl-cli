@@ -9,18 +9,20 @@ import * as fs from 'fs'
 import * as path from 'path'
 import { homedir } from 'os'
 import { execSync } from 'child_process'
+import { JFL_PATHS, JFL_FILES } from '../jfl-paths'
 
-const JFL_DIR = path.join(homedir(), '.jfl')
-const SESSIONS_FILE = path.join(JFL_DIR, 'sessions.json')
+// Use XDG-compliant paths for tests
+const SESSIONS_FILE = JFL_FILES.sessions
 
 describe('Session Namespace Isolation', () => {
   describe('Session Storage Location', () => {
-    it('stores sessions.json in ~/.jfl/ namespace', () => {
+    it('stores sessions.json in XDG data directory', () => {
       // Verify the constant is correctly defined
       const sessionsPath = SESSIONS_FILE
-      expect(sessionsPath).toContain('.jfl')
       expect(sessionsPath).toContain('sessions.json')
       expect(sessionsPath.startsWith(homedir())).toBe(true)
+      // Should be in XDG data directory
+      expect(sessionsPath).toContain(JFL_PATHS.data)
     })
 
     it('session-specific files do not exist outside ~/.jfl/', () => {
@@ -69,22 +71,20 @@ describe('Session Namespace Isolation', () => {
 
       // Verify the API would write to the correct location
       // (This is a structural test - actual API calls require server running)
-      const expectedPath = path.join(homedir(), '.jfl', 'sessions.json')
-      expect(SESSIONS_FILE).toBe(expectedPath)
+      expect(SESSIONS_FILE).toBe(JFL_FILES.sessions)
     })
 
-    it('session cleanup removes from ~/.jfl/sessions.json only', () => {
+    it('session cleanup removes from JFL data directory only', () => {
       // Verify cleanup only touches JFL namespace
-      const jflFiles = [
-        'sessions.json',
-        'session-123.jsonl', // journal entries
-        'auto-commit.pid',
+      const jflDataFiles = [
+        path.join(JFL_PATHS.data, 'sessions.json'),
+        path.join(JFL_PATHS.data, 'session-123.jsonl'),
+        path.join(JFL_PATHS.data, 'auto-commit.pid'),
       ]
 
-      jflFiles.forEach((file) => {
-        const fullPath = path.join(JFL_DIR, file)
-        // These paths are all within JFL namespace
-        expect(fullPath.startsWith(JFL_DIR)).toBe(true)
+      jflDataFiles.forEach((fullPath) => {
+        // These paths are all within JFL data namespace
+        expect(fullPath.startsWith(JFL_PATHS.data)).toBe(true)
       })
     })
   })
@@ -120,22 +120,20 @@ describe('Session Namespace Isolation', () => {
   })
 
   describe('Service Manager Integration', () => {
-    it('service manager runs in ~/.jfl/service-manager/', () => {
-      const serviceManagerPath = path.join(homedir(), '.jfl', 'service-manager')
-      // Verify it's in the correct namespace
-      expect(serviceManagerPath.startsWith(JFL_DIR)).toBe(true)
+    it('service manager runs in XDG data directory', () => {
+      // Verify it's in the correct namespace (data directory)
+      expect(JFL_FILES.servicesDir.startsWith(JFL_PATHS.data)).toBe(true)
     })
 
     it('service manager stores data in its own subdirectory', () => {
-      const serviceManagerFiles = [
-        'registry.json',
-        'logs/',
-        'pids/',
+      const serviceManagerPaths = [
+        JFL_FILES.servicesRegistry,
+        JFL_FILES.servicesLogs,
+        JFL_FILES.servicesPids,
       ]
 
-      serviceManagerFiles.forEach((file) => {
-        const fullPath = path.join(JFL_DIR, 'service-manager', file)
-        expect(fullPath.startsWith(JFL_DIR)).toBe(true)
+      serviceManagerPaths.forEach((fullPath) => {
+        expect(fullPath.startsWith(JFL_PATHS.data)).toBe(true)
       })
     })
 
@@ -152,11 +150,10 @@ describe('Session Namespace Isolation', () => {
   })
 
   describe('Config Integration', () => {
-    it('uses jfl-config utility instead of Conf library', () => {
+    it('uses jfl-config utility with XDG paths', () => {
       // This is a code structure test
       // We verify that session code would use the right config utility
-      const configPath = path.join(homedir(), '.jfl', 'config.json')
-      expect(configPath.startsWith(JFL_DIR)).toBe(true)
+      expect(JFL_FILES.config.startsWith(JFL_PATHS.config)).toBe(true)
     })
 
     it('working_branch config is read from .jfl/config.json', () => {
@@ -217,7 +214,9 @@ describe('Session Namespace Isolation', () => {
       // 3. <project>/worktrees/ (if multiple sessions)
 
       const allowedLocations = [
-        path.join(homedir(), '.jfl'),
+        JFL_PATHS.config, // XDG config
+        JFL_PATHS.data,   // XDG data
+        JFL_PATHS.cache,  // XDG cache
         '.jfl', // project-local
         'worktrees', // project-local
       ]
@@ -249,21 +248,25 @@ describe('Session Namespace Isolation', () => {
   })
 
   describe('Namespace Compliance Matrix', () => {
-    it('all session components respect namespace boundaries', () => {
+    it('all session components respect XDG namespace boundaries', () => {
       const namespaceMap = {
         // Component: Expected namespace
-        'session tracking': path.join(homedir(), '.jfl', 'sessions.json'),
+        'session tracking': JFL_FILES.sessions,
         'journal entries': '.jfl/journal/',
         'session metadata': '.jfl/',
-        'service manager': path.join(homedir(), '.jfl', 'service-manager'),
-        'config': path.join(homedir(), '.jfl', 'config.json'),
+        'service manager': JFL_FILES.servicesDir,
+        'config': JFL_FILES.config,
         'worktrees': 'worktrees/', // project-local
       }
 
       Object.entries(namespaceMap).forEach(([component, expectedPath]) => {
-        // All global paths should be in ~/.jfl/
+        // All global paths should be in XDG directories
         if (expectedPath.startsWith(homedir())) {
-          expect(expectedPath).toContain('.jfl')
+          const isInXdg =
+            expectedPath.startsWith(JFL_PATHS.config) ||
+            expectedPath.startsWith(JFL_PATHS.data) ||
+            expectedPath.startsWith(JFL_PATHS.cache)
+          expect(isInXdg).toBe(true)
         }
 
         // Project-local paths should be relative

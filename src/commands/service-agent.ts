@@ -16,12 +16,13 @@ import { execSync } from "child_process"
 import { fileURLToPath } from "url"
 import { dirname } from "path"
 import { getMCPConfigFile, findProjectRoot } from "../utils/jfl-config.js"
+import { JFL_PATHS, JFL_FILES } from "../utils/jfl-paths.js"
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = dirname(__filename)
 
-const GLOBAL_SERVICES_FILE = path.join(homedir(), ".jfl", "services.json")
-const SERVICE_AGENTS_DIR = path.join(homedir(), ".jfl", "service-agents")
+const GLOBAL_SERVICES_FILE = path.join(JFL_PATHS.data, "services.json")
+const SERVICE_AGENTS_DIR = path.join(JFL_PATHS.data, "service-agents")
 
 // ============================================================================
 // Types

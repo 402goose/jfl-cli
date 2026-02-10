@@ -16,14 +16,15 @@ import * as http from "http"
 import { homedir } from "os"
 import { promisify } from "util"
 import { exec } from "child_process"
+import { JFL_PATHS, JFL_FILES } from "../utils/jfl-paths.js"
 
 const execAsync = promisify(exec)
 
 const DEFAULT_PORT = 3402
 const PID_FILE = ".jfl/service-manager.pid"
 const LOG_FILE = ".jfl/logs/service-manager.log"
-const CONFIG_FILE = path.join(homedir(), ".jfl", "service-manager.json")
-const GLOBAL_SERVICES_FILE = path.join(homedir(), ".jfl", "services.json")
+const CONFIG_FILE = path.join(JFL_PATHS.config, "service-manager.json")
+const GLOBAL_SERVICES_FILE = path.join(JFL_PATHS.data, "services.json")
 
 // ============================================================================
 // Types
@@ -798,15 +799,15 @@ function createServer(port: number): http.Server {
 // ============================================================================
 
 function getPidFile(): string {
-  const globalDir = path.join(homedir(), ".jfl")
-  if (!fs.existsSync(globalDir)) {
-    fs.mkdirSync(globalDir, { recursive: true })
+  const pidDir = JFL_FILES.servicesPids
+  if (!fs.existsSync(pidDir)) {
+    fs.mkdirSync(pidDir, { recursive: true })
   }
-  return path.join(globalDir, "service-manager.pid")
+  return path.join(pidDir, "service-manager.pid")
 }
 
 function getLogFile(): string {
-  const logDir = path.join(homedir(), ".jfl", "logs")
+  const logDir = JFL_FILES.servicesLogs
   if (!fs.existsSync(logDir)) {
     fs.mkdirSync(logDir, { recursive: true })
   }

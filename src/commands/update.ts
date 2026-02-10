@@ -14,10 +14,10 @@ import * as path from "path"
 import * as readline from "readline"
 import { homedir } from "os"
 import { validateSettings, fixSettings } from "../utils/settings-validator.js"
+import { JFL_FILES } from "../utils/jfl-paths.js"
 
 const TEMPLATE_REPO = "https://github.com/402goose/jfl-template.git"
 const TEMP_DIR = ".jfl-update-temp"
-const UPDATE_CHECK_CACHE = ".jfl-last-update-check"
 const UPDATE_CHECK_INTERVAL = 24 * 60 * 60 * 1000 // 24 hours
 
 // Files/folders to sync from template/ folder (not repo root)
@@ -52,8 +52,7 @@ function parseVersion(version: string): { major: number; minor: number; patch: n
 }
 
 function shouldCheckForUpdates(): boolean {
-  const cacheDir = homedir()
-  const cachePath = path.join(cacheDir, ".jfl", UPDATE_CHECK_CACHE)
+  const cachePath = JFL_FILES.updateCheck
 
   if (!fs.existsSync(cachePath)) {
     return true
@@ -68,12 +67,11 @@ function shouldCheckForUpdates(): boolean {
 }
 
 function markUpdateChecked() {
-  const homeDir = homedir()
-  const jflDir = path.join(homeDir, ".jfl")
-  const cachePath = path.join(jflDir, UPDATE_CHECK_CACHE)
+  const cachePath = JFL_FILES.updateCheck
+  const cacheDir = path.dirname(cachePath)
 
-  if (!fs.existsSync(jflDir)) {
-    fs.mkdirSync(jflDir, { recursive: true })
+  if (!fs.existsSync(cacheDir)) {
+    fs.mkdirSync(cacheDir, { recursive: true })
   }
 
   fs.writeFileSync(cachePath, Date.now().toString())

@@ -375,7 +375,7 @@ export function createVoiceError(
  */
 export function checkServerRunning(): VoiceError | null {
   // Check if server PID file exists and process is running
-  const pidPath = join(getJflDir(), "voice-server.pid")
+  const pidPath = join(JFL_PATHS.data, "voice-server.pid")
   if (existsSync(pidPath)) {
     try {
       const pid = parseInt(readFileSync(pidPath, "utf-8").trim(), 10)
@@ -485,39 +485,37 @@ type ModelName = keyof typeof WHISPER_MODELS
 
 const DEFAULT_MODEL: ModelName = "base"
 
-// Get JFL directory
-export function getJflDir(): string {
-  return join(homedir(), ".jfl")
-}
+// Voice-specific data paths (use XDG data directory)
+import { JFL_PATHS } from "../utils/jfl-paths.js"
 
 // Get models directory
 function getModelsDir(): string {
-  return join(getJflDir(), "models")
+  return join(JFL_PATHS.data, "models")
 }
 
 // Get voice config path
 function getVoiceConfigPath(): string {
-  return join(getJflDir(), "voice.yaml")
+  return join(JFL_PATHS.config, "voice.yaml")
 }
 
 // Get voice socket path
 function getVoiceSocketPath(): string {
-  return join(getJflDir(), "voice.sock")
+  return join(JFL_PATHS.data, "voice.sock")
 }
 
 // Get voice server token path
 function getVoiceTokenPath(): string {
-  return join(getJflDir(), "voice-server.token")
+  return join(JFL_PATHS.data, "voice-server.token")
 }
 
 // Get voice daemon PID file path
 function getVoiceDaemonPidPath(): string {
-  return join(getJflDir(), "voice-daemon.pid")
+  return join(JFL_PATHS.data, "voice-daemon.pid")
 }
 
 // Get voice daemon log file path
 function getVoiceDaemonLogPath(): string {
-  return join(getJflDir(), "voice-daemon.log")
+  return join(JFL_PATHS.data, "voice-daemon.log")
 }
 
 // Read auth token from file
@@ -535,11 +533,14 @@ export function readAuthToken(): string | null {
 
 // Ensure directories exist
 function ensureDirectories(): void {
-  const jflDir = getJflDir()
   const modelsDir = getModelsDir()
 
-  if (!existsSync(jflDir)) {
-    mkdirSync(jflDir, { mode: 0o700 })
+  // Ensure data and config directories exist
+  if (!existsSync(JFL_PATHS.data)) {
+    mkdirSync(JFL_PATHS.data, { recursive: true, mode: 0o700 })
+  }
+  if (!existsSync(JFL_PATHS.config)) {
+    mkdirSync(JFL_PATHS.config, { recursive: true, mode: 0o700 })
   }
 
   if (!existsSync(modelsDir)) {

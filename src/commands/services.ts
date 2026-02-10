@@ -12,12 +12,12 @@ import * as path from "path";
 import { homedir } from "os";
 import { exec } from "child_process";
 import { promisify } from "util";
+import { JFL_PATHS } from "../utils/jfl-paths.js";
 
 const execAsync = promisify(exec);
 
-const GLOBAL_CONFIG_DIR = path.join(homedir(), ".jfl");
-const GLOBAL_SERVICES_FILE = path.join(GLOBAL_CONFIG_DIR, "services.json");
-const PORT_REGISTRY_FILE = path.join(GLOBAL_CONFIG_DIR, "service-ports.json");
+const GLOBAL_SERVICES_FILE = path.join(JFL_PATHS.data, "services.json");
+const PORT_REGISTRY_FILE = path.join(JFL_PATHS.data, "service-ports.json");
 
 interface Service {
   type: "daemon" | "server" | "process";
@@ -100,7 +100,8 @@ function loadPortRegistry(): PortRegistry {
  * Save port registry
  */
 function savePortRegistry(registry: PortRegistry): void {
-  fs.mkdirSync(GLOBAL_CONFIG_DIR, { recursive: true });
+  const dir = path.dirname(PORT_REGISTRY_FILE);
+  fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(PORT_REGISTRY_FILE, JSON.stringify(registry, null, 2));
 }
 

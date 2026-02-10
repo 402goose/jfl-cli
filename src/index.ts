@@ -52,6 +52,11 @@ import {
   getWalletAddress,
 } from "./utils/auth-guard.js"
 import { getDayPassTimeRemaining } from "./utils/x402-client.js"
+import { checkAndMigrate } from "./utils/jfl-migration.js"
+import { JFL_PATHS } from "./utils/jfl-paths.js"
+
+// Auto-migrate from ~/.jfl/ to XDG directories if needed
+await checkAndMigrate({ silent: true })
 
 const program = new Command()
 
@@ -153,8 +158,8 @@ program
     if (action === "deps" || action === "dependencies") {
       const { buildDependencyGraph, visualizeDependencies, validateDependencies } = await import("./lib/service-dependencies.js")
       const fs = await import("fs")
-      const os = await import("os")
-      const servicesConfig = JSON.parse(fs.readFileSync(path.join(os.homedir(), ".jfl", "services.json"), "utf-8"))
+      const servicesConfigPath = path.join(JFL_PATHS.data, "services.json")
+      const servicesConfig = JSON.parse(fs.readFileSync(servicesConfigPath, "utf-8"))
 
       if (service === "validate") {
         const result = validateDependencies(servicesConfig.services)

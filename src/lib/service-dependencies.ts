@@ -11,8 +11,9 @@ import chalk from "chalk"
 import * as fs from "fs"
 import * as path from "path"
 import { homedir } from "os"
+import { JFL_PATHS } from "../utils/jfl-paths.js"
 
-const GLOBAL_SERVICES_FILE = path.join(homedir(), ".jfl", "services.json")
+const GLOBAL_SERVICES_FILE = path.join(JFL_PATHS.data, "services.json")
 const SERVICE_MANAGER_URL = "http://localhost:3402"
 
 // ============================================================================
