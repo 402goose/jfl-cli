@@ -1002,6 +1002,61 @@ export async function serviceManagerCommand(
       break
     }
 
+    case "ensure": {
+      const status = isRunning()
+      if (status.running) {
+        // Already running, verify it's healthy
+        try {
+          const response = await fetch(`http://localhost:${port}/health`, {
+            signal: AbortSignal.timeout(2000)
+          })
+          if (response.ok) {
+            // Healthy and running, nothing to do
+            return
+          }
+        } catch {
+          // Process exists but not responding, fall through to restart
+        }
+      }
+
+      // Check if port is blocked by orphaned process
+      const portInUse = await isPortInUse(port)
+      if (portInUse) {
+        // Port is in use - check if it's actually Service Manager
+        try {
+          const response = await fetch(`http://localhost:${port}/health`, {
+            signal: AbortSignal.timeout(2000)
+          })
+          if (response.ok) {
+            // It's a healthy Service Manager but PID file is missing/wrong
+            // Don't kill it - just return
+            return
+          }
+        } catch {
+          // Process on port is not responding to health check
+        }
+
+        // Port in use but not responding - try to clean up
+        try {
+          const lsofOutput = execSync(`lsof -ti :${port}`, { encoding: 'utf-8' }).trim()
+          if (lsofOutput) {
+            const orphanedPid = parseInt(lsofOutput.split('\n')[0], 10)
+            // Only kill if it's different from our tracked PID
+            if (!status.pid || orphanedPid !== status.pid) {
+              process.kill(orphanedPid, 'SIGTERM')
+              await new Promise(resolve => setTimeout(resolve, 500))
+            }
+          }
+        } catch {
+          // lsof failed or process already gone
+        }
+      }
+
+      // Start silently
+      await startDaemon(port)
+      break
+    }
+
     case "serve": {
       // Run server in foreground (used by daemon)
       const server = createServer(port)
@@ -1070,9 +1125,10 @@ export async function serviceManagerCommand(
       console.log("    jfl service-manager stop      Stop the daemon")
       console.log("    jfl service-manager restart   Restart the daemon")
       console.log("    jfl service-manager status    Check if running")
+      console.log("    jfl service-manager ensure    Start if not running (for hooks)")
       console.log()
       console.log(chalk.gray("  Options:"))
-      console.log("    --port <port>   Port to run on (default: 3401)")
+      console.log("    --port <port>   Port to run on (default: 3402)")
       console.log()
     }
   }

@@ -15,6 +15,13 @@ import * as readline from "readline"
 import { homedir } from "os"
 import { validateSettings, fixSettings } from "../utils/settings-validator.js"
 import { JFL_FILES } from "../utils/jfl-paths.js"
+import {
+  detectServiceChanges,
+  writeCliVersion,
+  getCurrentCliVersion,
+  restartCoreServices,
+  validateCoreServices
+} from "../lib/service-utils.js"
 
 const TEMPLATE_REPO = "https://github.com/402goose/jfl-template.git"
 const TEMP_DIR = ".jfl-update-temp"
@@ -348,6 +355,34 @@ export async function updateCommand(options: { dry?: boolean; autoUpdate?: boole
       if (fs.existsSync(path.join(cwd, p))) {
         console.log(chalk.gray(`    • ${p}`))
       }
+    }
+
+    // Check if services need to be restarted (CLI version changed)
+    const serviceChanges = await detectServiceChanges()
+
+    if (serviceChanges.changed && serviceChanges.oldVersion) {
+      console.log(chalk.cyan(`\n📦 CLI updated: ${serviceChanges.oldVersion} → ${serviceChanges.newVersion}`))
+      console.log(chalk.gray("Services will be restarted to use new version...\n"))
+
+      // Restart services
+      const restartResults = await restartCoreServices()
+
+      // Update stored version
+      writeCliVersion(serviceChanges.newVersion)
+
+      // Validate services are healthy
+      const validation = await validateCoreServices()
+
+      if (!validation.healthy) {
+        console.log(chalk.yellow("\n⚠️  Some services need attention:\n"))
+        for (const issue of validation.issues) {
+          console.log(chalk.yellow(`  • ${issue.service}: ${issue.message}`))
+          console.log(chalk.gray(`    Fix: ${issue.remedy}\n`))
+        }
+      }
+    } else {
+      // First time or no version change - just record version
+      writeCliVersion(serviceChanges.newVersion)
     }
 
     console.log(chalk.cyan("\n✨ Update complete! Restart Claude Code to pick up changes.\n"))

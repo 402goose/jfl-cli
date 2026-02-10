@@ -13,6 +13,8 @@ import { homedir } from "os";
 import { exec } from "child_process";
 import { promisify } from "util";
 import { JFL_PATHS } from "../utils/jfl-paths.js";
+import { checkServiceHealth, restartCoreServices, validateCoreServices } from "../lib/service-utils.js";
+import chalk from "chalk";
 
 const execAsync = promisify(exec);
 
@@ -476,6 +478,49 @@ export async function servicesCommand(
         await stopSpecificService(serviceName);
         break;
 
+      case "restart":
+        if (serviceName) {
+          // Restart specific service
+          console.log(`Restarting ${serviceName}...`);
+          await stopSpecificService(serviceName);
+          await new Promise(resolve => setTimeout(resolve, 500));
+          await startSpecificService(serviceName);
+        } else {
+          // Restart all core services (Context Hub + Service Manager)
+          const results = await restartCoreServices();
+          if (results.contextHub && results.serviceManager) {
+            console.log(chalk.green("\n✓ All core services restarted\n"));
+          } else {
+            console.log(chalk.yellow("\n⚠️  Some services failed to restart\n"));
+          }
+        }
+        break;
+
+      case "health":
+        if (serviceName) {
+          // Health check for specific service
+          console.log(`Checking health of ${serviceName}...`);
+          // This would require service-specific health endpoints
+          // For now, just use the global validation
+          console.log("Health check for specific services not yet implemented");
+          console.log("Use 'jfl services health' (without service name) to check all core services");
+        } else {
+          // Validate all core services
+          console.log(chalk.cyan("\n🔍 Checking service health...\n"));
+          const validation = await validateCoreServices();
+
+          if (validation.healthy) {
+            console.log(chalk.green("✓ All core services are healthy\n"));
+          } else {
+            console.log(chalk.yellow("⚠️  Service health issues detected:\n"));
+            for (const issue of validation.issues) {
+              console.log(chalk.yellow(`  • ${issue.service}: ${issue.message}`));
+              console.log(chalk.gray(`    Fix: ${issue.remedy}\n`));
+            }
+          }
+        }
+        break;
+
       default:
         console.log("Usage: jfl services <action> [service-name]");
         console.log("");
@@ -484,6 +529,8 @@ export async function servicesCommand(
         console.log("  status            Show service status summary");
         console.log("  start <service>   Start a service");
         console.log("  stop <service>    Stop a service");
+        console.log("  restart [service] Restart a service (or all core services)");
+        console.log("  health [service]  Check service health");
         break;
     }
   } catch (error: any) {
