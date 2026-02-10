@@ -11,7 +11,41 @@ VAD_MODEL="$MODELS_DIR/ggml-silero-vad.bin"
 SOCKET_PATH="$JFL_DIR/voice.sock"
 TOKEN_PATH="$JFL_DIR/voice-server.token"
 PID_FILE="$JFL_DIR/voice-server.pid"
-WHISPER_SERVER="/Users/alectaggart/CascadeProjects/jfl-platform/packages/whisper-server/build/whisper-stream-server"
+
+# Detect whisper server location
+if [[ -n "$WHISPER_SERVER_PATH" ]]; then
+    WHISPER_SERVER="$WHISPER_SERVER_PATH"
+else
+    # Auto-detect based on project structure
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    PROJECT_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel 2>/dev/null || echo "")"
+
+    # Common locations to check
+    POSSIBLE_PATHS=(
+        "$PROJECT_ROOT/../jfl-platform/packages/whisper-server/build/whisper-stream-server"
+        "$PROJECT_ROOT/packages/whisper-server/build/whisper-stream-server"
+        "$HOME/code/goose/jfl/jfl-platform/packages/whisper-server/build/whisper-stream-server"
+    )
+
+    for path in "${POSSIBLE_PATHS[@]}"; do
+        if [[ -x "$path" ]]; then
+            WHISPER_SERVER="$path"
+            break
+        fi
+    done
+
+    if [[ -z "$WHISPER_SERVER" || ! -x "$WHISPER_SERVER" ]]; then
+        echo -e "${RED}✗ Whisper server not found${NC}"
+        echo -e "${GRAY}  Tried locations:${NC}"
+        for path in "${POSSIBLE_PATHS[@]}"; do
+            echo -e "${GRAY}    - $path${NC}"
+        done
+        echo ""
+        echo -e "${GRAY}  Set WHISPER_SERVER_PATH environment variable or ensure jfl-platform is at ../jfl-platform${NC}"
+        echo -e "${GRAY}  Or build the server: cd jfl-platform/packages/whisper-server && ./build.sh${NC}"
+        exit 1
+    fi
+fi
 
 # Colors
 RED='\033[0;31m'
@@ -21,14 +55,8 @@ GRAY='\033[0;90m'
 NC='\033[0m'
 
 echo -e "${GREEN}🎤 JFL Voice - Starting${NC}"
+echo -e "${GRAY}Using whisper server: $WHISPER_SERVER${NC}"
 echo ""
-
-# Check if server binary exists
-if [ ! -f "$WHISPER_SERVER" ]; then
-    echo -e "${RED}✗ Whisper server not built${NC}"
-    echo -e "${GRAY}  Run: cd product/packages/whisper-server && ./build.sh${NC}"
-    exit 1
-fi
 
 # Check if models exist
 if [ ! -f "$WHISPER_MODEL" ]; then

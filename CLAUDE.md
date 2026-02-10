@@ -582,21 +582,77 @@ git add product && git commit -m "Update product submodule"
 
 ### Why This Matters
 
-- **Single source of truth**: The `jfl` command always points to `/Users/andrewhathaway/code/goose/jfl/jfl-cli`
+- **Single source of truth**: The `jfl` command points to your local jfl-cli clone
 - **No sync issues**: You're not juggling multiple clones
 - **GTM context available**: While building, you have the full GTM toolkit
 - **Clean commits**: Product commits go to product repo, GTM commits go to GTM repo
 
 ### CLI Location
 
-The CLI is cloned at `/Users/andrewhathaway/code/goose/jfl/jfl-cli` (parent directory of this GTM workspace).
+The CLI is located at your jfl-cli clone (the parent directory of this GTM workspace).
 
 To re-link after changes:
 
 ```bash
-cd /Users/andrewhathaway/code/goose/jfl/jfl-cli
+# Navigate to your jfl-cli directory
+cd "$(git rev-parse --show-toplevel)"
 yarn build
 npm link
+```
+
+### 4. Development Guidelines
+
+**NEVER hardcode user-specific paths in scripts or code.**
+
+This causes failures for other team members and creates bad UX if accidentally distributed.
+
+**DON'T:**
+```bash
+WHISPER_SERVER="/Users/alectaggart/CascadeProjects/..."
+PROJECT_PATH="/Users/andrewhathaway/code/..."
+```
+
+**DO:**
+```bash
+# Use relative paths from script location
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
+
+# Use environment variables with sensible defaults
+WHISPER_SERVER="${WHISPER_SERVER_PATH:-$PROJECT_ROOT/../jfl-platform/packages/whisper-server/build/whisper-stream-server}"
+
+# Auto-detect with clear error messages
+POSSIBLE_PATHS=(
+    "$PROJECT_ROOT/../jfl-platform/..."
+    "$HOME/code/goose/jfl/jfl-platform/..."
+)
+
+for path in "${POSSIBLE_PATHS[@]}"; do
+    if [[ -x "$path" ]]; then
+        WHISPER_SERVER="$path"
+        break
+    fi
+done
+
+if [[ -z "$WHISPER_SERVER" ]]; then
+    echo "Error: Whisper server not found."
+    echo "Set WHISPER_SERVER_PATH or ensure jfl-platform is at ../jfl-platform"
+    exit 1
+fi
+```
+
+**Path resolution best practices:**
+- Compute paths relative to `__dirname` or `import.meta.url` in TypeScript/JavaScript
+- Use `git rev-parse --show-toplevel` to find repo root in bash scripts
+- Provide environment variable overrides for flexibility
+- Show helpful error messages listing what was tried
+- Test scripts on a different machine/user before committing
+
+**Before committing scripts:**
+```bash
+# Check for hardcoded paths
+grep -r "Users/alectaggart\|Users/andrewhathaway" scripts/ | grep -v "## Example\|# DON'T"
+# Should return nothing (except documentation examples)
 ```
 
 ---
