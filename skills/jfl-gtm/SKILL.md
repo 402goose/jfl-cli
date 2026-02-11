@@ -1,3 +1,10 @@
+---
+name: jfl-gtm
+description: GTM workspace runtime - run go-to-market as Claude Code does
+version: 1.0.0
+user-invocable: true
+---
+
 # JFL GTM Runtime
 
 Run GTM workspaces from OpenClaw with full protocol compliance.
