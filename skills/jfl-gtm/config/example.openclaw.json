@@ -1,0 +1,40 @@
+{
+  "skills": {
+    "entries": {
+      "jfl-gtm": {
+        "enabled": true,
+        "description": "GTM workspace runtime - run go-to-market as Claude Code does",
+        "config": {
+          "workspace_paths": [
+            "/Users/you/code/my-gtm-workspace",
+            "/Users/you/Projects",
+            "~/Dropbox/GTM"
+          ],
+          "default_workspace": null,
+          "auto_start_context_hub": true,
+          "agent_timeout": 300,
+          "auto_commit_interval": 120
+        },
+        "env": {
+          "CONTEXT_HUB_URL": "http://localhost:4242",
+          "WORKSPACE": null
+        },
+        "permissions": {
+          "bash": "allow",
+          "fileWrite": "allow",
+          "fileRead": "allow",
+          "network": "allow"
+        }
+      }
+    }
+  },
+  "mcpServers": {
+    "jfl-context": {
+      "command": "jfl",
+      "args": ["context-hub", "mcp"],
+      "env": {
+        "CONTEXT_HUB_URL": "http://localhost:4242"
+      }
+    }
+  }
+}
