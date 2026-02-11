@@ -647,7 +647,7 @@ function displayResults(result: ValidationResult, json: boolean = false): void {
   }
 
   if (result.summary.fixable > 0) {
-    console.log(chalk.cyan(`\nRun ${chalk.bold('jfl service validate --fix')} to auto-repair ${result.summary.fixable} issue(s).`));
+    console.log(chalk.cyan(`\nRun ${chalk.bold('jfl services validate --fix')} to auto-repair ${result.summary.fixable} issue(s).`));
   }
 
   console.log();
