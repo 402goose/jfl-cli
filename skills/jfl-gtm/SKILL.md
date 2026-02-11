@@ -25,44 +25,100 @@ Makes OpenClaw operate like Claude Code in a GTM (Go-To-Market) workspace:
 
 ---
 
-## Commands
+## Configuration Management
 
-### Configuration
+**Use inline bash to manage workspace configuration.**
 
-```bash
-# Add workspace
-jfl-gtm-config add /path/to/workspace
-
-# List workspaces
-jfl-gtm-config list
-
-# Set default
-jfl-gtm-config default /path/to/workspace
-
-# Remove workspace
-jfl-gtm-config remove /path/to/workspace
-```
-
-Configuration stored in `~/.openclaw/openclaw.json`
-
-### Start GTM Session
+### Add Workspace
 
 ```bash
-# Discover and select workspace
-jfl-gtm-session
+CONFIG_FILE="$HOME/.openclaw/openclaw.json"
+WORKSPACE_PATH="/path/to/workspace"
 
-# Or specify directly
-jfl-gtm-session /path/to/workspace
+# Verify it's a GTM workspace
+if [[ -d "$WORKSPACE_PATH/.jfl" ]] && [[ -f "$WORKSPACE_PATH/CLAUDE.md" ]]; then
+  # Add to config
+  jq ".skills.entries[\"jfl-gtm\"].config.workspace_paths += [\"$WORKSPACE_PATH\"]" "$CONFIG_FILE" > /tmp/config.json
+  mv /tmp/config.json "$CONFIG_FILE"
+  echo "✅ Added workspace: $WORKSPACE_PATH"
+else
+  echo "❌ Not a GTM workspace (missing .jfl/ or CLAUDE.md)"
+fi
 ```
 
-This will:
-1. Verify it's a GTM workspace (has `.jfl/` and `CLAUDE.md`)
-2. Read CLAUDE.md for instructions
-3. Execute SessionStart protocol (sync, doctor, context loading)
-4. Start Context Hub if needed
-5. Load unified context
-6. Show project dashboard
-7. Enter GTM mode
+### List Workspaces
+
+```bash
+jq -r '.skills.entries["jfl-gtm"].config.workspace_paths[]?' "$HOME/.openclaw/openclaw.json" 2>/dev/null || echo "No workspaces configured"
+```
+
+### Set Default
+
+```bash
+WORKSPACE_PATH="/path/to/workspace"
+jq ".skills.entries[\"jfl-gtm\"].config.default_workspace = \"$WORKSPACE_PATH\"" "$HOME/.openclaw/openclaw.json" > /tmp/config.json
+mv /tmp/config.json "$HOME/.openclaw/openclaw.json"
+echo "✅ Default workspace: $WORKSPACE_PATH"
+```
+
+### Remove Workspace
+
+```bash
+WORKSPACE_PATH="/path/to/workspace"
+jq ".skills.entries[\"jfl-gtm\"].config.workspace_paths -= [\"$WORKSPACE_PATH\"]" "$HOME/.openclaw/openclaw.json" > /tmp/config.json
+mv /tmp/config.json "$HOME/.openclaw/openclaw.json"
+echo "✅ Removed workspace: $WORKSPACE_PATH"
+```
+
+---
+
+## Starting a GTM Session
+
+**Once workspace is configured, start a session by reading the workspace's CLAUDE.md:**
+
+```bash
+WORKSPACE="/path/to/workspace"
+
+# Verify it's a GTM workspace
+if [[ ! -d "$WORKSPACE/.jfl" ]] || [[ ! -f "$WORKSPACE/CLAUDE.md" ]]; then
+  echo "❌ Not a GTM workspace"
+  exit 1
+fi
+
+cd "$WORKSPACE"
+
+echo "📖 Reading CLAUDE.md for GTM instructions..."
+
+# Execute SessionStart protocol from CLAUDE.md:
+# 1. Sync repos
+if [[ -f "./scripts/session/session-sync.sh" ]]; then
+  ./scripts/session/session-sync.sh
+fi
+
+# 2. Run doctor check (for existing projects)
+COMMIT_COUNT=$(git rev-list --count HEAD 2>/dev/null || echo "0")
+if [[ "$COMMIT_COUNT" -gt "5" ]] && [[ -f "./scripts/session/jfl-doctor.sh" ]]; then
+  ./scripts/session/jfl-doctor.sh
+fi
+
+# 3. Ensure Context Hub running
+jfl context-hub ensure
+curl -sf http://localhost:4242/health || echo "⚠️  Context Hub not responding"
+
+# 4. Load context
+curl -s http://localhost:4242/api/context | jq .
+
+# 5. Show dashboard
+echo ""
+echo "📊 $(jq -r '.name' .jfl/config.json) Dashboard"
+echo "🚀 Ship Date: $(grep -E "Ship:|Launch:" knowledge/ROADMAP.md | head -1 || echo 'Not set')"
+echo "📍 Phase: $(grep -E "Phase:|Stage:" knowledge/ROADMAP.md | head -1 || echo 'Foundation')"
+echo ""
+echo "Recent work:"
+jfl synopsis 24 | tail -10
+echo ""
+echo "✅ GTM session active - following CLAUDE.md protocols"
+```
 
 ---
 
@@ -225,15 +281,15 @@ All permissions needed for frictionless GTM workflows.
 
 ---
 
-## Helper Scripts
+## Implementation Approach
 
-Actual implementation in:
-- `~/.openclaw/skills/jfl-gtm/bin/config` - Configuration management
-- `~/.openclaw/skills/jfl-gtm/bin/session` - Session initialization
-- `~/.openclaw/skills/jfl-gtm/bin/journal` - Journal entry helpers
-- `~/.openclaw/skills/jfl-gtm/bin/agents` - Agent spawning
+This skill provides **inline bash snippets** that Claude executes directly:
+- Configuration management (add/remove/list workspaces)
+- Session initialization (read CLAUDE.md, run protocols)
+- Journal entry helpers (write JSONL entries)
+- Agent spawning (via Context Hub)
 
-These are bash scripts you can call directly. The skill just provides the instructions.
+No external scripts needed - all code is inline in this skill file.
 
 ---
 
@@ -248,17 +304,24 @@ These are bash scripts you can call directly. The skill just provides the instru
 
 ## Quick Start
 
-1. **Add workspace:**
+1. **Add workspace (use the inline bash from "Add Workspace" section above):**
    ```bash
-   jfl-gtm-config add ~/code/my-project
+   WORKSPACE_PATH="$HOME/code/my-project"
+   # ... use the inline bash ...
    ```
 
-2. **Start session:**
+2. **Start session (use the inline bash from "Starting a GTM Session" section above):**
    ```bash
-   jfl-gtm-session
+   WORKSPACE="/path/to/workspace"
+   cd "$WORKSPACE"
+   # ... follow the SessionStart protocol ...
    ```
 
-3. **Follow CLAUDE.md protocols** in the workspace
+3. **Follow CLAUDE.md protocols** in the workspace:
+   - Journal entries after features/decisions/fixes
+   - Decision capture to knowledge docs
+   - Context loading via Context Hub
+   - File headers with @purpose
 
 4. **End gracefully:**
    - Ensure journal entry written
