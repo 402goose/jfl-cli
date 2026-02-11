@@ -55,6 +55,391 @@ metadata:
 
 ---
 
+## 0. Natural Language Configuration Management
+
+**CRITICAL: Users should NEVER have to edit JSON files manually.**
+
+Provide natural language commands for configuration management.
+
+### Configuration Helper Functions
+
+```bash
+#!/bin/bash
+
+# Get OpenClaw config file path
+get_config_file() {
+  local config_file="${HOME}/.openclaw/openclaw.json"
+
+  # Create if doesn't exist
+  if [[ ! -f "$config_file" ]]; then
+    mkdir -p "${HOME}/.openclaw"
+    echo '{"skills":{"entries":{"jfl-gtm":{"enabled":true,"config":{},"env":{},"permissions":{"bash":"allow","fileWrite":"allow","fileRead":"allow","network":"allow"}}}}}' | jq . > "$config_file"
+  fi
+
+  echo "$config_file"
+}
+
+# Read config value
+get_config_value() {
+  local key="$1"
+  local config_file=$(get_config_file)
+  jq -r ".skills.entries[\"jfl-gtm\"].config.$key // empty" "$config_file" 2>/dev/null
+}
+
+# Set config value
+set_config_value() {
+  local key="$1"
+  local value="$2"
+  local config_file=$(get_config_file)
+
+  # Create a temp file
+  local temp_file=$(mktemp)
+
+  # Update the config
+  jq ".skills.entries[\"jfl-gtm\"].config.$key = $value" "$config_file" > "$temp_file"
+
+  # Validate it's valid JSON
+  if jq empty "$temp_file" 2>/dev/null; then
+    mv "$temp_file" "$config_file"
+    echo "✅ Configuration updated"
+    return 0
+  else
+    echo "❌ Invalid JSON generated, reverting"
+    rm "$temp_file"
+    return 1
+  fi
+}
+
+# Add workspace path
+add_workspace_path() {
+  local workspace_path="$1"
+
+  # Expand ~ to full path
+  workspace_path="${workspace_path/#\~/$HOME}"
+
+  # Verify it exists and is a GTM workspace
+  if [[ ! -d "$workspace_path" ]]; then
+    echo "❌ Directory doesn't exist: $workspace_path"
+    return 1
+  fi
+
+  if [[ ! -d "$workspace_path/.jfl" ]] || [[ ! -f "$workspace_path/CLAUDE.md" ]]; then
+    echo "❌ Not a GTM workspace (missing .jfl/ or CLAUDE.md)"
+    echo ""
+    read -p "Add it anyway? (y/n): " add_anyway
+    if [[ "$add_anyway" != "y" ]]; then
+      return 1
+    fi
+  fi
+
+  # Get current paths
+  local config_file=$(get_config_file)
+  local current_paths=$(jq -r '.skills.entries["jfl-gtm"].config.workspace_paths[]?' "$config_file" 2>/dev/null)
+
+  # Check if already exists
+  if echo "$current_paths" | grep -qx "$workspace_path"; then
+    echo "⚠️  Workspace already in list"
+    return 0
+  fi
+
+  # Add to array
+  local temp_file=$(mktemp)
+  jq ".skills.entries[\"jfl-gtm\"].config.workspace_paths += [\"$workspace_path\"]" "$config_file" > "$temp_file"
+
+  if jq empty "$temp_file" 2>/dev/null; then
+    mv "$temp_file" "$config_file"
+    echo "✅ Added workspace: $workspace_path"
+
+    # Show project name if we can get it
+    local project_name=$(jq -r '.name // empty' "$workspace_path/.jfl/config.json" 2>/dev/null || basename "$workspace_path")
+    echo "   Project: $project_name"
+    return 0
+  else
+    rm "$temp_file"
+    echo "❌ Failed to update config"
+    return 1
+  fi
+}
+
+# Remove workspace path
+remove_workspace_path() {
+  local workspace_path="$1"
+
+  # Expand ~ to full path
+  workspace_path="${workspace_path/#\~/$HOME}"
+
+  local config_file=$(get_config_file)
+
+  # Check if exists
+  local current_paths=$(jq -r '.skills.entries["jfl-gtm"].config.workspace_paths[]?' "$config_file" 2>/dev/null)
+
+  if ! echo "$current_paths" | grep -qx "$workspace_path"; then
+    echo "⚠️  Workspace not in list"
+    return 0
+  fi
+
+  # Remove from array
+  local temp_file=$(mktemp)
+  jq ".skills.entries[\"jfl-gtm\"].config.workspace_paths -= [\"$workspace_path\"]" "$config_file" > "$temp_file"
+
+  if jq empty "$temp_file" 2>/dev/null; then
+    mv "$temp_file" "$config_file"
+    echo "✅ Removed workspace: $workspace_path"
+    return 0
+  else
+    rm "$temp_file"
+    echo "❌ Failed to update config"
+    return 1
+  fi
+}
+
+# List configured workspaces
+list_configured_workspaces() {
+  local config_file=$(get_config_file)
+  local workspace_paths=$(jq -r '.skills.entries["jfl-gtm"].config.workspace_paths[]?' "$config_file" 2>/dev/null)
+
+  if [[ -z "$workspace_paths" ]]; then
+    echo "No workspaces configured yet."
+    echo ""
+    echo "Add one with: add-workspace /path/to/workspace"
+    return 0
+  fi
+
+  echo "Configured GTM workspaces:"
+  echo ""
+
+  while IFS= read -r path; do
+    local exists="❌"
+    [[ -d "$path" ]] && exists="✅"
+
+    local project_name=$(jq -r '.name // empty' "$path/.jfl/config.json" 2>/dev/null || basename "$path")
+
+    echo "  $exists $project_name"
+    echo "     $path"
+  done <<< "$workspace_paths"
+
+  echo ""
+
+  # Show default if set
+  local default_workspace=$(jq -r '.skills.entries["jfl-gtm"].config.default_workspace // empty' "$config_file" 2>/dev/null)
+  if [[ -n "$default_workspace" ]]; then
+    echo "Default workspace: $default_workspace"
+  fi
+}
+
+# Set default workspace
+set_default_workspace() {
+  local workspace_path="$1"
+
+  if [[ -z "$workspace_path" ]]; then
+    # Clear default
+    set_config_value "default_workspace" "null"
+    echo "✅ Default workspace cleared"
+    return 0
+  fi
+
+  # Expand ~ to full path
+  workspace_path="${workspace_path/#\~/$HOME}"
+
+  # Verify it exists
+  if [[ ! -d "$workspace_path/.jfl" ]] || [[ ! -f "$workspace_path/CLAUDE.md" ]]; then
+    echo "❌ Not a valid GTM workspace"
+    return 1
+  fi
+
+  set_config_value "default_workspace" "\"$workspace_path\""
+
+  local project_name=$(jq -r '.name // empty' "$workspace_path/.jfl/config.json" 2>/dev/null || basename "$workspace_path")
+  echo "✅ Default workspace: $project_name"
+  echo "   $workspace_path"
+}
+
+# Export functions
+export -f get_config_file
+export -f get_config_value
+export -f set_config_value
+export -f add_workspace_path
+export -f remove_workspace_path
+export -f list_configured_workspaces
+export -f set_default_workspace
+```
+
+### Natural Language Commands
+
+Users can manage configuration with natural language:
+
+```bash
+# Command parsing
+handle_config_command() {
+  local input="$1"
+
+  # Add workspace
+  if echo "$input" | grep -qi "add.*gtm\|add.*workspace"; then
+    # Extract path
+    local path=$(echo "$input" | grep -oE '(/[^ ]+|~/[^ ]+)' | head -1)
+
+    if [[ -z "$path" ]]; then
+      echo "Usage: add workspace /path/to/workspace"
+      echo "   or: add GTM ~/code/my-project"
+      return 1
+    fi
+
+    add_workspace_path "$path"
+    return $?
+  fi
+
+  # Remove workspace
+  if echo "$input" | grep -qi "remove.*workspace"; then
+    local path=$(echo "$input" | grep -oE '(/[^ ]+|~/[^ ]+)' | head -1)
+
+    if [[ -z "$path" ]]; then
+      echo "Usage: remove workspace /path/to/workspace"
+      return 1
+    fi
+
+    remove_workspace_path "$path"
+    return $?
+  fi
+
+  # List workspaces
+  if echo "$input" | grep -qi "list.*workspace\|show.*workspace"; then
+    list_configured_workspaces
+    return 0
+  fi
+
+  # Set default
+  if echo "$input" | grep -qi "set.*default\|default.*workspace"; then
+    local path=$(echo "$input" | grep -oE '(/[^ ]+|~/[^ ]+)' | head -1)
+
+    set_default_workspace "$path"
+    return $?
+  fi
+
+  # Clear default
+  if echo "$input" | grep -qi "clear.*default\|no.*default"; then
+    set_default_workspace ""
+    return 0
+  fi
+
+  # Didn't match any command
+  return 2
+}
+
+export -f handle_config_command
+```
+
+### Usage Examples
+
+**Add a workspace:**
+
+```
+User: "Hey, let's add a new GTM: /Users/me/code/my-project"
+Assistant: [Calls add_workspace_path]
+Output: ✅ Added workspace: /Users/me/code/my-project
+        Project: my-project
+```
+
+```
+User: "Add workspace ~/Projects/awesome-app"
+Assistant: [Calls add_workspace_path]
+Output: ✅ Added workspace: /Users/me/Projects/awesome-app
+        Project: awesome-app
+```
+
+**List workspaces:**
+
+```
+User: "Show me my GTM workspaces"
+Assistant: [Calls list_configured_workspaces]
+Output: Configured GTM workspaces:
+
+        ✅ my-project
+           /Users/me/code/my-project
+
+        ✅ awesome-app
+           /Users/me/Projects/awesome-app
+```
+
+**Set default:**
+
+```
+User: "Make my-project the default workspace"
+Assistant: [Calls set_default_workspace]
+Output: ✅ Default workspace: my-project
+        /Users/me/code/my-project
+```
+
+**Remove workspace:**
+
+```
+User: "Remove workspace ~/old-project"
+Assistant: [Calls remove_workspace_path]
+Output: ✅ Removed workspace: /Users/me/old-project
+```
+
+### Integration with Main Skill Flow
+
+When skill starts, check for natural language config commands first:
+
+```bash
+# Check if user input is a config command
+if handle_config_command "$user_input"; then
+  exit_code=$?
+
+  if [[ $exit_code -eq 0 ]]; then
+    # Command handled successfully
+    exit 0
+  elif [[ $exit_code -eq 1 ]]; then
+    # Command failed
+    exit 1
+  else
+    # Not a config command, continue to main flow
+    :
+  fi
+fi
+
+# Continue to workspace discovery and session initialization...
+```
+
+### Skill Invocation Patterns
+
+**Pattern 1: Add workspace first time**
+
+```bash
+openclaw
+> /jfl-gtm add /Users/me/code/my-project
+✅ Added workspace: /Users/me/code/my-project
+   Project: my-project
+
+> /jfl-gtm
+# Now proceeds to workspace selection
+```
+
+**Pattern 2: Add via natural language**
+
+```bash
+openclaw
+> Hey, let's add a new GTM: ~/code/my-project
+[Claude recognizes jfl-gtm context]
+✅ Added workspace: /Users/me/code/my-project
+
+> /jfl-gtm
+# Proceeds to workspace selection
+```
+
+**Pattern 3: Set default and auto-start**
+
+```bash
+openclaw
+> Set my-project as default GTM workspace
+✅ Default workspace: my-project
+
+> /jfl-gtm
+# Immediately loads my-project without selection prompt
+```
+
+---
+
 ## 1. Workspace Discovery & Selection
 
 ### Auto-Discover GTM Workspaces

@@ -44,9 +44,45 @@ git clone https://github.com/402goose/openclaw-jfl-gtm jfl-gtm
 cp -r /path/to/jfl-gtm ~/.openclaw/skills/
 ```
 
-### 3. Configure OpenClaw
+### 3. Add Your Workspace (Natural Language)
 
-Edit `~/.openclaw/openclaw.json`:
+**You don't need to edit any JSON files!** Use natural language:
+
+```bash
+openclaw
+> Hey, let's add a new GTM: /Users/you/code/your-project
+✅ Added workspace: /Users/you/code/your-project
+   Project: your-project
+
+# Or shorter
+> /jfl-gtm add ~/code/my-gtm-workspace
+✅ Added workspace: /Users/you/code/my-gtm-workspace
+```
+
+**List your workspaces:**
+
+```
+> Show me my GTM workspaces
+Configured GTM workspaces:
+
+  ✅ your-project
+     /Users/you/code/your-project
+
+  ✅ my-gtm-workspace
+     /Users/you/code/my-gtm-workspace
+```
+
+**Set a default (skip selection prompt):**
+
+```
+> Make your-project the default workspace
+✅ Default workspace: your-project
+   /Users/you/code/your-project
+```
+
+**Advanced: Manual configuration (optional)**
+
+If you prefer, you can manually edit `~/.openclaw/openclaw.json`:
 
 ```json
 {
@@ -55,14 +91,8 @@ Edit `~/.openclaw/openclaw.json`:
       "jfl-gtm": {
         "enabled": true,
         "config": {
-          "workspace_paths": [
-            "/Users/you/code/your-gtm-workspace"
-          ],
-          "default_workspace": "/Users/you/code/your-gtm-workspace",
-          "auto_start_context_hub": true
-        },
-        "env": {
-          "CONTEXT_HUB_URL": "http://localhost:4242"
+          "workspace_paths": ["/Users/you/code/your-project"],
+          "default_workspace": "/Users/you/code/your-project"
         }
       }
     }
@@ -70,12 +100,7 @@ Edit `~/.openclaw/openclaw.json`:
 }
 ```
 
-**Configuration options:**
-
-- `workspace_paths` - Custom directories to search for GTM workspaces
-- `default_workspace` - Auto-select this workspace (skip selection prompt)
-- `auto_start_context_hub` - Automatically ensure Context Hub is running
-- `CONTEXT_HUB_URL` - Context Hub endpoint (default: http://localhost:4242)
+But natural language is easier!
 
 ### 4. Verify Installation
 
@@ -87,6 +112,66 @@ Should show:
 ```
 jfl-gtm - GTM workspace runtime - run go-to-market as Claude Code does
 ```
+
+---
+
+## Configuration (Natural Language)
+
+**You never need to edit JSON files!** Configure everything through natural language.
+
+### Add Workspaces
+
+```
+> Hey, let's add a new GTM: ~/code/my-project
+✅ Added workspace: /Users/you/code/my-project
+   Project: my-project
+```
+
+### List Workspaces
+
+```
+> Show me my GTM workspaces
+
+Configured GTM workspaces:
+
+  ✅ my-project
+     /Users/you/code/my-project
+
+  ✅ other-project
+     /Users/you/Projects/other-project
+```
+
+### Set Default (Skip Selection)
+
+```
+> Make my-project the default workspace
+✅ Default workspace: my-project
+   /Users/you/code/my-project
+```
+
+Now `/jfl-gtm` will immediately load my-project.
+
+### Remove Workspaces
+
+```
+> Remove workspace ~/old-project
+✅ Removed workspace: /Users/you/old-project
+```
+
+### All Configuration Commands
+
+| Command | What It Does |
+|---------|--------------|
+| `add workspace /path` | Add workspace to list |
+| `add GTM /path` | Same as above |
+| `list workspaces` | Show all configured workspaces |
+| `show my GTM workspaces` | Same as above |
+| `set default workspace /path` | Auto-select this workspace |
+| `make X the default` | Same as above |
+| `clear default workspace` | Remove default (show selection prompt) |
+| `remove workspace /path` | Remove from list |
+
+**Behind the scenes:** These commands edit `~/.openclaw/openclaw.json` automatically. You never have to touch JSON.
 
 ---
 
@@ -524,32 +609,29 @@ The skill automatically runs `jfl context-hub ensure` on session start.
 
 ### Workspace Not Found
 
+**Check if it's a valid GTM workspace:**
+
 ```bash
 # Verify .jfl directory exists
 ls -la /path/to/workspace/.jfl
 
 # Verify CLAUDE.md exists
 ls -la /path/to/workspace/CLAUDE.md
-
-# Add to openclaw.json if not auto-discovered
 ```
 
-Edit `~/.openclaw/openclaw.json`:
+**Add it using natural language:**
 
-```json
-{
-  "skills": {
-    "entries": {
-      "jfl-gtm": {
-        "config": {
-          "workspace_paths": [
-            "/path/to/your/workspace"
-          ]
-        }
-      }
-    }
-  }
-}
+```
+> Add workspace /path/to/your/workspace
+✅ Added workspace: /path/to/your/workspace
+```
+
+Or if it's not a GTM workspace yet:
+
+```bash
+cd /path/to/your/workspace
+jfl init
+# Follow onboarding to set up foundation docs
 ```
 
 ### Journal Entry Blocked
@@ -685,47 +767,52 @@ jfl context-hub start
 
 ### Custom Workspace Discovery
 
-Add custom search paths in `~/.openclaw/openclaw.json`:
+**Add workspaces naturally:**
 
-```json
-{
-  "skills": {
-    "entries": {
-      "jfl-gtm": {
-        "config": {
-          "workspace_paths": [
-            "/custom/path/workspace1",
-            "/another/path/workspace2",
-            "~/Dropbox/Projects"
-          ]
-        }
-      }
-    }
-  }
-}
+```
+> Add workspace /custom/path/workspace1
+✅ Added workspace: /custom/path/workspace1
+
+> Add GTM /another/path/workspace2
+✅ Added workspace: /another/path/workspace2
+
+> Add workspace ~/Dropbox/Projects/my-gtm
+✅ Added workspace: /Users/you/Dropbox/Projects/my-gtm
 ```
 
 The skill will search these paths in addition to defaults (~/code, ~/Projects, etc.).
 
-### Auto-Select Workspace
+**List all configured workspaces:**
 
-Skip selection prompt by setting default:
-
-```json
-{
-  "skills": {
-    "entries": {
-      "jfl-gtm": {
-        "config": {
-          "default_workspace": "/Users/you/code/my-project"
-        }
-      }
-    }
-  }
-}
+```
+> Show me my GTM workspaces
 ```
 
-The skill will immediately load this workspace.
+### Auto-Select Workspace
+
+**Set a default workspace naturally:**
+
+```
+> Make my-project the default GTM workspace
+✅ Default workspace: my-project
+   /Users/you/code/my-project
+```
+
+Or:
+
+```
+> Set default workspace ~/code/my-project
+✅ Default workspace: my-project
+```
+
+The skill will immediately load this workspace on `/jfl-gtm` without prompting.
+
+**Clear default:**
+
+```
+> Clear default workspace
+✅ Default workspace cleared
+```
 
 ### Multi-Session Coordination
 
