@@ -1,0 +1,107 @@
+#!/bin/bash
+# JFL GTM - Workspace Discovery
+# Discovers GTM workspaces on the system
+
+set -e
+
+CONFIG_FILE="${HOME}/.openclaw/openclaw.json"
+
+# Search paths
+SEARCH_PATHS=(
+  "$HOME/code"
+  "$HOME/Projects"
+  "$HOME/Documents"
+  "$HOME/workspace"
+  "$HOME/dev"
+)
+
+# Add configured paths from openclaw.json
+if [[ -f "$CONFIG_FILE" ]]; then
+  while IFS= read -r path; do
+    [[ -n "$path" ]] && SEARCH_PATHS+=("$path")
+  done < <(jq -r '.skills.entries["jfl-gtm"].config.workspace_paths[]?' "$CONFIG_FILE" 2>/dev/null)
+fi
+
+# Discover workspaces
+discover() {
+  local found=0
+
+  for base_dir in "${SEARCH_PATHS[@]}"; do
+    [[ ! -d "$base_dir" ]] && continue
+
+    # Find directories with .jfl
+    while IFS= read -r jfldir; do
+      local workspace="${jfldir%/.jfl}"
+
+      # Verify it's a GTM workspace
+      if [[ -d "$workspace/knowledge" ]] && [[ -f "$workspace/CLAUDE.md" ]]; then
+        # Check for recent activity
+        local last_commit=$(git -C "$workspace" log -1 --format=%ct 2>/dev/null || echo 0)
+        local age_days=$(( ($(date +%s) - last_commit) / 86400 ))
+
+        # Only show workspaces active in last 6 months
+        if [[ $age_days -lt 180 ]]; then
+          local name=$(jq -r '.name // empty' "$workspace/.jfl/config.json" 2>/dev/null || basename "$workspace")
+
+          if [[ $age_days -eq 0 ]]; then
+            local age_str="today"
+          elif [[ $age_days -eq 1 ]]; then
+            local age_str="1 day ago"
+          else
+            local age_str="${age_days} days ago"
+          fi
+
+          echo "$workspace|$name|$age_days|$age_str"
+          found=$((found + 1))
+        fi
+      fi
+    done < <(find "$base_dir" -maxdepth 3 -type d -name ".jfl" 2>/dev/null)
+  done
+
+  if [[ $found -eq 0 ]]; then
+    echo "No GTM workspaces found." >&2
+    echo "" >&2
+    echo "Create one with: jfl init my-project" >&2
+    exit 1
+  fi
+}
+
+# Format output
+FORMAT="${1:-simple}"
+
+case "$FORMAT" in
+  simple)
+    # Just paths, one per line
+    discover | cut -d'|' -f1
+    ;;
+  detailed)
+    # Show with project names and activity
+    echo "GTM Workspaces:"
+    echo ""
+    discover | sort -t'|' -k3 -n | while IFS='|' read -r path name age age_str; do
+      echo "  • $name ($age_str)"
+      echo "    $path"
+      echo ""
+    done
+    ;;
+  json)
+    # JSON output
+    echo "["
+    local first=1
+    discover | sort -t'|' -k3 -n | while IFS='|' read -r path name age age_str; do
+      [[ $first -eq 0 ]] && echo ","
+      first=0
+      jq -n \
+        --arg path "$path" \
+        --arg name "$name" \
+        --arg age "$age" \
+        --arg age_str "$age_str" \
+        '{path: $path, name: $name, age_days: ($age | tonumber), age_string: $age_str}'
+    done
+    echo "]"
+    ;;
+  *)
+    echo "Usage: discover [simple|detailed|json]" >&2
+    exit 1
+    ;;
+esac

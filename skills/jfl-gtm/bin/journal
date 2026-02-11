@@ -1,0 +1,198 @@
+#!/bin/bash
+# JFL GTM - Journal Entry Helper
+# Write journal entries in JSONL format
+
+set -e
+
+# Detect current workspace
+WORKSPACE="${WORKSPACE:-$(pwd)}"
+
+if [[ ! -d "$WORKSPACE/.jfl" ]]; then
+  echo "❌ Not in a GTM workspace (no .jfl/ directory)"
+  exit 1
+fi
+
+# Get session ID from git branch
+get_session_id() {
+  git -C "$WORKSPACE" branch --show-current 2>/dev/null || echo "openclaw-session"
+}
+
+# Get journal file path
+get_journal_file() {
+  local session=$(get_session_id)
+  echo "$WORKSPACE/.jfl/journal/${session}.jsonl"
+}
+
+# Write journal entry
+write_entry() {
+  local type="$1"
+  local title="$2"
+  local summary="$3"
+  local detail="${4:-}"
+  local files="${5:-[]}"
+  local status="${6:-complete}"
+
+  if [[ -z "$type" ]] || [[ -z "$title" ]] || [[ -z "$summary" ]]; then
+    echo "Usage: journal write <type> <title> <summary> [detail] [files_json] [status]"
+    echo ""
+    echo "Types: feature, fix, decision, milestone, discovery, session-end"
+    echo "Status: complete, incomplete, blocked"
+    echo ""
+    echo "Example:"
+    echo '  journal write feature "Add login" "Created login endpoint" "Full OAuth flow" ''["api/login.ts"]'''
+    exit 1
+  fi
+
+  local session=$(get_session_id)
+  local journal_file=$(get_journal_file)
+  local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
+
+  mkdir -p "$(dirname "$journal_file")"
+
+  # Build JSON entry
+  local entry=$(jq -n \
+    --arg v "1" \
+    --arg ts "$timestamp" \
+    --arg session "$session" \
+    --arg type "$type" \
+    --arg status "$status" \
+    --arg title "$title" \
+    --arg summary "$summary" \
+    --arg detail "$detail" \
+    --argjson files "$files" \
+    '{
+      v: ($v | tonumber),
+      ts: $ts,
+      session: $session,
+      type: $type,
+      status: $status,
+      title: $title,
+      summary: $summary,
+      detail: $detail,
+      files: $files
+    }')
+
+  # Append to journal
+  echo "$entry" >> "$journal_file"
+
+  echo "✅ Journal entry written"
+  echo "   Type: $type"
+  echo "   Title: $title"
+  echo "   File: $journal_file"
+
+  # Auto-commit if git available
+  if command -v git &> /dev/null; then
+    cd "$WORKSPACE"
+    git add "$journal_file" 2>/dev/null || true
+    git commit -m "journal: $title" &>/dev/null || true
+    git push origin &>/dev/null || true
+  fi
+}
+
+# Quick shortcuts
+quick_feature() {
+  local title="$1"
+  local summary="${2:-Feature completed}"
+  local detail="${3:-}"
+
+  write_entry "feature" "$title" "$summary" "$detail" "[]" "complete"
+}
+
+quick_decision() {
+  local title="$1"
+  local summary="${2:-Decision made}"
+  local detail="${3:-}"
+
+  write_entry "decision" "$title" "$summary" "$detail" "[]" "complete"
+}
+
+quick_fix() {
+  local title="$1"
+  local summary="${2:-Bug fixed}"
+  local detail="${3:-}"
+
+  write_entry "fix" "$title" "$summary" "$detail" "[]" "complete"
+}
+
+# List recent entries
+list_entries() {
+  local journal_file=$(get_journal_file)
+
+  if [[ ! -f "$journal_file" ]]; then
+    echo "No journal entries for this session yet."
+    return 0
+  fi
+
+  local count="${1:-10}"
+
+  echo "Recent journal entries:"
+  echo ""
+
+  cat "$journal_file" | tail -"$count" | jq -r '"[\(.type)] \(.title)"' || \
+    cat "$journal_file" | tail -"$count"
+}
+
+# Verify journal entry exists
+verify_entry_exists() {
+  local journal_file=$(get_journal_file)
+
+  if [[ ! -f "$journal_file" ]] || [[ ! -s "$journal_file" ]]; then
+    echo "❌ No journal entry for this session"
+    echo ""
+    echo "You MUST write a journal entry before ending the session."
+    echo ""
+    echo "Write one with:"
+    echo '  journal write session-end "Session summary" "What I worked on"'
+    exit 1
+  fi
+
+  echo "✅ Journal entry exists"
+}
+
+# Main command routing
+COMMAND="${1:-}"
+shift || true
+
+case "$COMMAND" in
+  write)
+    write_entry "$@"
+    ;;
+  feature)
+    quick_feature "$@"
+    ;;
+  decision)
+    quick_decision "$@"
+    ;;
+  fix)
+    quick_fix "$@"
+    ;;
+  list)
+    list_entries "$@"
+    ;;
+  verify)
+    verify_entry_exists
+    ;;
+  file)
+    get_journal_file
+    ;;
+  *)
+    echo "JFL GTM Journal Helper"
+    echo ""
+    echo "Usage:"
+    echo "  journal write <type> <title> <summary> [detail] [files] [status]"
+    echo "  journal feature <title> [summary] [detail]  - Quick feature entry"
+    echo "  journal decision <title> [summary] [detail] - Quick decision entry"
+    echo "  journal fix <title> [summary] [detail]      - Quick fix entry"
+    echo "  journal list [count]                        - List recent entries"
+    echo "  journal verify                              - Check entry exists"
+    echo "  journal file                                - Show journal file path"
+    echo ""
+    echo "Types: feature, fix, decision, milestone, discovery, session-end"
+    echo ""
+    echo "Examples:"
+    echo '  journal feature "Add login endpoint"'
+    echo '  journal decision "Use React for UI" "Chose React over Vue"'
+    echo '  journal write session-end "Session summary" "Built login feature"'
+    exit 1
+    ;;
+esac

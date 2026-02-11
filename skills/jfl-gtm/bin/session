@@ -1,0 +1,249 @@
+#!/bin/bash
+# JFL GTM - Session Management
+# Initializes and manages GTM sessions
+
+set -e
+
+CONFIG_FILE="${HOME}/.openclaw/openclaw.json"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Get default workspace from config
+get_default_workspace() {
+  jq -r '.skills.entries["jfl-gtm"].config.default_workspace // empty' "$CONFIG_FILE" 2>/dev/null
+}
+
+# Get workspace (from arg, default, or select)
+get_workspace() {
+  local workspace="$1"
+
+  # If provided, use it
+  if [[ -n "$workspace" ]]; then
+    workspace="${workspace/#\~/$HOME}"
+    echo "$workspace"
+    return 0
+  fi
+
+  # Try default
+  workspace=$(get_default_workspace)
+  if [[ -n "$workspace" ]]; then
+    echo "$workspace" >&2
+    echo "Using default workspace: $workspace" >&2
+    echo "$workspace"
+    return 0
+  fi
+
+  # Discover and select
+  echo "🔍 Discovering GTM workspaces..." >&2
+  echo "" >&2
+
+  local workspaces=()
+  while IFS= read -r line; do
+    workspaces+=("$line")
+  done < <("$SCRIPT_DIR/discover" simple)
+
+  if [[ ${#workspaces[@]} -eq 0 ]]; then
+    echo "❌ No GTM workspaces found" >&2
+    exit 1
+  fi
+
+  if [[ ${#workspaces[@]} -eq 1 ]]; then
+    # Only one, use it
+    echo "Found workspace: ${workspaces[0]}" >&2
+    echo "${workspaces[0]}"
+    return 0
+  fi
+
+  # Multiple workspaces - show menu
+  echo "Available workspaces:" >&2
+  echo "" >&2
+
+  local i=1
+  for ws in "${workspaces[@]}"; do
+    local name=$(jq -r '.name // empty' "$ws/.jfl/config.json" 2>/dev/null || basename "$ws")
+    echo "  $i. $name" >&2
+    echo "     $ws" >&2
+    i=$((i+1))
+  done
+
+  echo "" >&2
+  read -p "Select workspace (1-${#workspaces[@]}): " selection >&2
+
+  if [[ ! "$selection" =~ ^[0-9]+$ ]] || [[ $selection -lt 1 ]] || [[ $selection -gt ${#workspaces[@]} ]]; then
+    echo "Invalid selection" >&2
+    exit 1
+  fi
+
+  echo "${workspaces[$((selection-1))]}"
+}
+
+# Verify workspace
+verify_workspace() {
+  local workspace="$1"
+
+  if [[ ! -d "$workspace" ]]; then
+    echo "❌ Workspace doesn't exist: $workspace"
+    exit 1
+  fi
+
+  if [[ ! -d "$workspace/.jfl" ]]; then
+    echo "❌ Not a GTM workspace: missing .jfl/"
+    exit 1
+  fi
+
+  if [[ ! -f "$workspace/CLAUDE.md" ]]; then
+    echo "❌ Not a GTM workspace: missing CLAUDE.md"
+    exit 1
+  fi
+}
+
+# Initialize session
+init_session() {
+  local workspace="$1"
+
+  echo ""
+  echo "🚀 Initializing GTM session..."
+  echo "📁 Workspace: $workspace"
+  echo ""
+
+  cd "$workspace"
+
+  # Get project name
+  local project_name=$(jq -r '.name // empty' .jfl/config.json 2>/dev/null || basename "$workspace")
+  export PROJECT_NAME="$project_name"
+
+  echo "📖 Reading CLAUDE.md..."
+
+  # Execute SessionStart protocol
+
+  # 1. Sync repos
+  echo ""
+  echo "1️⃣ Syncing repositories..."
+  if [[ -f "./scripts/session/session-sync.sh" ]]; then
+    ./scripts/session/session-sync.sh 2>&1 | tail -5 || echo "⚠️  Sync script not available"
+  else
+    echo "✅ No sync script (skipping)"
+  fi
+
+  # 2. Run doctor check (for existing projects)
+  echo ""
+  echo "2️⃣ Running health check..."
+  local commit_count=$(git rev-list --count HEAD 2>/dev/null || echo "0")
+
+  if [[ "$commit_count" -gt "5" ]]; then
+    # Existing project
+    if [[ -f "./scripts/session/jfl-doctor.sh" ]]; then
+      local doctor_output=$(./scripts/session/jfl-doctor.sh 2>&1 || true)
+
+      if echo "$doctor_output" | grep -q "WARNING\|ERROR"; then
+        echo "$doctor_output"
+        echo ""
+        echo "⚠️  Doctor found issues"
+        echo "    Run: ./scripts/session/jfl-doctor.sh --fix"
+      else
+        echo "✅ Health check passed"
+      fi
+    else
+      echo "✅ No doctor script (skipping)"
+    fi
+  else
+    echo "✅ Fresh project, skipping doctor"
+  fi
+
+  # 3. Ensure Context Hub
+  echo ""
+  echo "3️⃣ Starting Context Hub..."
+
+  local context_hub_url="${CONTEXT_HUB_URL:-http://localhost:4242}"
+
+  if command -v jfl &> /dev/null; then
+    jfl context-hub ensure 2>&1 | tail -3
+
+    # Wait for health check
+    if timeout 5 bash -c "until curl -sf $context_hub_url/health &>/dev/null; do sleep 0.5; done" 2>/dev/null; then
+      echo "✅ Context Hub running"
+    else
+      echo "⚠️  Context Hub not responding"
+      echo "    Try: jfl context-hub start"
+    fi
+  else
+    echo "⚠️  jfl command not found"
+    echo "    Install: npm install -g just-fucking-launch"
+  fi
+
+  # 4. Load context
+  echo ""
+  echo "4️⃣ Loading context..."
+
+  if curl -sf "$context_hub_url/api/context" &>/dev/null; then
+    echo "✅ Context Hub accessible"
+
+    # Get recent journal entries
+    local journal_count=$(curl -s "$context_hub_url/api/context" 2>/dev/null | jq '.journal | length' 2>/dev/null || echo 0)
+    echo "   Journal entries: $journal_count"
+  else
+    echo "⚠️  Context Hub not accessible"
+  fi
+
+  # 5. Show dashboard
+  echo ""
+  echo "5️⃣ Project Dashboard"
+  echo ""
+  echo "📊 $project_name"
+
+  # Ship date
+  local ship_date=$(grep -E "Ship:|Launch:" knowledge/ROADMAP.md 2>/dev/null | head -1 | sed 's/.*:\s*//' || echo "Not set")
+  echo "🚀 Ship Date: $ship_date"
+
+  # Phase
+  local phase=$(grep -E "Phase:|Stage:" knowledge/ROADMAP.md 2>/dev/null | head -1 | sed 's/.*:\s*//' || echo "Foundation")
+  echo "📍 Phase: $phase"
+
+  echo ""
+  echo "Recent work:"
+
+  if command -v jfl &> /dev/null; then
+    jfl synopsis 24 2>/dev/null | tail -10 || echo "  (No recent activity)"
+  else
+    # Fallback to journal
+    if [[ -d ".jfl/journal" ]]; then
+      cat .jfl/journal/*.jsonl 2>/dev/null | jq -r '.title' 2>/dev/null | tail -5 || echo "  (No journal entries)"
+    else
+      echo "  (No journal yet)"
+    fi
+  fi
+
+  echo ""
+  echo "✅ GTM session active"
+  echo ""
+  echo "Following CLAUDE.md protocols:"
+  echo "  • Journal entries (after features/decisions/fixes)"
+  echo "  • Decision capture (update docs + journal)"
+  echo "  • Context loading (via Context Hub)"
+  echo "  • File headers (@purpose tags)"
+  echo ""
+  echo "Session ready. What's next?"
+}
+
+# Main command
+COMMAND="${1:-start}"
+shift || true
+
+case "$COMMAND" in
+  start|init)
+    workspace=$(get_workspace "$@")
+    verify_workspace "$workspace"
+    init_session "$workspace"
+    ;;
+  *)
+    echo "JFL GTM Session Management"
+    echo ""
+    echo "Usage:"
+    echo "  session start [/path/to/workspace]  - Start GTM session"
+    echo "  session init [/path/to/workspace]   - Same as start"
+    echo ""
+    echo "If no path provided:"
+    echo "  1. Uses default workspace (if set)"
+    echo "  2. Discovers and prompts for selection"
+    exit 1
+    ;;
+esac

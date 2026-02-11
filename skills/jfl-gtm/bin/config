@@ -1,0 +1,218 @@
+#!/bin/bash
+# JFL GTM - Configuration Management
+# Manages workspace configuration in ~/.openclaw/openclaw.json
+
+set -e
+
+CONFIG_FILE="${HOME}/.openclaw/openclaw.json"
+
+# Ensure config file exists with proper structure
+ensure_config() {
+  if [[ ! -f "$CONFIG_FILE" ]]; then
+    echo "❌ Config file not found: $CONFIG_FILE"
+    exit 1
+  fi
+
+  # Ensure skills.entries.jfl-gtm exists
+  if ! jq -e '.skills.entries["jfl-gtm"]' "$CONFIG_FILE" &>/dev/null; then
+    echo "Initializing jfl-gtm config..."
+    jq '.skills.entries["jfl-gtm"] = {
+      "enabled": true,
+      "config": {
+        "workspace_paths": [],
+        "default_workspace": null
+      },
+      "env": {
+        "CONTEXT_HUB_URL": "http://localhost:4242"
+      }
+    }' "$CONFIG_FILE" > /tmp/config.json
+    mv /tmp/config.json "$CONFIG_FILE"
+  fi
+}
+
+# Add workspace
+add_workspace() {
+  local workspace_path="$1"
+
+  if [[ -z "$workspace_path" ]]; then
+    echo "Usage: config add /path/to/workspace"
+    exit 1
+  fi
+
+  # Expand ~
+  workspace_path="${workspace_path/#\~/$HOME}"
+
+  # Verify it's a GTM workspace
+  if [[ ! -d "$workspace_path/.jfl" ]]; then
+    echo "❌ Not a GTM workspace: missing .jfl/ directory"
+    echo "   Path: $workspace_path"
+    exit 1
+  fi
+
+  if [[ ! -f "$workspace_path/CLAUDE.md" ]]; then
+    echo "❌ Not a GTM workspace: missing CLAUDE.md"
+    echo "   Path: $workspace_path"
+    exit 1
+  fi
+
+  ensure_config
+
+  # Check if already exists
+  if jq -e --arg path "$workspace_path" '.skills.entries["jfl-gtm"].config.workspace_paths[]? | select(. == $path)' "$CONFIG_FILE" &>/dev/null; then
+    echo "⚠️  Workspace already configured"
+    return 0
+  fi
+
+  # Add to array
+  jq --arg path "$workspace_path" \
+    '.skills.entries["jfl-gtm"].config.workspace_paths += [$path]' \
+    "$CONFIG_FILE" > /tmp/config.json
+
+  if jq empty /tmp/config.json 2>/dev/null; then
+    mv /tmp/config.json "$CONFIG_FILE"
+
+    local project_name=$(jq -r '.name // empty' "$workspace_path/.jfl/config.json" 2>/dev/null || basename "$workspace_path")
+
+    echo "✅ Added workspace: $workspace_path"
+    echo "   Project: $project_name"
+  else
+    rm /tmp/config.json
+    echo "❌ Failed to update config (invalid JSON)"
+    exit 1
+  fi
+}
+
+# Remove workspace
+remove_workspace() {
+  local workspace_path="$1"
+
+  if [[ -z "$workspace_path" ]]; then
+    echo "Usage: config remove /path/to/workspace"
+    exit 1
+  fi
+
+  workspace_path="${workspace_path/#\~/$HOME}"
+
+  ensure_config
+
+  jq --arg path "$workspace_path" \
+    '.skills.entries["jfl-gtm"].config.workspace_paths -= [$path]' \
+    "$CONFIG_FILE" > /tmp/config.json
+
+  if jq empty /tmp/config.json 2>/dev/null; then
+    mv /tmp/config.json "$CONFIG_FILE"
+    echo "✅ Removed workspace: $workspace_path"
+  else
+    rm /tmp/config.json
+    echo "❌ Failed to update config"
+    exit 1
+  fi
+}
+
+# List workspaces
+list_workspaces() {
+  ensure_config
+
+  local workspaces=$(jq -r '.skills.entries["jfl-gtm"].config.workspace_paths[]?' "$CONFIG_FILE" 2>/dev/null)
+
+  if [[ -z "$workspaces" ]]; then
+    echo "No workspaces configured."
+    echo ""
+    echo "Add one with: config add /path/to/workspace"
+    return 0
+  fi
+
+  echo "Configured GTM workspaces:"
+  echo ""
+
+  while IFS= read -r path; do
+    local exists="❌"
+    [[ -d "$path/.jfl" ]] && [[ -f "$path/CLAUDE.md" ]] && exists="✅"
+
+    local project_name=$(jq -r '.name // empty' "$path/.jfl/config.json" 2>/dev/null || basename "$path")
+
+    echo "  $exists $project_name"
+    echo "     $path"
+    echo ""
+  done <<< "$workspaces"
+
+  # Show default if set
+  local default_workspace=$(jq -r '.skills.entries["jfl-gtm"].config.default_workspace // empty' "$CONFIG_FILE" 2>/dev/null)
+  if [[ -n "$default_workspace" ]]; then
+    echo "Default workspace: $default_workspace"
+  fi
+}
+
+# Set default workspace
+set_default() {
+  local workspace_path="$1"
+
+  if [[ -z "$workspace_path" ]]; then
+    # Clear default
+    jq '.skills.entries["jfl-gtm"].config.default_workspace = null' \
+      "$CONFIG_FILE" > /tmp/config.json
+    mv /tmp/config.json "$CONFIG_FILE"
+    echo "✅ Default workspace cleared"
+    return 0
+  fi
+
+  workspace_path="${workspace_path/#\~/$HOME}"
+
+  # Verify it exists
+  if [[ ! -d "$workspace_path/.jfl" ]] || [[ ! -f "$workspace_path/CLAUDE.md" ]]; then
+    echo "❌ Not a valid GTM workspace"
+    exit 1
+  fi
+
+  ensure_config
+
+  jq --arg path "$workspace_path" \
+    '.skills.entries["jfl-gtm"].config.default_workspace = $path' \
+    "$CONFIG_FILE" > /tmp/config.json
+
+  if jq empty /tmp/config.json 2>/dev/null; then
+    mv /tmp/config.json "$CONFIG_FILE"
+
+    local project_name=$(jq -r '.name // empty' "$workspace_path/.jfl/config.json" 2>/dev/null || basename "$workspace_path")
+
+    echo "✅ Default workspace: $project_name"
+    echo "   $workspace_path"
+  else
+    rm /tmp/config.json
+    echo "❌ Failed to update config"
+    exit 1
+  fi
+}
+
+# Main command routing
+COMMAND="${1:-}"
+shift || true
+
+case "$COMMAND" in
+  add)
+    add_workspace "$@"
+    ;;
+  remove|rm)
+    remove_workspace "$@"
+    ;;
+  list|ls)
+    list_workspaces
+    ;;
+  default)
+    set_default "$@"
+    ;;
+  clear-default)
+    set_default ""
+    ;;
+  *)
+    echo "JFL GTM Configuration Management"
+    echo ""
+    echo "Usage:"
+    echo "  config add /path/to/workspace    - Add workspace"
+    echo "  config remove /path/to/workspace - Remove workspace"
+    echo "  config list                      - List workspaces"
+    echo "  config default /path             - Set default workspace"
+    echo "  config clear-default             - Clear default workspace"
+    exit 1
+    ;;
+esac
