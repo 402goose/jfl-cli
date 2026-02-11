@@ -408,8 +408,23 @@ async function checkContextAndJournal(cwd: string, config: ServiceConfig): Promi
       category: 'MCP Configuration',
       status: 'warn',
       message: 'No .mcp.json found',
-      details: ['MCP servers may not be available'],
-      fixable: false
+      details: ['jfl-context MCP server will not be available'],
+      fixable: true,
+      fix: async () => {
+        const defaultMcpConfig = {
+          mcpServers: {
+            'jfl-context': {
+              command: 'jfl-context-hub-mcp',
+              args: [],
+              env: {
+                CONTEXT_HUB_URL: 'http://localhost:4242'
+              }
+            }
+          }
+        };
+        fs.writeFileSync(MCP_CONFIG_PATH, JSON.stringify(defaultMcpConfig, null, 2));
+        console.log(chalk.green('  ✓ Created .mcp.json with jfl-context server'));
+      }
     });
   } else {
     checks.push({

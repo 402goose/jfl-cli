@@ -3,14 +3,8 @@
     "jfl-context": {
       "command": "jfl-context-hub-mcp",
       "args": [],
-      "description": "JFL Context Hub - provides journal, knowledge, and code context"
-    },
-    "jfl-services": {
-      "command": "jfl-service-registry-mcp",
-      "args": [],
-      "description": "JFL Service Registry - discover and control services via @mentions",
       "env": {
-        "SERVICE_MANAGER_URL": "http://localhost:3402"
+        "CONTEXT_HUB_URL": "http://localhost:4242"
       }
     }
   }
