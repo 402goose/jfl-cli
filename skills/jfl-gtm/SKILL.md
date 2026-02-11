@@ -1595,6 +1595,80 @@ export -f end_session
 
 set -e
 
+# 0. Check for command-line arguments (config commands)
+if [[ $# -gt 0 ]]; then
+  COMMAND="$1"
+  shift
+
+  case "$COMMAND" in
+    add|add-workspace)
+      if [[ $# -eq 0 ]]; then
+        echo "Usage: /jfl-gtm add /path/to/workspace"
+        exit 1
+      fi
+      add_workspace_path "$1"
+      exit $?
+      ;;
+
+    remove|remove-workspace)
+      if [[ $# -eq 0 ]]; then
+        echo "Usage: /jfl-gtm remove /path/to/workspace"
+        exit 1
+      fi
+      remove_workspace_path "$1"
+      exit $?
+      ;;
+
+    list|list-workspaces)
+      list_configured_workspaces
+      exit 0
+      ;;
+
+    default|set-default)
+      if [[ $# -eq 0 ]]; then
+        echo "Usage: /jfl-gtm default /path/to/workspace"
+        exit 1
+      fi
+      set_default_workspace "$1"
+      exit $?
+      ;;
+
+    clear-default)
+      set_default_workspace ""
+      exit 0
+      ;;
+
+    config)
+      # Interactive config mode
+      echo "GTM Configuration Commands:"
+      echo ""
+      echo "  /jfl-gtm add /path/to/workspace       - Add workspace"
+      echo "  /jfl-gtm remove /path/to/workspace    - Remove workspace"
+      echo "  /jfl-gtm list                         - List workspaces"
+      echo "  /jfl-gtm default /path/to/workspace   - Set default"
+      echo "  /jfl-gtm clear-default                - Clear default"
+      echo ""
+      list_configured_workspaces
+      exit 0
+      ;;
+
+    *)
+      echo "Unknown command: $COMMAND"
+      echo ""
+      echo "Available commands:"
+      echo "  add /path        - Add workspace"
+      echo "  remove /path     - Remove workspace"
+      echo "  list             - List workspaces"
+      echo "  default /path    - Set default workspace"
+      echo "  clear-default    - Clear default workspace"
+      echo "  config           - Show config help"
+      echo ""
+      echo "Or run without arguments to start GTM session"
+      exit 1
+      ;;
+  esac
+fi
+
 # 1. Workspace Discovery & Selection
 # (Code from Section 1)
 [workspace discovery and selection code]

@@ -121,10 +121,20 @@ jfl-gtm - GTM workspace runtime - run go-to-market as Claude Code does
 
 ### Add Workspaces
 
+**Via command:**
+
 ```
-> Hey, let's add a new GTM: ~/code/my-project
+/jfl-gtm add ~/code/my-project
 ✅ Added workspace: /Users/you/code/my-project
    Project: my-project
+```
+
+**Or via natural language (inside skill):**
+
+```
+/jfl-gtm
+> add workspace ~/code/my-project
+✅ Added workspace
 ```
 
 ### List Workspaces
