@@ -120,7 +120,7 @@ async function cloneRepository(url: string, targetDir?: string): Promise<string>
 }
 
 /**
- * Run GTM onboard-service.sh script
+ * Run GTM onboard-service.sh script (optional - continue if it fails)
  */
 function runGTMOnboardScript(
   servicePath: string,
@@ -132,24 +132,25 @@ function runGTMOnboardScript(
   const scriptPath = join(gtmPath, "scripts/services/onboard-service.sh")
 
   if (!existsSync(scriptPath)) {
-    throw new Error(`Onboard script not found: ${scriptPath}`)
+    console.log(chalk.yellow("⚠️  GTM onboard script not found, skipping"))
+    return
   }
 
-  const spinner = ora("Setting up service agent infrastructure...").start()
+  console.log(chalk.cyan("Setting up service agent infrastructure..."))
 
   try {
     execSync(
       `bash ${scriptPath} "${servicePath}" "${serviceName}" "${serviceType}" "${description}"`,
       {
         cwd: gtmPath,
-        stdio: "pipe",
-        encoding: "utf-8",
+        stdio: "inherit",
       }
     )
-    spinner.succeed("Service agent infrastructure created")
+    console.log(chalk.green("✓ Service agent infrastructure created"))
   } catch (err: any) {
-    spinner.fail("Failed to run onboard script")
-    throw new Error(`Onboard script failed: ${err.stderr || err.message}`)
+    console.log(chalk.yellow("⚠️  GTM onboard script failed (Service Manager may not be running)"))
+    console.log(chalk.gray("   Continuing with basic setup..."))
+    // Don't throw - continue with our own setup
   }
 }
 
@@ -249,6 +250,29 @@ function updateProjectsManifest(
 
   // Write back
   writeFileSync(manifestFile, JSON.stringify(manifest, null, 2) + "\n")
+}
+
+/**
+ * Create basic service directory structure
+ */
+function createServiceStructure(
+  servicePath: string,
+  serviceName: string
+): void {
+  // Create .jfl directory
+  const jflDir = join(servicePath, ".jfl")
+  mkdirSync(join(jflDir, "journal"), { recursive: true })
+  mkdirSync(join(jflDir, "logs"), { recursive: true })
+
+  // Create .claude directory
+  const claudeDir = join(servicePath, ".claude")
+  mkdirSync(join(claudeDir, "skills"), { recursive: true })
+  mkdirSync(join(claudeDir, "agents"), { recursive: true })
+
+  // Create knowledge directory
+  mkdirSync(join(servicePath, "knowledge"), { recursive: true })
+
+  console.log(chalk.green("✓ Created service directory structure"))
 }
 
 /**
@@ -611,6 +635,9 @@ export async function onboardCommand(
     metadata.description,
     gtmPath
   )
+
+  // Ensure basic service structure exists (in case script failed)
+  createServiceStructure(servicePath, metadata.name)
 
   // Set up service-GTM link (for sync)
   setupServiceGTMLink(
