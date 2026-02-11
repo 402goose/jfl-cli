@@ -707,6 +707,62 @@ jfl services health stratus-run  # Check specific service
 
 Shows:
 - Service directory exists
+- GTM parent reachable
+- Service registered in GTM
+- Journal sync working
+
+### Service Validation
+
+**Ensure services are properly configured and compliant:**
+
+```bash
+jfl services validate              # Check everything
+jfl services validate --fix        # Auto-repair issues
+jfl services validate --json       # JSON output for scripts
+```
+
+**What it validates:**
+- ✅ Service configuration complete (name, type, gtm_parent)
+- ✅ Registered in parent GTM
+- ✅ Hooks configured correctly (catches invalid hook names like `SessionStart:service`)
+- ✅ Journal directory exists
+- ✅ Context Hub connected
+- ✅ Skills deployed
+- ✅ Health checks (worktrees, git state, permissions)
+
+**Auto-fix capabilities:**
+- Fixes invalid hook names (`SessionStart:service` → `SessionStart`)
+- Creates missing directories (`.jfl/journal/`, `.claude/skills/`)
+- Creates default `.claude/settings.json`
+- Registers service in parent GTM
+
+**When validation runs:**
+- Automatically on `SessionStart` (services only, non-blocking)
+- Before session end via `/end` skill (offers to fix issues)
+- Manually with `jfl services validate`
+
+**Example output:**
+
+```
+🔍 SERVICE VALIDATION: stratus-api
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+[✓] Service Configuration
+[✓] GTM Integration
+[✗] Hooks - Invalid hook name: SessionStart:service
+[✓] Context Hub
+
+Summary: 3 passed, 1 error
+Run 'jfl services validate --fix' to auto-repair.
+```
+
+**Hook configuration template:**
+
+Services should use `.claude/service-settings.json` template which includes:
+- Validation on SessionStart (shows warnings)
+- Journal check on Stop
+- Service name display
+- Status information
 - GTM parent configured and valid
 - /end skill deployed
 - Last sync time (warns if > 7 days)

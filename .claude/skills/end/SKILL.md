@@ -187,6 +187,56 @@ fi
 - If `GTM_PARENT` is empty: Service exists but not linked
 - Otherwise: Regular GTM or standalone session
 
+### Step 1.6: Validate Service Configuration (Services Only)
+
+If running in a service (`SYNC_TO_GTM=true`), validate configuration before ending:
+
+```bash
+if [[ "$SYNC_TO_GTM" == "true" ]]; then
+    echo ""
+    echo "🔍 Validating service configuration..."
+
+    # Run validation (non-blocking, just show warnings)
+    if jfl services validate --json > /tmp/validation-result.json 2>/dev/null; then
+        # Parse results
+        ERRORS=$(jq -r '.summary.errors' /tmp/validation-result.json)
+        WARNINGS=$(jq -r '.summary.warnings' /tmp/validation-result.json)
+
+        if [[ "$ERRORS" -gt 0 ]]; then
+            echo "⚠️  Service validation found $ERRORS error(s)"
+            echo ""
+            echo "Run 'jfl services validate' to see details"
+            echo "Run 'jfl services validate --fix' to auto-repair"
+            echo ""
+
+            # Ask if they want to fix before ending
+            read -p "Auto-fix issues now? (y/N) " -n 1 -r
+            echo
+            if [[ $REPLY =~ ^[Yy]$ ]]; then
+                jfl services validate --fix
+            fi
+        elif [[ "$WARNINGS" -gt 0 ]]; then
+            echo "✓ Validation passed ($WARNINGS warning(s))"
+        else
+            echo "✓ Service configuration valid"
+        fi
+    fi
+
+    rm -f /tmp/validation-result.json
+fi
+```
+
+**What this does:**
+- Validates service configuration before ending session
+- Non-blocking: Shows warnings but doesn't prevent session end
+- Offers to auto-fix issues if errors found
+- Only runs for services, not GTM workspaces
+
+**Why this matters:**
+- Catches configuration issues before they cause problems
+- Prevents services from ending in an invalid state
+- Ensures hooks, journal, and GTM integration are correct
+
 ### Step 2: Get Branch Information
 
 ```bash

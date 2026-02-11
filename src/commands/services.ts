@@ -22,6 +22,7 @@ import {
   syncJournalsToGTM,
   type ServiceRegistration,
 } from "../lib/service-gtm.js";
+import { serviceValidate } from "./service-validate.js";
 import chalk from "chalk";
 
 const execAsync = promisify(exec);
@@ -760,7 +761,8 @@ async function checkServiceGTMHealth(serviceName?: string): Promise<void> {
  */
 export async function servicesCommand(
   action?: string,
-  serviceName?: string
+  serviceName?: string,
+  options: { fix?: boolean; json?: boolean } = {}
 ): Promise<void> {
   try {
     switch (action) {
@@ -868,6 +870,10 @@ export async function servicesCommand(
         await syncServiceToGTM(serviceName);
         break;
 
+      case "validate":
+        await serviceValidate({ fix: options.fix, json: options.json });
+        break;
+
       default:
         console.log("Usage: jfl services <action> [service-name]");
         console.log("");
@@ -880,6 +886,7 @@ export async function servicesCommand(
         console.log("  health [service]             Check service health (GTM-aware)");
         console.log("  deploy-skill <skill> [svc]   Deploy skill to registered services");
         console.log("  sync [service]               Sync service to GTM manually");
+        console.log("  validate [--fix] [--json]    Validate service configuration (run from service dir)");
         break;
     }
   } catch (error: any) {

@@ -137,12 +137,14 @@ program
 program
   .command("services")
   .description("Manage services across all GTM projects (interactive TUI or CLI)")
-  .argument("[action]", "scan, list, status, start, stop, deps, or leave empty for TUI")
+  .argument("[action]", "scan, list, status, start, stop, deps, validate, or leave empty for TUI")
   .argument("[service]", "Service name")
   .option("--dry-run", "Preview what would be discovered (for scan)")
   .option("--path <path>", "Path to scan (default: current directory)")
   .option("--force", "Force operation (for stop with dependents)")
   .option("--verbose", "Verbose output")
+  .option("--fix", "Auto-repair issues (for validate)")
+  .option("--json", "Output JSON (for validate)")
   .action(async (action, service, options) => {
     // Handle scan action
     if (action === "scan") {
@@ -195,7 +197,7 @@ program
     } else {
       // CLI mode
       const { servicesCommand } = await import("./commands/services.js")
-      await servicesCommand(action, service)
+      await servicesCommand(action, service, { fix: options.fix, json: options.json })
     }
   })
 
