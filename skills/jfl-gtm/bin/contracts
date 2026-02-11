@@ -1,0 +1,208 @@
+#!/bin/bash
+# JFL GTM - Contract Operations
+# Compile and test Solana contracts
+
+set -e
+
+WORKSPACE="${WORKSPACE:-$(pwd)}"
+
+if [[ ! -d "$WORKSPACE/.jfl" ]]; then
+  echo "❌ Not in a GTM workspace"
+  exit 1
+fi
+
+# Find contracts repo
+find_contracts_repo() {
+  # Try common locations relative to GTM workspace
+  local possible_paths=(
+    "$WORKSPACE/../kaijoo-contracts"
+    "$WORKSPACE/contracts"
+    "$WORKSPACE/kaijoo-contracts"
+  )
+
+  for path in "${possible_paths[@]}"; do
+    if [[ -f "$path/Cargo.toml" ]]; then
+      echo "$path"
+      return 0
+    fi
+  done
+
+  echo "❌ Contracts repo not found" >&2
+  exit 1
+}
+
+# Compile contracts
+compile() {
+  local contracts_dir=$(find_contracts_repo)
+  echo "📦 Compiling contracts..."
+  echo "   Path: $contracts_dir"
+  echo ""
+
+  cd "$contracts_dir"
+
+  if cargo build --all 2>&1 | tee /tmp/cargo-build.log; then
+    echo ""
+    echo "✅ Compilation successful"
+
+    # Count warnings
+    local warnings=$(grep "warning:" /tmp/cargo-build.log | wc -l | tr -d ' ')
+    if [[ $warnings -gt 0 ]]; then
+      echo "⚠️  $warnings warnings"
+    fi
+
+    return 0
+  else
+    echo ""
+    echo "❌ Compilation failed"
+    return 1
+  fi
+}
+
+# Run tests
+test_contracts() {
+  local contracts_dir=$(find_contracts_repo)
+  echo "🧪 Running tests..."
+  echo "   Path: $contracts_dir"
+  echo ""
+
+  cd "$contracts_dir"
+
+  if cargo test 2>&1 | tee /tmp/cargo-test.log; then
+    echo ""
+
+    # Parse results
+    local passed=$(grep -E "test result:" /tmp/cargo-test.log | grep -oE "[0-9]+ passed" | cut -d' ' -f1 || echo "0")
+    local failed=$(grep -E "test result:" /tmp/cargo-test.log | grep -oE "[0-9]+ failed" | cut -d' ' -f1 || echo "0")
+
+    if [[ $failed -eq 0 ]]; then
+      echo "✅ All tests passed ($passed tests)"
+      return 0
+    else
+      echo "❌ $failed tests failed, $passed passed"
+      return 1
+    fi
+  else
+    echo ""
+    echo "❌ Test execution failed"
+    return 1
+  fi
+}
+
+# Full build and test
+build_and_test() {
+  local start_time=$(date +%s)
+
+  echo "🚀 Contract Build & Test Pipeline"
+  echo ""
+
+  # Compile
+  local compile_success=0
+  if compile; then
+    compile_success=1
+  fi
+
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo ""
+
+  # Test (only if compile succeeded)
+  local test_success=0
+  if [[ $compile_success -eq 1 ]]; then
+    if test_contracts; then
+      test_success=1
+    fi
+  else
+    echo "⏭️  Skipping tests (compilation failed)"
+  fi
+
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo ""
+
+  # Summary
+  local end_time=$(date +%s)
+  local duration=$((end_time - start_time))
+
+  echo "📊 Summary"
+  echo ""
+  echo "   Compilation: $([ $compile_success -eq 1 ] && echo '✅ Success' || echo '❌ Failed')"
+  echo "   Tests: $([ $test_success -eq 1 ] && echo '✅ Passed' || echo '❌ Failed')"
+  echo "   Duration: ${duration}s"
+  echo ""
+
+  # Journal entry (if in GTM workspace)
+  if command -v ~/.openclaw/skills/jfl-gtm/bin/journal &>/dev/null; then
+    cd "$WORKSPACE"
+
+    local status="complete"
+    [[ $compile_success -eq 0 ]] || [[ $test_success -eq 0 ]] && status="incomplete"
+
+    local summary="Compilation: $([ $compile_success -eq 1 ] && echo 'success' || echo 'failed'), Tests: $([ $test_success -eq 1 ] && echo 'passed' || echo 'failed')"
+
+    ~/.openclaw/skills/jfl-gtm/bin/journal write feature \
+      "Contract build and test" \
+      "$summary" \
+      "Ran cargo build --all and cargo test. Duration: ${duration}s" \
+      '["../kaijoo-contracts/"]' \
+      "$status" 2>/dev/null || echo "(Journal entry skipped)"
+  fi
+
+  # Exit code
+  if [[ $compile_success -eq 1 ]] && [[ $test_success -eq 1 ]]; then
+    return 0
+  else
+    return 1
+  fi
+}
+
+# Show results
+show_results() {
+  echo ""
+  echo "📄 Detailed Logs"
+  echo ""
+  echo "Compilation output: /tmp/cargo-build.log"
+  echo "Test output: /tmp/cargo-test.log"
+  echo ""
+
+  if [[ -f /tmp/cargo-build.log ]]; then
+    echo "Last 10 lines of build:"
+    tail -10 /tmp/cargo-build.log
+  fi
+
+  echo ""
+
+  if [[ -f /tmp/cargo-test.log ]]; then
+    echo "Last 10 lines of tests:"
+    tail -10 /tmp/cargo-test.log
+  fi
+}
+
+# Main command routing
+COMMAND="${1:-build-test}"
+
+case "$COMMAND" in
+  compile|build)
+    compile
+    ;;
+  test)
+    test_contracts
+    ;;
+  build-test|bt)
+    build_and_test
+    ;;
+  results|show)
+    show_results
+    ;;
+  *)
+    echo "JFL GTM Contract Operations"
+    echo ""
+    echo "Usage:"
+    echo "  contracts compile       - Compile contracts only"
+    echo "  contracts test          - Run tests only"
+    echo "  contracts build-test    - Full pipeline (default)"
+    echo "  contracts results       - Show detailed logs"
+    echo ""
+    echo "Automatically finds kaijoo-contracts repo and journals results."
+    exit 1
+    ;;
+esac
