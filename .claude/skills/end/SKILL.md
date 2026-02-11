@@ -152,6 +152,41 @@ fi
 - `worktree` → Multiple concurrent sessions, isolated worktree
 - `none` → Not in a JFL session (shouldn't happen, but handle gracefully)
 
+### Step 1.5: Detect Service Context
+
+After detecting session mode, check if running in a service:
+
+```bash
+# Read config to detect environment
+CONFIG_TYPE=$(jq -r '.type // "unknown"' .jfl/config.json 2>/dev/null)
+
+if [[ "$CONFIG_TYPE" == "service" ]]; then
+    # Running in a service
+    GTM_PARENT=$(jq -r '.gtm_parent // empty' .jfl/config.json)
+
+    if [[ -z "$GTM_PARENT" ]]; then
+        echo "⚠️  Service not linked to GTM workspace"
+        echo ""
+        echo "This service can still be cleaned up, but changes won't sync to a GTM."
+        echo "To link: cd <gtm> && jfl services register $(pwd)"
+        echo ""
+    fi
+
+    SERVICE_NAME=$(jq -r '.name' .jfl/config.json)
+    SYNC_TO_GTM=true
+    echo "📡 Service context detected: $SERVICE_NAME"
+    echo "   GTM parent: $GTM_PARENT"
+else
+    # Running in GTM or standalone
+    SYNC_TO_GTM=false
+fi
+```
+
+**What this tells you:**
+- If `SYNC_TO_GTM=true`: This is a service session, sync after cleanup
+- If `GTM_PARENT` is empty: Service exists but not linked
+- Otherwise: Regular GTM or standalone session
+
 ### Step 2: Get Branch Information
 
 ```bash
@@ -988,6 +1023,73 @@ mkdir -p .jfl/logs
 done
 
 EXIT_CODE=${PIPESTATUS[0]}
+
+# ============================================================
+# STEP 5.5: Sync to GTM (if in service)
+# ============================================================
+
+if [[ "$SYNC_TO_GTM" == "true" && -n "$GTM_PARENT" ]]; then
+    echo ""
+    echo "📡 Syncing to GTM workspace..."
+
+    # Validate GTM parent exists
+    if [[ ! -d "$GTM_PARENT" ]]; then
+        echo "⚠️  GTM parent not found: $GTM_PARENT"
+        echo "Skipping sync. Session cleaned up locally."
+    else
+        # Validate it's actually a GTM
+        GTM_TYPE=$(jq -r '.type // empty' "$GTM_PARENT/.jfl/config.json" 2>/dev/null)
+        if [[ "$GTM_TYPE" != "gtm" ]]; then
+            echo "⚠️  Parent is not a GTM workspace (type: $GTM_TYPE)"
+            echo "Skipping sync. Session cleaned up locally."
+        else
+            # 1. Sync journal entries
+            mkdir -p "$GTM_PARENT/.jfl/journal"
+
+            SYNCED_COUNT=0
+            for journal in .jfl/journal/*.jsonl; do
+                if [[ -f "$journal" ]]; then
+                    BASENAME=$(basename "$journal")
+                    TARGET="$GTM_PARENT/.jfl/journal/service-${SERVICE_NAME}-${BASENAME}"
+
+                    # Copy journal with preserved permissions
+                    cp "$journal" "$TARGET"
+                    ((SYNCED_COUNT++))
+                    echo "  ✓ Synced: $BASENAME"
+                fi
+            done
+
+            # 2. Update GTM's last_sync timestamp
+            cd "$GTM_PARENT"
+            TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+            # Use jq to update the timestamp (create registered_services if needed)
+            jq --arg name "$SERVICE_NAME" \
+               --arg ts "$TIMESTAMP" \
+               '(.registered_services // []) |= (
+                 if any(.name == $name) then
+                   map(if .name == $name then .last_sync = $ts else . end)
+                 else
+                   . + [{"name": $name, "last_sync": $ts}]
+                 end
+               )' \
+               .jfl/config.json > .jfl/config.json.tmp && \
+               mv .jfl/config.json.tmp .jfl/config.json
+
+            # 3. Create sync entry in GTM journal
+            GTM_SESSION=$(git branch --show-current 2>/dev/null || echo "main")
+            GTM_JOURNAL=".jfl/journal/${GTM_SESSION}.jsonl"
+
+            cat >> "$GTM_JOURNAL" << EOF
+{"v":1,"ts":"$TIMESTAMP","session":"$GTM_SESSION","type":"sync","title":"Service sync: $SERVICE_NAME","summary":"Synced $SYNCED_COUNT journal file(s) from $SERVICE_NAME","service":"$SERVICE_NAME","files_synced":$SYNCED_COUNT}
+EOF
+
+            echo "  ✓ Updated GTM registry"
+            echo ""
+            echo "✅ Sync complete ($SYNCED_COUNT journal file(s) → GTM)"
+        fi
+    fi
+fi
 
 # ============================================================
 # STEP 6: Report Results

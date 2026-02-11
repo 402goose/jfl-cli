@@ -653,6 +653,66 @@ Once you understand their setup, save it:
 
 ---
 
+## Working with GTM Services
+
+JFL supports registering services within a GTM workspace and syncing their work back to the parent.
+
+### Service Registration
+
+When you onboard a service in a GTM workspace, JFL:
+1. Creates `.jfl/config.json` in service with `type: "service"` and `gtm_parent` path
+2. Adds service to GTM's `registered_services` array
+3. Sets up sync configuration
+
+### Deploying Skills to Services
+
+Deploy GTM skills to all registered services:
+
+```bash
+# Deploy /end skill to all services
+jfl services deploy-skill end
+
+# Deploy to specific service
+jfl services deploy-skill end stratus-run
+
+# Deploy all skills
+jfl services deploy-skill --all
+```
+
+### Automatic Sync on Session End
+
+When you end a session in a service (using `/end`):
+1. Service session cleaned up normally
+2. Journal entries copied to GTM at `.jfl/journal/service-{name}-*.jsonl`
+3. GTM's `last_sync` timestamp updated
+4. Sync event created in GTM journal
+
+### Manual Sync
+
+Force sync without ending session:
+
+```bash
+jfl services sync              # Sync all services
+jfl services sync stratus-run  # Sync specific service
+```
+
+### Health Check
+
+Check service-GTM connectivity:
+
+```bash
+jfl services health           # Check all services
+jfl services health stratus-run  # Check specific service
+```
+
+Shows:
+- Service directory exists
+- GTM parent configured and valid
+- /end skill deployed
+- Last sync time (warns if > 7 days)
+
+---
+
 ## Starting a New Project (Foundation Empty)
 
 When knowledge docs are empty, pull them through foundation in order. Don't ask open-ended "What do you want to build?"

@@ -14,7 +14,7 @@
 import chalk from "chalk"
 import ora from "ora"
 import * as p from "@clack/prompts"
-import { existsSync, readFileSync, writeFileSync } from "fs"
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs"
 import { execSync } from "child_process"
 import { join, resolve, basename } from "path"
 import { homedir } from "os"
@@ -28,6 +28,7 @@ import {
   writeAgentDefinition,
 } from "../lib/agent-generator.js"
 import { writeSkillFiles } from "../lib/skill-generator.js"
+import type { ServiceConfig, GTMConfig } from "../lib/service-gtm.js"
 
 export interface OnboardOptions {
   name?: string
@@ -248,6 +249,81 @@ function updateProjectsManifest(
 
   // Write back
   writeFileSync(manifestFile, JSON.stringify(manifest, null, 2) + "\n")
+}
+
+/**
+ * Set up service-GTM link
+ */
+function setupServiceGTMLink(
+  servicePath: string,
+  serviceName: string,
+  serviceType: ServiceMetadata["type"],
+  description: string,
+  gtmPath: string
+): void {
+  // 1. Create/update service's .jfl/config.json
+  const serviceJflDir = join(servicePath, ".jfl")
+  mkdirSync(serviceJflDir, { recursive: true })
+
+  const serviceConfigPath = join(serviceJflDir, "config.json")
+  let serviceConfig: ServiceConfig
+
+  if (existsSync(serviceConfigPath)) {
+    serviceConfig = JSON.parse(readFileSync(serviceConfigPath, "utf-8"))
+  } else {
+    serviceConfig = {
+      name: serviceName,
+      type: "service",
+      description,
+    }
+  }
+
+  // Set service-specific fields
+  serviceConfig.type = "service"
+  serviceConfig.service_type = serviceType
+  serviceConfig.gtm_parent = gtmPath
+  serviceConfig.sync_to_parent = {
+    journal: true,
+    knowledge: false,
+    content: false,
+  }
+
+  writeFileSync(serviceConfigPath, JSON.stringify(serviceConfig, null, 2) + "\n")
+  console.log(chalk.green(`✓ Created service config at ${servicePath}/.jfl/config.json`))
+
+  // 2. Update GTM's .jfl/config.json to register this service
+  const gtmConfigPath = join(gtmPath, ".jfl", "config.json")
+
+  if (existsSync(gtmConfigPath)) {
+    const gtmConfig: GTMConfig = JSON.parse(readFileSync(gtmConfigPath, "utf-8"))
+
+    // Initialize registered_services if needed
+    if (!gtmConfig.registered_services) {
+      gtmConfig.registered_services = []
+    }
+
+    // Check if already registered
+    const existing = gtmConfig.registered_services.find((s) => s.name === serviceName)
+
+    if (existing) {
+      // Update existing
+      existing.status = "active"
+      existing.type = serviceType
+    } else {
+      // Add new
+      const relativePath = resolve(servicePath).replace(resolve(gtmPath) + "/", "")
+      gtmConfig.registered_services.push({
+        name: serviceName,
+        path: relativePath,
+        type: serviceType,
+        registered_at: new Date().toISOString(),
+        status: "active",
+      })
+    }
+
+    writeFileSync(gtmConfigPath, JSON.stringify(gtmConfig, null, 2) + "\n")
+    console.log(chalk.green(`✓ Registered service in GTM config`))
+  }
 }
 
 /**
@@ -529,6 +605,15 @@ export async function onboardCommand(
   console.log(chalk.cyan("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"))
 
   runGTMOnboardScript(
+    servicePath,
+    metadata.name,
+    metadata.type,
+    metadata.description,
+    gtmPath
+  )
+
+  // Set up service-GTM link (for sync)
+  setupServiceGTMLink(
     servicePath,
     metadata.name,
     metadata.type,

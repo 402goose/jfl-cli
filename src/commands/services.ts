@@ -14,6 +14,14 @@ import { exec } from "child_process";
 import { promisify } from "util";
 import { JFL_PATHS } from "../utils/jfl-paths.js";
 import { checkServiceHealth, restartCoreServices, validateCoreServices } from "../lib/service-utils.js";
+import {
+  findGTMParent,
+  validateGTMParent,
+  getRegisteredServices,
+  updateServiceSync,
+  syncJournalsToGTM,
+  type ServiceRegistration,
+} from "../lib/service-gtm.js";
 import chalk from "chalk";
 
 const execAsync = promisify(exec);
@@ -446,6 +454,308 @@ async function stopSpecificService(serviceName: string): Promise<void> {
 }
 
 /**
+ * Deploy skill to registered services
+ */
+async function deploySkillToServices(
+  skillName: string,
+  targetService?: string,
+  dryRun = false
+): Promise<void> {
+  const projectRoot = process.cwd();
+  const configPath = path.join(projectRoot, ".jfl", "config.json");
+
+  if (!fs.existsSync(configPath)) {
+    console.error("Error: Not in a JFL project (no .jfl/config.json)");
+    process.exit(1);
+  }
+
+  const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+
+  if (config.type !== "gtm") {
+    console.error("Error: This command only works in GTM workspaces");
+    process.exit(1);
+  }
+
+  const services = getRegisteredServices(projectRoot);
+
+  if (services.length === 0) {
+    console.log("No services registered. Use 'jfl services register' to add services.");
+    return;
+  }
+
+  const skillSourcePath = path.join(projectRoot, ".claude", "skills", skillName);
+
+  if (!fs.existsSync(skillSourcePath)) {
+    console.error(`Error: Skill not found: ${skillSourcePath}`);
+    console.log("\nAvailable skills:");
+    const skillsDir = path.join(projectRoot, ".claude", "skills");
+    if (fs.existsSync(skillsDir)) {
+      const skills = fs.readdirSync(skillsDir).filter((f) =>
+        fs.statSync(path.join(skillsDir, f)).isDirectory()
+      );
+      skills.forEach((s) => console.log(`  - ${s}`));
+    }
+    process.exit(1);
+  }
+
+  const servicesToDeploy = targetService
+    ? services.filter((s) => s.name === targetService)
+    : services;
+
+  if (servicesToDeploy.length === 0) {
+    console.error(`Error: Service not found: ${targetService}`);
+    process.exit(1);
+  }
+
+  console.log(chalk.cyan(`\n📦 Deploying skill: ${skillName}\n`));
+
+  for (const service of servicesToDeploy) {
+    const servicePath = path.isAbsolute(service.path)
+      ? service.path
+      : path.join(projectRoot, service.path);
+    const skillDestPath = path.join(servicePath, ".claude", "skills", skillName);
+
+    if (dryRun) {
+      console.log(`Would deploy to: ${servicePath}`);
+      continue;
+    }
+
+    try {
+      // Create destination directory
+      fs.mkdirSync(path.dirname(skillDestPath), { recursive: true });
+
+      // Copy skill directory
+      copyDirectory(skillSourcePath, skillDestPath);
+
+      console.log(chalk.green(`  ✓ ${service.name}`));
+    } catch (error: any) {
+      console.log(chalk.red(`  ✗ ${service.name}: ${error.message}`));
+    }
+  }
+
+  console.log("");
+}
+
+/**
+ * Copy directory recursively
+ */
+function copyDirectory(src: string, dest: string): void {
+  fs.mkdirSync(dest, { recursive: true });
+
+  const entries = fs.readdirSync(src, { withFileTypes: true });
+
+  for (const entry of entries) {
+    const srcPath = path.join(src, entry.name);
+    const destPath = path.join(dest, entry.name);
+
+    if (entry.isDirectory()) {
+      copyDirectory(srcPath, destPath);
+    } else {
+      fs.copyFileSync(srcPath, destPath);
+    }
+  }
+}
+
+/**
+ * Sync service to GTM manually
+ */
+async function syncServiceToGTM(
+  serviceName?: string,
+  dryRun = false
+): Promise<void> {
+  const projectRoot = process.cwd();
+  const configPath = path.join(projectRoot, ".jfl", "config.json");
+
+  if (!fs.existsSync(configPath)) {
+    console.error("Error: Not in a JFL project (no .jfl/config.json)");
+    process.exit(1);
+  }
+
+  const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+
+  if (config.type !== "gtm") {
+    console.error("Error: This command only works in GTM workspaces");
+    process.exit(1);
+  }
+
+  const services = getRegisteredServices(projectRoot);
+
+  if (services.length === 0) {
+    console.log("No services registered.");
+    return;
+  }
+
+  const servicesToSync = serviceName
+    ? services.filter((s) => s.name === serviceName)
+    : services;
+
+  if (servicesToSync.length === 0) {
+    console.error(`Error: Service not found: ${serviceName}`);
+    process.exit(1);
+  }
+
+  console.log(chalk.cyan(`\n📡 Syncing services to GTM...\n`));
+
+  for (const service of servicesToSync) {
+    const servicePath = path.isAbsolute(service.path)
+      ? service.path
+      : path.join(projectRoot, service.path);
+
+    if (dryRun) {
+      console.log(`Would sync: ${service.name}`);
+      const journalPath = path.join(servicePath, ".jfl", "journal");
+      if (fs.existsSync(journalPath)) {
+        const files = fs.readdirSync(journalPath).filter((f) => f.endsWith(".jsonl"));
+        console.log(`  ${files.length} journal file(s)`);
+      }
+      continue;
+    }
+
+    try {
+      // Sync journals
+      const syncedCount = syncJournalsToGTM(servicePath, projectRoot, service.name);
+
+      // Update timestamp
+      const timestamp = new Date().toISOString();
+      updateServiceSync(projectRoot, service.name, timestamp);
+
+      // Create sync entry in GTM journal
+      const gtmBranch = config.working_branch || "main";
+      const gtmJournalFile = path.join(
+        projectRoot,
+        ".jfl",
+        "journal",
+        `${gtmBranch}.jsonl`
+      );
+
+      const syncEntry = {
+        v: 1,
+        ts: timestamp,
+        session: gtmBranch,
+        type: "sync",
+        title: `Service sync: ${service.name}`,
+        summary: `Synced ${syncedCount} journal file(s) from ${service.name}`,
+        service: service.name,
+        files_synced: syncedCount,
+      };
+
+      fs.appendFileSync(gtmJournalFile, JSON.stringify(syncEntry) + "\n");
+
+      console.log(chalk.green(`  ✓ ${service.name}`));
+      console.log(chalk.gray(`    Synced ${syncedCount} journal file(s)`));
+    } catch (error: any) {
+      console.log(chalk.red(`  ✗ ${service.name}: ${error.message}`));
+    }
+  }
+
+  console.log("");
+}
+
+/**
+ * Enhanced health check with GTM connectivity
+ */
+async function checkServiceGTMHealth(serviceName?: string): Promise<void> {
+  const projectRoot = process.cwd();
+  const configPath = path.join(projectRoot, ".jfl", "config.json");
+
+  if (!fs.existsSync(configPath)) {
+    console.error("Error: Not in a JFL project (no .jfl/config.json)");
+    process.exit(1);
+  }
+
+  const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+
+  if (config.type !== "gtm") {
+    console.error("Error: This command only works in GTM workspaces");
+    process.exit(1);
+  }
+
+  const services = getRegisteredServices(projectRoot);
+
+  if (services.length === 0) {
+    console.log("No services registered.");
+    return;
+  }
+
+  const servicesToCheck = serviceName
+    ? services.filter((s) => s.name === serviceName)
+    : services;
+
+  if (servicesToCheck.length === 0) {
+    console.error(`Error: Service not found: ${serviceName}`);
+    process.exit(1);
+  }
+
+  console.log(chalk.cyan(`\n🔍 Service Health Check\n`));
+
+  for (const service of servicesToCheck) {
+    console.log(chalk.bold(`Service: ${service.name}`));
+
+    const servicePath = path.isAbsolute(service.path)
+      ? service.path
+      : path.join(projectRoot, service.path);
+
+    // Check directory exists
+    if (!fs.existsSync(servicePath)) {
+      console.log(chalk.red(`  ✗ Directory not found: ${servicePath}`));
+      console.log("");
+      continue;
+    }
+    console.log(chalk.green(`  ✓ Directory exists`));
+
+    // Check GTM parent configured
+    const gtmParent = findGTMParent(servicePath);
+    if (!gtmParent) {
+      console.log(chalk.yellow(`  ⚠  GTM parent not configured`));
+    } else {
+      console.log(chalk.green(`  ✓ GTM parent configured: ${gtmParent}`));
+
+      // Validate GTM parent
+      if (!validateGTMParent(gtmParent)) {
+        console.log(chalk.red(`  ✗ GTM parent is invalid or not accessible`));
+      } else {
+        console.log(chalk.green(`  ✓ GTM parent is valid`));
+      }
+    }
+
+    // Check /end skill deployed
+    const endSkillPath = path.join(servicePath, ".claude", "skills", "end");
+    if (!fs.existsSync(endSkillPath)) {
+      console.log(chalk.red(`  ✗ /end skill NOT deployed`));
+      console.log(chalk.gray(`    Run: jfl services deploy-skill end ${service.name}`));
+    } else {
+      console.log(chalk.green(`  ✓ /end skill deployed`));
+    }
+
+    // Check last sync
+    if (service.last_sync) {
+      const lastSync = new Date(service.last_sync);
+      const now = new Date();
+      const daysSince = (now.getTime() - lastSync.getTime()) / (1000 * 60 * 60 * 24);
+
+      if (daysSince > 7) {
+        console.log(
+          chalk.yellow(
+            `  ⚠  Last sync: ${Math.floor(daysSince)} days ago (consider syncing)`
+          )
+        );
+      } else if (daysSince > 1) {
+        console.log(
+          chalk.green(`  ✓ Last sync: ${Math.floor(daysSince)} days ago`)
+        );
+      } else {
+        const hoursSince = Math.floor(daysSince * 24);
+        console.log(chalk.green(`  ✓ Last sync: ${hoursSince} hours ago`));
+      }
+    } else {
+      console.log(chalk.yellow(`  ⚠  Never synced`));
+    }
+
+    console.log("");
+  }
+}
+
+/**
  * Main services command
  */
 export async function servicesCommand(
@@ -498,39 +808,78 @@ export async function servicesCommand(
 
       case "health":
         if (serviceName) {
-          // Health check for specific service
-          console.log(`Checking health of ${serviceName}...`);
-          // This would require service-specific health endpoints
-          // For now, just use the global validation
-          console.log("Health check for specific services not yet implemented");
-          console.log("Use 'jfl services health' (without service name) to check all core services");
+          // Health check for specific service with GTM connectivity
+          await checkServiceGTMHealth(serviceName);
         } else {
-          // Validate all core services
-          console.log(chalk.cyan("\n🔍 Checking service health...\n"));
-          const validation = await validateCoreServices();
+          // Check if we're in a GTM with registered services
+          const projectRoot = process.cwd();
+          const configPath = path.join(projectRoot, ".jfl", "config.json");
 
-          if (validation.healthy) {
-            console.log(chalk.green("✓ All core services are healthy\n"));
+          if (fs.existsSync(configPath)) {
+            const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+            if (config.type === "gtm" && config.registered_services?.length > 0) {
+              // GTM with services - check GTM health
+              await checkServiceGTMHealth();
+            } else {
+              // Regular core services health check
+              console.log(chalk.cyan("\n🔍 Checking service health...\n"));
+              const validation = await validateCoreServices();
+
+              if (validation.healthy) {
+                console.log(chalk.green("✓ All core services are healthy\n"));
+              } else {
+                console.log(chalk.yellow("⚠️  Service health issues detected:\n"));
+                for (const issue of validation.issues) {
+                  console.log(chalk.yellow(`  • ${issue.service}: ${issue.message}`));
+                  console.log(chalk.gray(`    Fix: ${issue.remedy}\n`));
+                }
+              }
+            }
           } else {
-            console.log(chalk.yellow("⚠️  Service health issues detected:\n"));
-            for (const issue of validation.issues) {
-              console.log(chalk.yellow(`  • ${issue.service}: ${issue.message}`));
-              console.log(chalk.gray(`    Fix: ${issue.remedy}\n`));
+            // Fallback to core services check
+            console.log(chalk.cyan("\n🔍 Checking service health...\n"));
+            const validation = await validateCoreServices();
+
+            if (validation.healthy) {
+              console.log(chalk.green("✓ All core services are healthy\n"));
+            } else {
+              console.log(chalk.yellow("⚠️  Service health issues detected:\n"));
+              for (const issue of validation.issues) {
+                console.log(chalk.yellow(`  • ${issue.service}: ${issue.message}`));
+                console.log(chalk.gray(`    Fix: ${issue.remedy}\n`));
+              }
             }
           }
         }
+        break;
+
+      case "deploy-skill":
+        if (!serviceName) {
+          console.error("Error: Skill name required");
+          console.log("Usage: jfl services deploy-skill <skill-name> [service-name]");
+          process.exit(1);
+        }
+        // serviceName is actually the skill name in this case
+        // The third argument would be the target service
+        await deploySkillToServices(serviceName);
+        break;
+
+      case "sync":
+        await syncServiceToGTM(serviceName);
         break;
 
       default:
         console.log("Usage: jfl services <action> [service-name]");
         console.log("");
         console.log("Actions:");
-        console.log("  list              List all services");
-        console.log("  status            Show service status summary");
-        console.log("  start <service>   Start a service");
-        console.log("  stop <service>    Stop a service");
-        console.log("  restart [service] Restart a service (or all core services)");
-        console.log("  health [service]  Check service health");
+        console.log("  list                         List all services");
+        console.log("  status                       Show service status summary");
+        console.log("  start <service>              Start a service");
+        console.log("  stop <service>               Stop a service");
+        console.log("  restart [service]            Restart a service (or all core services)");
+        console.log("  health [service]             Check service health (GTM-aware)");
+        console.log("  deploy-skill <skill> [svc]   Deploy skill to registered services");
+        console.log("  sync [service]               Sync service to GTM manually");
         break;
     }
   } catch (error: any) {
