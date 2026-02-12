@@ -24,6 +24,8 @@ import {
   type ServiceRegistration,
 } from "../lib/service-gtm.js";
 import { serviceValidate } from "./service-validate.js";
+import { servicesSyncAgentsCommand } from "./services-sync-agents.js";
+import { servicesCreateCommand } from "./services-create.js";
 import chalk from "chalk";
 
 const execAsync = promisify(exec);
@@ -763,7 +765,7 @@ async function checkServiceGTMHealth(serviceName?: string): Promise<void> {
 export async function servicesCommand(
   action?: string,
   serviceName?: string,
-  options: { fix?: boolean; json?: boolean } = {}
+  options: { fix?: boolean; json?: boolean; dryRun?: boolean; current?: boolean; skipAI?: boolean } = {}
 ): Promise<void> {
   try {
     switch (action) {
@@ -871,6 +873,13 @@ export async function servicesCommand(
         await syncServiceToGTM(serviceName);
         break;
 
+      case "sync-agents":
+        await servicesSyncAgentsCommand(serviceName, {
+          dryRun: (options as any).dryRun,
+          current: (options as any).current,
+        });
+        break;
+
       case "validate":
         await serviceValidate({ fix: options.fix, json: options.json });
         break;
@@ -910,10 +919,18 @@ export async function servicesCommand(
         }
         break;
 
+      case "create":
+        await servicesCreateCommand({
+          name: serviceName,
+          skipAI: (options as any).skipAI,
+        });
+        break;
+
       default:
         console.log("Usage: jfl services <action> [service-name]");
         console.log("");
         console.log("Actions:");
+        console.log("  create [name]                Create new service with AI assistance");
         console.log("  list                         List all services");
         console.log("  status                       Show service status summary");
         console.log("  start <service>              Start a service");
@@ -922,6 +939,7 @@ export async function servicesCommand(
         console.log("  health [service]             Check service health (GTM-aware)");
         console.log("  deploy-skill <skill> [svc]   Deploy skill to registered services");
         console.log("  sync [service]               Sync service to GTM manually");
+        console.log("  sync-agents [service]        Sync peer agent definitions (--current for current service)");
         console.log("  phone-home <gtm> <branch>    Comprehensive sync with session metadata");
         console.log("  validate [--fix] [--json]    Validate service configuration (run from service dir)");
         break;
