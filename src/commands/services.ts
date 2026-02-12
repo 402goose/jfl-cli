@@ -20,6 +20,7 @@ import {
   getRegisteredServices,
   updateServiceSync,
   syncJournalsToGTM,
+  phoneHomeToGTM,
   type ServiceRegistration,
 } from "../lib/service-gtm.js";
 import { serviceValidate } from "./service-validate.js";
@@ -874,6 +875,41 @@ export async function servicesCommand(
         await serviceValidate({ fix: options.fix, json: options.json });
         break;
 
+      case "phone-home":
+        // Phone home to GTM with comprehensive session data
+        // Usage: jfl services phone-home <gtm-path> <session-branch>
+        if (!serviceName) {
+          console.error("Error: GTM path required");
+          console.log("Usage: jfl services phone-home <gtm-path> <session-branch>");
+          process.exit(1);
+        }
+
+        const gtmPath = serviceName; // First arg is GTM path
+        const sessionBranch = process.argv[4]; // Second arg is session branch
+
+        if (!sessionBranch) {
+          console.error("Error: Session branch required");
+          console.log("Usage: jfl services phone-home <gtm-path> <session-branch>");
+          process.exit(1);
+        }
+
+        try {
+          const servicePath = process.cwd();
+          const payload = await phoneHomeToGTM(servicePath, gtmPath, sessionBranch);
+
+          // Output JSON for script consumption
+          console.log(JSON.stringify(payload, null, 2));
+
+          // Exit with error code if any errors occurred
+          if (payload.errors.length > 0) {
+            process.exit(1);
+          }
+        } catch (error: any) {
+          console.error(JSON.stringify({ error: error.message }));
+          process.exit(1);
+        }
+        break;
+
       default:
         console.log("Usage: jfl services <action> [service-name]");
         console.log("");
@@ -886,6 +922,7 @@ export async function servicesCommand(
         console.log("  health [service]             Check service health (GTM-aware)");
         console.log("  deploy-skill <skill> [svc]   Deploy skill to registered services");
         console.log("  sync [service]               Sync service to GTM manually");
+        console.log("  phone-home <gtm> <branch>    Comprehensive sync with session metadata");
         console.log("  validate [--fix] [--json]    Validate service configuration (run from service dir)");
         break;
     }
