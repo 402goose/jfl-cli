@@ -16,6 +16,7 @@ import * as path from "path"
 import { fileURLToPath } from "url"
 import { initCommand } from "./commands/init.js"
 import { repairCommand } from "./commands/repair.js"
+import { validateSettingsCommand } from "./commands/validate-settings.js"
 import { loginCommand, logout, getX402Address } from "./commands/login.js"
 import { statusCommand } from "./commands/status.js"
 import { deployCommand } from "./commands/deploy.js"
@@ -88,6 +89,13 @@ program
   .command("repair")
   .description("Repair a JFL project missing .jfl directory")
   .action(repairCommand)
+
+program
+  .command("validate-settings")
+  .description("Validate and repair .claude/settings.json")
+  .option("--fix", "Attempt to auto-repair common issues")
+  .option("--json", "Output in JSON format")
+  .action(validateSettingsCommand)
 
 program
   .command("hud")
@@ -743,6 +751,7 @@ program
     console.log(chalk.cyan("  Free Tier (works offline):"))
     console.log("    jfl init              Initialize project")
     console.log("    jfl repair            Repair missing .jfl directory")
+    console.log("    jfl validate-settings Validate .claude/settings.json")
     console.log("    jfl update            Pull latest JFL updates")
     console.log("    jfl profile           Manage your profile")
     console.log("    jfl profile generate  Generate CLAUDE.md w/ AI")

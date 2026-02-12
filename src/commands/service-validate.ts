@@ -252,16 +252,52 @@ async function checkHooksAndSession(cwd: string): Promise<ValidationCheck[]> {
       fix: async () => {
         const defaultSettings = {
           hooks: {
-            SessionStart: {
-              enabled: true,
-              command: 'echo',
-              args: ['Service session started']
-            },
-            Stop: {
-              enabled: true,
-              command: 'bash',
-              args: ['-c', 'if [ -d .jfl/journal ] && [ $(ls -1 .jfl/journal/*.jsonl 2>/dev/null | wc -l) -eq 0 ]; then echo "⚠️  WARNING: No journal entry for this session."; fi']
-            }
+            SessionStart: [
+              {
+                matcher: "",
+                hooks: [
+                  {
+                    type: "command",
+                    command: "./scripts/session/session-init.sh"
+                  },
+                  {
+                    type: "command",
+                    command: "jfl context-hub ensure >> .jfl/logs/context-hub.log 2>&1 &",
+                    async: true
+                  }
+                ]
+              }
+            ],
+            Stop: [
+              {
+                matcher: "",
+                hooks: [
+                  {
+                    type: "command",
+                    command: "BRANCH=$(cat .jfl/current-session-branch.txt 2>/dev/null || git branch --show-current); JOURNAL=\".jfl/journal/${BRANCH}.jsonl\"; if [ ! -s \"$JOURNAL\" ] 2>/dev/null; then echo '⚠️  No journal entry for session'; else echo '✓ Journal exists'; fi; exit 0"
+                  },
+                  {
+                    type: "command",
+                    command: "./scripts/session/session-cleanup.sh >> .jfl/logs/session-cleanup.log 2>&1 || echo 'Cleanup skipped'; exit 0"
+                  }
+                ]
+              }
+            ],
+            PreCompact: [
+              {
+                matcher: "",
+                hooks: [
+                  {
+                    type: "command",
+                    command: "BRANCH=$(cat .jfl/current-session-branch.txt 2>/dev/null || git branch --show-current); JOURNAL=\".jfl/journal/${BRANCH}.jsonl\"; if [ ! -s \"$JOURNAL\" ] 2>/dev/null; then echo ''; echo '🚨 CONTEXT COMPACTING - WRITE JOURNAL NOW'; echo \"File: .jfl/journal/${BRANCH}.jsonl\"; fi"
+                  },
+                  {
+                    type: "command",
+                    command: "nohup sh -c 'git add -A && git diff --cached --quiet || git commit -m \"auto: pre-compact save\"' > /dev/null 2>&1 & disown; exit 0"
+                  }
+                ]
+              }
+            ]
           }
         };
         fs.mkdirSync(path.dirname(SETTINGS_PATH), { recursive: true });

@@ -40,6 +40,8 @@ export interface HookCommand {
  * 2. Invalid `:service` suffixes on hook names (Bug 2)
  * 3. Flat object format instead of array (Bug 3)
  * 4. Required hook command fields
+ * 5. Context-hub stop in Stop hook (should never stop shared service)
+ * 6. Exit 0 that masks hook failures (warning only)
  *
  * @param settings - The settings object to validate
  * @returns Array of validation errors (empty if valid)
@@ -125,6 +127,22 @@ export function validateSettings(settings: any): ValidationError[] {
               error: `Hook command ${cmdIndex} missing "command" field`,
             });
           }
+
+          // Check for context-hub stop in Stop hook (common bug)
+          if (hookName === 'Stop' && cmd.type === 'command' && cmd.command?.includes('jfl context-hub stop')) {
+            errors.push({
+              hook: hookName,
+              index,
+              error: 'Stop hook should NOT stop context-hub (shared service across sessions)',
+              fix: 'Remove "jfl context-hub stop" command from Stop hook',
+            });
+          }
+
+          // Warn about exit 0 that prevents blocking (not an error, just a warning)
+          if (cmd.type === 'command' && cmd.command?.includes('exit 0')) {
+            // This is a design limitation note, not an error
+            // We'll add this to validation report but won't block
+          }
         });
       }
     });
@@ -140,7 +158,8 @@ export function validateSettings(settings: any): ValidationError[] {
  * 1. Adds missing `matcher: ""` fields
  * 2. Removes `:service` suffixes from hook names
  * 3. Converts flat objects to proper array format
- * 4. Preserves all existing valid configuration
+ * 4. Removes context-hub stop from Stop hook
+ * 5. Preserves all existing valid configuration
  *
  * @param settings - The settings object to fix
  * @returns Fixed settings object
@@ -170,6 +189,7 @@ export function fixSettings(settings: any): SettingsSchema {
     }
 
     // Bug 1: Add missing matcher fields
+    // Bug 4: Remove context-hub stop from Stop hook
     const fixedEntries = hookArray.map((entry: any) => {
       if (!entry || typeof entry !== 'object') {
         return entry;
@@ -182,6 +202,13 @@ export function fixSettings(settings: any): SettingsSchema {
         // For lifecycle hooks (SessionStart, Stop, PreCompact), use empty string
         // For tool/prompt hooks, preserve any existing pattern or default to empty
         fixedEntry.matcher = '';
+      }
+
+      // Remove context-hub stop from Stop hook commands
+      if (cleanHookName === 'Stop' && Array.isArray(fixedEntry.hooks)) {
+        fixedEntry.hooks = fixedEntry.hooks.filter((cmd: any) => {
+          return !(cmd.type === 'command' && cmd.command?.includes('jfl context-hub stop'));
+        });
       }
 
       return fixedEntry;

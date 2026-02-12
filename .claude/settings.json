@@ -2,6 +2,7 @@
   "hooks": {
     "SessionStart": [
       {
+        "matcher": "",
         "hooks": [
           {
             "type": "command",
@@ -58,14 +59,11 @@
     ],
     "Stop": [
       {
+        "matcher": "",
         "hooks": [
           {
             "type": "command",
             "command": "BRANCH=$(cat .jfl/current-session-branch.txt 2>/dev/null || git branch --show-current); JOURNAL=\".jfl/journal/${BRANCH}.jsonl\"; if [ ! -s \"$JOURNAL\" ] 2>/dev/null; then echo '⚠️  No journal entry for session'; else echo '✓ Journal exists'; fi; exit 0"
-          },
-          {
-            "type": "command",
-            "command": "mkdir -p .jfl/logs 2>/dev/null; jfl context-hub stop >> .jfl/logs/context-hub.log 2>&1; echo '✓ Context hub stopped'; exit 0"
           },
           {
             "type": "command",
@@ -76,6 +74,7 @@
     ],
     "PreCompact": [
       {
+        "matcher": "",
         "hooks": [
           {
             "type": "command",
