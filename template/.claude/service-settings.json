@@ -8,6 +8,11 @@
           {
             "type": "command",
             "command": "echo '\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n  Service Agent Session\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n' && SERVICE_NAME=$(jq -r '.name // \"unknown\"' .jfl/config.json 2>/dev/null || echo 'unknown') && echo \"  Service: $SERVICE_NAME\" && echo '' && if [ -f .jfl/status.json ]; then echo 'Status:' && cat .jfl/status.json | jq -r '\"  \" + (.status // \"unknown\")'; fi && echo '\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n  Validating configuration...\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n' && if command -v jfl >/dev/null 2>&1; then jfl services validate 2>&1 | grep -E '^\\[|^Summary:' || echo '  (validation skipped - jfl not in PATH)'; else echo '  (validation skipped - jfl not installed)'; fi && echo '\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n  Ready to work\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n'"
+          },
+          {
+            "type": "command",
+            "command": "if command -v jfl >/dev/null 2>&1; then jfl services sync-agents --current >> .jfl/logs/peer-sync.log 2>&1 & fi",
+            "async": true
           }
         ]
       }
