@@ -73,8 +73,9 @@ do_commit() {
     git add $paths
     git commit -m "$MSG" || return 0
 
-    # Push after commit - from ours
-    git push origin main 2>/dev/null || echo "[$(date '+%H:%M:%S')] Push failed - will retry"
+    # Push after commit to current branch
+    local current_branch=$(git branch --show-current)
+    git push origin "$current_branch" 2>/dev/null || echo "[$(date '+%H:%M:%S')] Push failed - will retry"
 
     echo "[$(date '+%H:%M:%S')] Committed: $MSG"
 }
@@ -153,7 +154,7 @@ graceful_shutdown() {
         commit_submodules_if_changes
     } >> "$LOG_FILE" 2>&1
 
-    # Run session cleanup (auto-merge if safe)
+    # Run session cleanup (auto-merge and remove worktree if safe)
     if [[ -f "$SCRIPT_DIR/session-cleanup.sh" ]]; then
         echo "[$(date '+%H:%M:%S')] Running session cleanup..." >> "$LOG_FILE" 2>&1
         bash "$SCRIPT_DIR/session-cleanup.sh" >> "$LOG_FILE" 2>&1 || true

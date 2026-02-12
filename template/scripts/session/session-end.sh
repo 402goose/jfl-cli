@@ -1,6 +1,6 @@
 #!/bin/bash
 # session-end.sh - Gracefully end a JFL session
-# Handles session branch cleanup and merge
+# Handles both worktree sessions (merge + cleanup) and main branch sessions
 #
 # Usage:
 #   ./scripts/session/session-end.sh              # Standard end
@@ -42,22 +42,33 @@ echo ""
 
 cd "$PROJECT_ROOT"
 
-# Get current session branch
-SESSION_BRANCH=$(git branch --show-current 2>/dev/null)
+# Check if this is a worktree session
+IS_WORKTREE=false
+SESSION_NAME=""
+WORKTREE_PATH=""
 
-if [[ "$SESSION_BRANCH" == session-* ]]; then
-    echo -e "${BLUE}→${NC} Ending session: $SESSION_BRANCH"
+if [ -f "$SESSION_FILE" ]; then
+    # Parse session info
+    if grep -q '"worktree": true' "$SESSION_FILE" 2>/dev/null; then
+        IS_WORKTREE=true
+        SESSION_NAME=$(grep -o '"session_name"[^,}]*' "$SESSION_FILE" | cut -d'"' -f4)
+        WORKTREE_PATH=$(grep -o '"worktree_path"[^,}]*' "$SESSION_FILE" | cut -d'"' -f4)
+    fi
+fi
+
+if $IS_WORKTREE && [ -n "$SESSION_NAME" ] && [ "$SESSION_NAME" != "main" ] && [ "$SESSION_NAME" != "null" ]; then
+    echo -e "${BLUE}→${NC} Ending worktree session: $SESSION_NAME"
     echo ""
 
-    # Session cleanup will be handled by session-cleanup.sh if it exists
-    if [ -f "$SCRIPT_DIR/session-cleanup.sh" ]; then
-        "$SCRIPT_DIR/session-cleanup.sh"
+    # Use worktree-session.sh to properly end (merge + cleanup)
+    if [ -f "$SCRIPT_DIR/worktree-session.sh" ]; then
+        "$SCRIPT_DIR/worktree-session.sh" end "$SESSION_NAME"
     else
-        echo -e "${YELLOW}⚠${NC} Session cleanup script not found"
-        echo "  Manual cleanup:"
-        echo "  1. Commit and push changes"
-        echo "  2. Merge branch $SESSION_BRANCH to main"
-        echo "  3. Delete branch: git branch -D $SESSION_BRANCH"
+        echo -e "${RED}✗${NC} worktree-session.sh not found!"
+        echo "  Manual cleanup needed:"
+        echo "  1. cd $WORKTREE_PATH && git add -A && git commit"
+        echo "  2. Merge branch $SESSION_NAME to main"
+        echo "  3. Remove worktree: git worktree remove $WORKTREE_PATH"
         exit 1
     fi
 
@@ -99,6 +110,8 @@ else
         git add -A
         # Unstage session metadata files that should never be committed
         git reset HEAD .jfl/current-session-branch.txt 2>/dev/null || true
+        git reset HEAD .jfl/current-worktree.txt 2>/dev/null || true
+        git reset HEAD .jfl/worktree-path.txt 2>/dev/null || true
 
         COMMIT_MSG="session: end $(date '+%Y-%m-%d %H:%M')"
 
