@@ -58,9 +58,11 @@ export interface ServiceMeshConfig {
 
 export class ServiceMeshClient {
   private serviceManagerUrl: string
+  private currentServiceName?: string
 
-  constructor(serviceManagerUrl: string = "http://localhost:3402") {
+  constructor(serviceManagerUrl: string = "http://localhost:3402", currentServiceName?: string) {
     this.serviceManagerUrl = serviceManagerUrl
+    this.currentServiceName = currentServiceName
   }
 
   /**
@@ -103,6 +105,29 @@ export class ServiceMeshClient {
   async getServiceInfo(serviceName: string): Promise<any> {
     const response = await fetch(`${this.serviceManagerUrl}/registry/${serviceName}`)
     return await response.json()
+  }
+
+  /**
+   * List peer services (excludes self)
+   */
+  async listPeers(): Promise<ServiceInfo[]> {
+    const allServices = await this.listServices()
+    return allServices.filter(
+      (s: any) => !this.currentServiceName || s.name !== this.currentServiceName
+    )
+  }
+
+  /**
+   * Call peer service (security: prevents self-calls)
+   */
+  async callPeer(peerName: string, toolName: string, args?: any): Promise<any> {
+    const serviceName = peerName.replace(/^peer-service-/, "")
+
+    if (serviceName === this.currentServiceName) {
+      throw new Error("Cannot call self as peer. Use local methods.")
+    }
+
+    return this.callService(serviceName, toolName, args)
   }
 
   /**

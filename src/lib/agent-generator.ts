@@ -6,7 +6,7 @@
  * @purpose Generate service agent definitions for GTM integration
  */
 
-import { writeFileSync, mkdirSync, existsSync } from "fs"
+import { writeFileSync, mkdirSync, existsSync, readFileSync } from "fs"
 import { join } from "path"
 import type { ServiceMetadata } from "./service-detector.js"
 
@@ -97,6 +97,106 @@ function generateSafetyGates(metadata: ServiceMetadata): string[] {
   }
 
   return gates
+}
+
+/**
+ * Generate peer services section for service CLAUDE.md
+ */
+function generatePeerServicesSection(currentServiceName: string, gtmPath: string): string {
+  // Try to load registered services from GTM config
+  const gtmConfigPath = join(gtmPath, ".jfl/config.json")
+
+  if (!existsSync(gtmConfigPath)) {
+    return `## Peer Services Available
+
+You can collaborate with other services in this GTM workspace.
+Run \`jfl services sync-agents\` to discover peer services.`
+  }
+
+  try {
+    const gtmConfig = JSON.parse(readFileSync(gtmConfigPath, "utf-8"))
+    const registeredServices = gtmConfig.registered_services || []
+
+    // Filter out current service
+    const peers = registeredServices.filter(
+      (s: any) => s.name !== currentServiceName && s.status === "active"
+    )
+
+    if (peers.length === 0) {
+      return `## Peer Services Available
+
+No other services registered yet. When services are onboarded, you'll be able to @ mention them.`
+    }
+
+    // Generate peer services table
+    const peerTable = peers
+      .map((p: any) => {
+        const whenToUse = getWhenToUseForType(p.type)
+        return `| @peer-service-${p.name} | ${p.type} | ${whenToUse} |`
+      })
+      .join("\n")
+
+    return `## Peer Services Available
+
+You can collaborate with other services in this GTM workspace:
+
+| Peer Service | Type | When to Use |
+|--------------|------|-------------|
+${peerTable}
+
+### How to Collaborate
+
+**Direct @-mention (preferred):**
+\`\`\`
+@peer-service-formation can you generate a landing page?
+@peer-service-context-hub what changed system-wide in last 24h?
+\`\`\`
+
+**MCP fallback (if agent spawning unavailable):**
+\`\`\`
+service_peer_call("peer-service-formation", "generate", {...})
+service_peer_list()  # List all peers
+service_peer_status("peer-service-formation")  # Check status
+\`\`\`
+
+### When to Collaborate vs Handle Alone
+
+**Collaborate when:**
+- Task outside your service's core responsibility
+- Need data/context from another service
+- Coordinating multi-service operation
+
+**Handle alone when:**
+- Task within your service's domain
+- Operation is service-local
+- You have all needed context`
+  } catch {
+    return `## Peer Services Available
+
+Run \`jfl services sync-agents\` to discover peer services.`
+  }
+}
+
+/**
+ * Get "When to Use" guidance for a service type
+ */
+function getWhenToUseForType(type: string): string {
+  switch (type) {
+    case "api":
+      return "API data/endpoints"
+    case "web":
+      return "Frontend/UI tasks"
+    case "worker":
+      return "Background jobs"
+    case "infrastructure":
+      return "System health/metrics"
+    case "container":
+      return "Container ops"
+    case "cli":
+      return "CLI automation"
+    default:
+      return "Service tasks"
+  }
 }
 
 /**
@@ -232,6 +332,8 @@ You can be invoked via:
 - **/skill**: User runs \`/${agentDef.name} <subcommand>\` skill
 
 When spawned, the GTM agent may provide context from GTM knowledge docs. Use this to align with overall strategy.
+
+${generatePeerServicesSection(agentDef.name.replace("service-", ""), gtmPath)}
 
 ## Example Requests
 
