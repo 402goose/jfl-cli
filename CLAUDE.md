@@ -243,14 +243,21 @@ GOOD entry (useful):
 }
 ```
 
-### Per-Session Journal Files
+### Per-Branch Journal Files
 
-Each session writes to its own file to avoid merge conflicts:
+**Journaling works on ANY branch** - sessions, main, feature branches, anywhere.
+
+Each branch writes to its own file to avoid merge conflicts:
 ```
-.jfl/journal/<session-id>.jsonl
+.jfl/journal/<branch-name>.jsonl
 ```
 
-The session ID comes from your git branch name (e.g., `session-goose-20260125-0240-bea0be`).
+Examples:
+- Session branch: `.jfl/journal/session-goose-20260125-0240-bea0be.jsonl`
+- Main branch: `.jfl/journal/main.jsonl`
+- Feature branch: `.jfl/journal/feature-auth.jsonl`
+
+The hooks automatically use your current branch name (via `git branch --show-current`).
 
 ### When to Write (MANDATORY TRIGGERS)
 

@@ -27,20 +27,40 @@ Don't make users fill out forms before they can build. Let them start immediatel
 
 **Complete ALL steps before saying anything to the user.**
 
-**1. Verify session branch** (from hook output)
-
-**2. Run session sync:**
+**1. Run session sync:**
 ```bash
 ./scripts/session/session-sync.sh
 ```
 
-**3. Run doctor check:**
-```bash
-./scripts/session/jfl-doctor.sh
-```
-Note any warnings (unmerged sessions, memory not initialized).
+**2. Run doctor check (ONLY for existing projects):**
 
-**4. Get unified context via MCP (REQUIRED):**
+**IMPORTANT: Skip doctor for fresh projects.** Detect fresh project:
+```bash
+# Fresh project indicators:
+# - No git commits yet: git rev-list --count HEAD returns 0 or error
+# - Empty knowledge docs: VISION.md has template text
+# - No journal entries: .jfl/journal/ is empty
+
+# Check if fresh
+COMMIT_COUNT=$(git rev-list --count HEAD 2>/dev/null || echo "0")
+if [[ "$COMMIT_COUNT" -gt "5" ]]; then
+    # Existing project - run doctor
+    ./scripts/session/jfl-doctor.sh
+    # Ask user before continuing
+    # If warnings: "Doctor found issues: [list]. Want me to fix these?"
+    # If clean: "Doctor check passed. Ready to continue?"
+    # STOP AND WAIT for user response
+    # If approved: ./scripts/session/jfl-doctor.sh --fix
+else
+    # Fresh project - skip doctor
+    echo "Fresh project detected, skipping doctor check."
+fi
+```
+
+**For existing projects:** After running doctor, you MUST ask the user before continuing.
+**For fresh projects:** Skip directly to step 3.
+
+**3. Get unified context via MCP (REQUIRED):**
 ```
 Call: mcp__jfl-context__context_get
 ```
@@ -50,94 +70,78 @@ This single call returns:
 - Knowledge docs (vision, roadmap, narrative, thesis)
 - Code file headers (@purpose tags)
 
+**CRITICAL: Filter cross-project context pollution.**
+
+Context Hub may return results from OTHER projects on the machine. ALWAYS verify context matches the current project:
+
+1. Check the project path in journal entries
+2. If journal paths don't match current directory, IGNORE them
+3. If knowledge docs look like templates, this is a FRESH project
+4. For fresh projects: Skip context_get entirely, start foundation questions
+
+**Example of cross-project pollution (IGNORE THIS):**
+```
+Journal from: /Users/alectaggart/gatcha-toilet/.jfl/journal/...
+Current project: /Users/alectaggart/case
+→ THESE DON'T MATCH. Ignore the journal entry.
+```
+
+**For fresh projects (no commits, empty docs):**
+- Skip context_get
+- Skip doctor check
+- Go straight to foundation questions (VISION, ROADMAP, etc.)
+
 **DO NOT read individual markdown files.** The context MCP tool aggregates everything. This is why we built Context Hub.
 
-**5. Show recent journal entries:**
+**4. Show recent journal entries:**
 ```bash
 cat .jfl/journal/*.jsonl 2>/dev/null | tail -10
 ```
 
-**6. Run /hud to show project dashboard:**
+**5. Run /hud to show project dashboard:**
 ```
 Invoke: /hud skill
 ```
 
 This displays the full status, pipeline, tasks, and guides next action.
 
-**ONLY AFTER completing all 6 steps**, respond to the user with the HUD output.
+**ONLY AFTER completing all 5 steps**, respond to the user with the HUD output.
 
-**CRITICAL: Automatic Tool Invocation**
-
-**When the user asks questions, AUTOMATICALLY use the right tool:**
-
-| User Question | Auto-Invoke | Don't Ask |
-|---------------|-------------|-----------|
-| "What did we decide about X?" | `memory_search: X` | Just do it |
-| "When did we implement Y?" | `memory_search: Y` | Just do it |
-| "Why did we choose Z?" | `memory_search: Z decision` | Just do it |
-| "Search for pricing" | `memory_search: pricing` | Just do it |
-| "Show me database features" | `memory_search: database + type=feature` | Just do it |
-| "What files have X?" | `context_search: X` | Just do it |
-| "Find code about Y" | `context_search: Y` | Just do it |
-
-**The user should NEVER have to type MCP tool names.** You detect the intent and invoke automatically.
-
-**Examples:**
-
-User: "What did we decide about Service Manager?"
-You: *silently calls `memory_search: "Service Manager decision"`*
-Then: "We decided that [results from memory]..."
-
-User: "When did we fix the PID bug?"
-You: *silently calls `memory_search: "PID bug" with type="fix"`*
-Then: "We fixed the PID bug on [date]: [details]..."
-
-User: "Search for pricing decisions"
-You: *silently calls `memory_search: "pricing" with type="decision"`*
-Then: "Found 2 pricing decisions: [results]..."
-
-**Tool Selection Logic:**
-
+If you need to search for something specific later:
 ```
-if question contains ("decide", "decided", "choice", "why we"):
-    → memory_search with type="decision"
-
-if question contains ("when did we", "implemented", "built", "added"):
-    → memory_search with type="feature"
-
-if question contains ("bug", "fix", "error"):
-    → memory_search with type="fix"
-
-if question contains ("learn", "insight", "discovery"):
-    → memory_search (check learned field)
-
-if question about "files" or "code":
-    → context_search
-
-if question about "current" or "now":
-    → context_get
-
-else:
-    → memory_search (general - hybrid search finds relevant)
+Call: mcp__jfl-context__context_search with query="your search"
 ```
 
-### CRITICAL: Verify Session Branch
+## Session Management
 
-**After SessionStart hook runs, verify you're on the session branch.**
+JFL automatically manages session isolation. You don't need to worry about worktrees or CD commands - it's handled for you.
 
-The hook creates a session branch and outputs:
+### How It Works
+
+- **Single session**: You work directly on your branch (simple, fast)
+- **Multiple sessions**: JFL creates isolated worktrees automatically (prevents conflicts)
+- **Auto-commit**: Work is saved every 2 minutes (prevents data loss)
+- **Auto-merge**: When you finish, work merges to your working branch automatically
+
+### Session Branch
+
+Sessions branch from your working branch (default: `main`, configurable in `.jfl/config.json`):
+
+```json
+{
+  "working_branch": "develop"
+}
 ```
-═══════════════════════════════════════════════════════════
-  Session: session-*
-═══════════════════════════════════════════════════════════
-```
 
-**Verify you're on session branch:**
-```bash
-git branch --show-current
-```
+Session branches are named: `session-<user>-<date>-<time>-<random>`
 
-Should show `session-*`, NOT `main`.
+### Ending a Session
+
+When user says "done", "that's it", or "/end":
+- Run the `/end` skill to clean up properly
+- This commits, merges, and pushes your work
+
+If session crashes, uncommitted work is auto-saved via background auto-commit.
 
 ---
 
@@ -239,14 +243,21 @@ GOOD entry (useful):
 }
 ```
 
-### Per-Session Journal Files
+### Per-Branch Journal Files
 
-Each session writes to its own file to avoid merge conflicts:
+**Journaling works on ANY branch** - sessions, main, feature branches, anywhere.
+
+Each branch writes to its own file to avoid merge conflicts:
 ```
-.jfl/journal/<session-id>.jsonl
+.jfl/journal/<branch-name>.jsonl
 ```
 
-The session ID comes from your git branch name (e.g., `session-goose-20260125-0240-bea0be`).
+Examples:
+- Session branch: `.jfl/journal/session-goose-20260125-0240-bea0be.jsonl`
+- Main branch: `.jfl/journal/main.jsonl`
+- Feature branch: `.jfl/journal/feature-auth.jsonl`
+
+The hooks automatically use your current branch name (via `git branch --show-current`).
 
 ### When to Write (MANDATORY TRIGGERS)
 
@@ -372,99 +383,56 @@ cat .jfl/journal/session-goose-20260125-xxxx.jsonl
 
 ### Integration with Memory System
 
-**The memory system automatically indexes all journal entries for fast semantic search.**
-
-Every journal entry you write is indexed into `.jfl/memory.db` with:
-- TF-IDF tokens for fast keyword search
-- OpenAI embeddings for semantic understanding (if OPENAI_API_KEY is set)
-- Metadata extraction (files, decisions, learnings)
-
-**Using Memory via MCP Tools:**
-
-When the user asks questions about past work, use the MCP tools:
-
-```
-# Search for past decisions, features, or learnings
-Call: mcp__jfl-context__memory_search with query="pricing decision"
-Call: mcp__jfl-context__memory_search with query="Service Manager features" and type="feature"
-Call: mcp__jfl-context__memory_search with query="what did we decide about X" and maxItems=5
-
-# Get memory system status
-Call: mcp__jfl-context__memory_status
-
-# Add a manual memory/note
-Call: mcp__jfl-context__memory_add with title="Important insight" and content="..."
-```
-
-**Available MCP Tools:**
-
-1. **`memory_search`** - Search indexed journal entries
-   - `query` (required): Search query
-   - `type` (optional): Filter by type (feature, fix, decision, discovery, milestone)
-   - `maxItems` (optional): Max results (default: 10)
-   - `since` (optional): ISO date - only entries after this date
-
-2. **`memory_status`** - Get memory system statistics
-   - Returns: total memories, by type, date range, embedding status
-
-3. **`memory_add`** - Manually add a memory
-   - `title` (required): Short title
-   - `content` (required): Full content
-   - `tags` (optional): Array of tags
-
-**When to Use Memory Search:**
-
-Use `memory_search` when the user asks:
-- "What did we decide about X?"
-- "When did we implement Y?"
-- "Search for past work on Z"
-- "What decisions were made about pricing?"
-- "Show me features related to database"
-
-**Search Quality:**
-
-The hybrid search combines:
-- **TF-IDF** (fast, keyword-based) - weighted 40%
-- **Embeddings** (semantic, contextual) - weighted 60%
-
-Results are scored by relevance (high/medium/low) with boosting for:
-- Recent entries (1.3x if < 7 days old)
-- Decisions (1.4x multiplier)
-- Features (1.2x multiplier)
-
-**Automatic Indexing:**
-
-- Runs on Context Hub startup
-- Scans for new entries every 60 seconds
-- No manual reindexing needed
-
-**If Memory Not Initialized:**
-
-The doctor script will warn and can auto-fix:
-```bash
-./scripts/session/jfl-doctor.sh --fix
-```
-
-Or manually initialize:
-```bash
-jfl memory init
-```
+The memory pipeline indexes `.jfl/journal/` automatically. Entries become searchable via:
+- Memory semantic search
+- PageIndex tree queries ("when did we decide X?")
+- HUD recent work display
 
 ---
 
 ## CRITICAL: Synopsis Command (What Happened?)
 
-**When anyone asks "what happened?" use synopsis:**
+**When anyone asks "what happened?" or "what did X work on?" — use the synopsis command.**
+
+This is the STANDARDIZED way to get work summaries. Don't manually string together git log, journal files, etc. Use this:
 
 ```bash
+# From project root:
 cd product/packages/memory && node dist/journal/cli.js synopsis [hours] [author]
 
 # Examples:
-node dist/journal/cli.js synopsis 24           # Last 24 hours
-node dist/journal/cli.js synopsis 24 hathbanger # Specific author
+node dist/journal/cli.js synopsis 24           # Last 24 hours, all team
+node dist/journal/cli.js synopsis 8            # Last 8 hours
+node dist/journal/cli.js synopsis 24 hathbanger # What did hath do in 24 hours
+node dist/journal/cli.js synopsis --author "Andrew" # Filter by git author name
 ```
 
-Aggregates journal entries, git commits, file headers, and time audit with category breakdown.
+### What It Returns
+
+The synopsis aggregates:
+1. **Journal entries** from all sessions/worktrees
+2. **Git commits** from all branches
+3. **File headers** (@purpose, @spec, @decision tags)
+4. **Time audit** with category breakdown and multipliers
+
+Output includes:
+- Summary of work done (features, fixes, decisions)
+- Time audit breakdown (infra vs features vs docs vs content)
+- Per-team-member contribution
+- Health checks (too much infra? not enough outreach?)
+- Next steps from journal entries
+- Incomplete/stubbed items
+
+### When to Use
+
+| Question | Command |
+|----------|---------|
+| "What happened today?" | `synopsis 24` |
+| "What did Hath work on?" | `synopsis 48 hathbanger` |
+| "What happened this week?" | `synopsis 168` |
+| "Give me a status update" | `synopsis 24 --verbose` |
+
+**IMPORTANT:** Every AI should use this exact command. Do NOT try to manually piece together journal + commits + headers yourself. The synopsis command does it correctly every time.
 
 ---
 
@@ -572,6 +540,130 @@ your-product-repo/           ← SEPARATE REPO (all code lives here)
 
 ---
 
+## Contributor Setup (For JFL Developers Only)
+
+> **Note:** This section is for people contributing to the JFL project itself.
+> If you're a JFL user building your own product, skip this - you installed `jfl` from npm and it just works.
+
+If you're contributing to JFL itself, follow this setup:
+
+### 1. Clone through a GTM (Recommended)
+
+```bash
+# Create a GTM workspace
+jfl init my-jfl-gtm
+
+# During setup, add the JFL product repo as submodule:
+# - Choose "Building a product"
+# - Enter: https://github.com/402goose/just-fucking-launch.git
+```
+
+### 2. Run the dev setup script
+
+```bash
+cd my-jfl-gtm/product
+./scripts/dev-setup.sh
+```
+
+This will:
+- Install CLI dependencies
+- Link `jfl` globally from this location
+- Verify everything is working
+
+### 3. Work in the submodule
+
+All product code changes happen in `product/`:
+
+```bash
+# Make changes in product/
+cd product/
+# ... work on code ...
+
+# Commit to product repo
+git add . && git commit -m "feature: ..." && git push
+
+# Update GTM's reference (optional, for tracking)
+cd ..
+git add product && git commit -m "Update product submodule"
+```
+
+### Why This Matters
+
+- **Single source of truth**: The `jfl` command points to your local jfl-cli clone
+- **No sync issues**: You're not juggling multiple clones
+- **GTM context available**: While building, you have the full GTM toolkit
+- **Clean commits**: Product commits go to product repo, GTM commits go to GTM repo
+
+### CLI Location
+
+The CLI is located at your jfl-cli clone (the parent directory of this GTM workspace).
+
+To re-link after changes:
+
+```bash
+# Navigate to your jfl-cli directory
+cd "$(git rev-parse --show-toplevel)"
+yarn build
+npm link
+```
+
+### 4. Development Guidelines
+
+**NEVER hardcode user-specific paths in scripts or code.**
+
+This causes failures for other team members and creates bad UX if accidentally distributed.
+
+**DON'T:**
+```bash
+WHISPER_SERVER="/Users/alectaggart/CascadeProjects/..."
+PROJECT_PATH="/Users/andrewhathaway/code/..."
+```
+
+**DO:**
+```bash
+# Use relative paths from script location
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_ROOT="$(git -C "$SCRIPT_DIR" rev-parse --show-toplevel)"
+
+# Use environment variables with sensible defaults
+WHISPER_SERVER="${WHISPER_SERVER_PATH:-$PROJECT_ROOT/../jfl-platform/packages/whisper-server/build/whisper-stream-server}"
+
+# Auto-detect with clear error messages
+POSSIBLE_PATHS=(
+    "$PROJECT_ROOT/../jfl-platform/..."
+    "$HOME/code/goose/jfl/jfl-platform/..."
+)
+
+for path in "${POSSIBLE_PATHS[@]}"; do
+    if [[ -x "$path" ]]; then
+        WHISPER_SERVER="$path"
+        break
+    fi
+done
+
+if [[ -z "$WHISPER_SERVER" ]]; then
+    echo "Error: Whisper server not found."
+    echo "Set WHISPER_SERVER_PATH or ensure jfl-platform is at ../jfl-platform"
+    exit 1
+fi
+```
+
+**Path resolution best practices:**
+- Compute paths relative to `__dirname` or `import.meta.url` in TypeScript/JavaScript
+- Use `git rev-parse --show-toplevel` to find repo root in bash scripts
+- Provide environment variable overrides for flexibility
+- Show helpful error messages listing what was tried
+- Test scripts on a different machine/user before committing
+
+**Before committing scripts:**
+```bash
+# Check for hardcoded paths
+grep -r "Users/alectaggart\|Users/andrewhathaway" scripts/ | grep -v "## Example\|# DON'T"
+# Should return nothing (except documentation examples)
+```
+
+---
+
 ## Understanding the Project Setup
 
 **Before doing any work, understand the setup:**
@@ -640,156 +732,236 @@ Once you understand their setup, save it:
 
 ## Working Modes
 
-| Mode | Structure | Behavior |
-|------|-----------|----------|
-| **Building Product** | `product/` submodule → product repo | Code to `product/`, GTM to main repo. Commit to submodule first, then update reference. |
-| **GTM Only** | No code, just `knowledge/`, `content/` | Focus on content/brand/outreach. Never suggest code changes. |
-| **Contributor** | Has `suggestions/{name}.md` | Work within scope. Route suggestions through proper channels. |
+### Mode: Building Product
 
-**Detecting mode changes:**
-- "I need to update the code" → Add product submodule if missing
-- "I'm taking over the product" → Switch to building-product mode
-- Update `.jfl/config.json` when mode changes
+You're building the product. Code lives in the product repo (linked as submodule).
+
+```
+this-gtm/                      your-product-repo/
+├── product/ ──────────────→   ├── src/
+├── knowledge/                 ├── cli/
+├── content/                   ├── platform/
+├── suggestions/               └── package.json
+└── CLAUDE.md
+```
+
+**Behavior:**
+- Code changes go to `product/` (commits to product repo)
+- GTM changes (knowledge/, content/) stay in GTM repo
+- When editing code, you're in the submodule context
+- `git push` from `product/` pushes to product repo
+
+**IMPORTANT - Code Routing:**
+```bash
+# When you make code changes:
+cd product/
+git add . && git commit -m "feature: ..." && git push
+cd ..
+git add product && git commit -m "Update product submodule"
+```
+
+If someone tries to create code files outside `product/`, warn:
+```
+This looks like product code, but you're in the GTM repo.
+Product code should go in the product/ submodule.
+Want me to create this in product/ instead?
+```
+
+### Mode: GTM Only
+
+They don't touch code. Team handles product.
+
+```
+this-repo/
+├── knowledge/        ← Strategic context
+├── content/          ← What they create
+├── product/SPEC.md   ← Reference from team
+└── (no code)
+```
+
+**Behavior:**
+- Never suggest code changes
+- Focus on content, brand, outreach
+- Reference spec but don't modify product
+- Capture feedback for product team in suggestions/
+
+### Mode: Contributor
+
+They have a piece of the work. Team gave them context.
+
+```
+this-repo/
+├── product/SPEC.md           ← From team
+├── knowledge/BRAND*.md       ← Guidelines
+└── their-work/               ← What they're doing
+```
+
+**Behavior:**
+- Work within their scope
+- Don't change shared docs without flagging
+- Route suggestions through proper channels
+- Ask: "Should I update the spec or suggest this to the team?"
 
 ---
 
-## Working with GTM Services
+## Detecting Mode Changes
 
-JFL supports registering services within a GTM workspace and syncing their work back to the parent.
+People's roles evolve. Watch for signals:
 
-### Service Registration
+| Signal | What It Means |
+|--------|---------------|
+| "I need to update the code" | They need product repo access - add submodule if not present |
+| "The team changed the spec" | Pull latest in product submodule |
+| "I'm taking over the product" | Mode change: GTM-only → building-product (add submodule) |
+| "Someone else is handling X now" | Scope narrowing, might become GTM-only |
 
-When you onboard a service in a GTM workspace, JFL:
-1. Creates `.jfl/config.json` in service with `type: "service"` and `gtm_parent` path
-2. Adds service to GTM's `registered_services` array
-3. Sets up sync configuration
+When mode changes, update `.jfl/config.json` and confirm:
+```
+Sounds like you're now handling the product directly.
+Do you have a product repo? I'll add it as a submodule at product/
+```
 
-### Deploying Skills to Services
-
-Deploy GTM skills to all registered services:
-
+**Adding a product repo to existing GTM:**
 ```bash
-# Deploy /end skill to all services
-jfl services deploy-skill end
-
-# Deploy to specific service
-jfl services deploy-skill end stratus-run
-
-# Deploy all skills
-jfl services deploy-skill --all
+git submodule add <product-repo-url> product
+git commit -m "Add product submodule"
 ```
-
-### Automatic Sync on Session End
-
-When you end a session in a service (using `/end`):
-1. Service session cleaned up normally
-2. Journal entries copied to GTM at `.jfl/journal/service-{name}-*.jsonl`
-3. GTM's `last_sync` timestamp updated
-4. Sync event created in GTM journal
-
-### Manual Sync
-
-Force sync without ending session:
-
-```bash
-jfl services sync              # Sync all services
-jfl services sync stratus-run  # Sync specific service
-```
-
-### Health Check
-
-Check service-GTM connectivity:
-
-```bash
-jfl services health           # Check all services
-jfl services health stratus-run  # Check specific service
-```
-
-Shows:
-- Service directory exists
-- GTM parent reachable
-- Service registered in GTM
-- Journal sync working
-
-### Service Validation
-
-**Ensure services are properly configured and compliant:**
-
-```bash
-jfl services validate              # Check everything
-jfl services validate --fix        # Auto-repair issues
-jfl services validate --json       # JSON output for scripts
-```
-
-**What it validates:**
-- ✅ Service configuration complete (name, type, gtm_parent)
-- ✅ Registered in parent GTM
-- ✅ Hooks configured correctly (catches invalid hook names like `SessionStart:service`)
-- ✅ Journal directory exists
-- ✅ Context Hub connected
-- ✅ Skills deployed
-- ✅ Health checks (worktrees, git state, permissions)
-
-**Auto-fix capabilities:**
-- Fixes invalid hook names (`SessionStart:service` → `SessionStart`)
-- Creates missing directories (`.jfl/journal/`, `.claude/skills/`)
-- Creates default `.claude/settings.json`
-- Registers service in parent GTM
-
-**When validation runs:**
-- Automatically on `SessionStart` (services only, non-blocking)
-- Before session end via `/end` skill (offers to fix issues)
-- Manually with `jfl services validate`
-
-**Example output:**
-
-```
-🔍 SERVICE VALIDATION: stratus-api
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-[✓] Service Configuration
-[✓] GTM Integration
-[✗] Hooks - Invalid hook name: SessionStart:service
-[✓] Context Hub
-
-Summary: 3 passed, 1 error
-Run 'jfl services validate --fix' to auto-repair.
-```
-
-**Hook configuration template:**
-
-Services should use `.claude/service-settings.json` template which includes:
-- Validation on SessionStart (shows warnings)
-- Journal check on Stop
-- Service name display
-- Status information
-- GTM parent configured and valid
-- /end skill deployed
-- Last sync time (warns if > 7 days)
 
 ---
 
 ## Starting a New Project (Foundation Empty)
 
-When knowledge docs are empty, pull them through foundation in order. Don't ask open-ended "What do you want to build?"
+When knowledge docs are templates/empty, don't ask open-ended questions like "What do you want to build?"
 
-**Foundation checklist:**
+**First, understand who you're talking to:**
 
-1. **VISION.md** - What are you building? Who is it for? What problem does it solve? One-liner?
-2. **ROADMAP.md** - When do you want to ship? MVP? Phases? Hard deadlines?
-3. **NARRATIVE.md** - Casual pitch? Before/after? Key words? Emotional hook?
-4. **THESIS.md** - Why will YOU win? What insight? Unfair advantage? Why now?
+```
+Before we dive in - what's your role?
 
-**Key principles:**
-- Ask role-specific questions (don't ask non-technical founders about stack)
-- Write to files immediately as they answer
-- Provide examples/suggestions to guide them
-- Allow "emergent" status - vision clarifies through building
-- Don't skip docs - complete all four before building
+1. Founder (I'm building this thing)
+2. Developer (I'm building FOR someone)
+3. Marketing/Content (I'm telling the story)
+4. Sales/BD (I'm selling it)
+5. Product (I'm defining what we build)
+6. Other
+```
 
-**After foundation:**
-- Check if ALL FOUR docs have real content (not templates)
-- Then ask: "Foundation is set. Want to work on brand/design next, or jump into building?"
+**Adjust based on role:**
+
+| Role | Focus On | Don't Ask About |
+|------|----------|-----------------|
+| Non-technical founder | Vision, market, customers | Stack, architecture |
+| Technical founder | Everything | Nothing - they can handle it |
+| Developer | Implementation, specs | Business model, pricing |
+| Marketing | Brand, messaging, content | Technical details |
+| Sales | Pitch, objections, CRM | Code |
+| Product | Features, roadmap, users | Implementation details |
+
+**Then pull them through foundation:**
+
+```
+Got it. Let's get your foundation set up.
+
+What are you building and who is it for?
+(2-3 sentences is fine. Send me anything - docs,
+screenshots, voice notes - I'll process it.)
+```
+
+For non-technical people, don't ask:
+- "What's the stack?"
+- "Next.js or something else?"
+- Technical architecture questions
+
+Instead: "I'll handle the technical side. You focus on the vision and who you're building for."
+
+When they answer, **write it to the file immediately**:
+
+```python
+# Update knowledge/VISION.md with what they said
+# Replace placeholder content with real content
+# Keep Status: EMERGENT until they explicitly nail it
+```
+
+Then continue:
+
+```
+Got it - saved to your VISION.md.
+
+Next - when do you want to ship? Any key milestones?
+```
+
+**How to detect template vs filled:**
+- Check for "Status: EMERGENT" with empty "The Vision" section
+- Check for placeholder text like "{fill this in}"
+- If real content exists, it's been filled
+
+**Pull them through each doc in order. Don't skip. Don't ask open-ended "what do you want to do?"**
+
+### VISION.md Questions:
+Even if vision is "emergent", capture what they have. It evolves through building.
+```
+1. What are you building? (2-3 sentences, doesn't need to be perfect)
+2. Who is it for? (specific person, not "everyone")
+3. What problem does it solve for them?
+4. If it works perfectly, what does their life look like?
+5. What's your rough one-liner? (we can refine it later)
+```
+Don't let them skip because "I haven't figured it out yet." Get SOMETHING down. It'll sharpen through building.
+
+**For each question:**
+- Give examples/suggestions based on what you know about their project
+- Always offer an out: "Or if you're not sure, we can keep going and let it emerge"
+
+Example:
+```
+What's your rough one-liner?
+
+Some options based on what you've told me:
+- "Legal docs for founders, without the lawyer"
+- "Spin up contracts in minutes, not days"
+- "Your startup's legal co-pilot"
+
+Or not sure yet? That's fine - we can refine it as we build.
+```
+
+### ROADMAP.md Questions:
+```
+1. When do you want to ship? (date)
+2. What's the first thing that needs to work? (MVP)
+3. What are the phases? (usually: foundation → MVP → launch → iterate)
+4. Any hard deadlines? (demo day, funding, announcement)
+```
+
+### NARRATIVE.md Questions:
+```
+1. How would you explain this at a party? (casual pitch)
+2. What's the before/after? (their life before vs after)
+3. What words do you want associated with this? (3-5 words)
+4. What's the emotional hook? (fear, aspiration, frustration, hope)
+```
+
+### THESIS.md Questions:
+```
+1. Why will YOU win? (not just anyone - you specifically)
+2. What do you know that others don't? (insight)
+3. What's your unfair advantage? (skills, access, timing)
+4. Why now? (what changed that makes this possible/needed)
+```
+
+### BRAND Questions (after foundation):
+```
+1. What's the vibe? (professional, playful, bold, minimal, techy, human)
+2. Any brands you admire the look of?
+3. Colors that feel right? Or colors to avoid?
+4. Any existing assets? (logo, colors already chosen)
+```
+
+**Flow:**
+1. VISION → ROADMAP → NARRATIVE → THESIS (don't skip ANY)
+2. Check ALL FOUR before moving on
+3. Then ask: "Foundation is set. Want to work on brand/design next, or jump into building?"
+4. Write to each file as you go. Don't wait.
+5. After each doc, summarize what you captured and confirm.
 
 ---
 
@@ -797,67 +969,270 @@ When knowledge docs are empty, pull them through foundation in order. Don't ask 
 
 **⚠️ ALWAYS establish brand direction before writing UI code**
 
-**Check for brand decisions:**
-1. `knowledge/BRAND_DECISIONS.md` - finalized choices
-2. `knowledge/BRAND_BRIEF.md` - brand inputs
-3. `knowledge/VOICE_AND_TONE.md` - personality/feel
+Before writing ANY code with visual elements (React, HTML, CSS, landing pages, forms, etc.):
 
-**If no explicit brand docs, INFER from foundation:**
-- Read NARRATIVE.md and VISION.md
-- Extract tone, audience, positioning
-- Propose direction and confirm
+**1. Check for explicit brand decisions (in order):**
+```
+1. knowledge/BRAND_DECISIONS.md - finalized choices
+2. knowledge/BRAND_BRIEF.md - brand inputs
+3. knowledge/VOICE_AND_TONE.md - personality/feel
+```
 
-**Gather references:**
-- Aesthetic refs: Sites they like
-- Functional refs: Similar products done well
-- Anti-refs: What to avoid
-- Store in `references/` or note in `product/SPEC.md`
+**2. If no explicit brand docs, INFER from foundation:**
+```
+Read NARRATIVE.md and VISION.md to extract:
+- Tone: Is it serious? Playful? Bold? Minimal?
+- Audience: Who is this for? What do they expect?
+- Positioning: Premium? Accessible? Techy? Human?
 
-**NEVER:**
-- Use another project's styling as default
+Example:
+- "Legal docs for founders" → Professional but approachable, not stuffy
+- "Self-serve" → Clean, simple, minimal friction
+- Founders as audience → Modern, fast, no-nonsense
+```
+
+**3. Confirm your inference and gather references:**
+```
+Based on your vision and narrative, I'm thinking:
+- Vibe: Professional but approachable (not corporate stuffy)
+- Mode: Light (cleaner for legal docs)
+- Colors: Neutral with one accent (trustworthy, not flashy)
+
+Sound right? Or different direction?
+
+Also - any sites or products you like the look/feel of?
+Drop a link or screenshot and I'll match that vibe.
+```
+
+**References to gather:**
+- **Aesthetic references:** "Any sites whose design you love?"
+- **Functional references:** "Any products that do something similar well?"
+- **Anti-references:** "Anything you've seen that you hate?"
+
+Store references in `references/` folder or note links in `product/SPEC.md` under a References section.
+
+If they share a link, fetch it and extract:
+- Color palette
+- Typography style
+- Layout patterns
+- Component patterns
+- Overall vibe
+
+**If fetch is blocked (403, timeout, etc.):**
+```
+That site blocked my request.
+
+Can you screenshot it? Or use Claude Chrome to fetch it -
+it can navigate there directly.
+```
+
+If they share a screenshot, analyze it for the same.
+
+**4. Use the right tools to build:**
+- Run `/ui-skills` for opinionated UI constraints
+- Run `/web-interface-guidelines` for Vercel design patterns
+- Run `/rams` for accessibility review after building
+
+**5. NEVER do these:**
+- Use another project's styling as a default
 - Assume dark theme without reason
-- Pick random colors without basis
+- Pick random colors (green, purple, etc.) without basis
 - Build UI "to get started" and "refine later"
 
-Brand direction exists in foundation docs. Extract it, confirm it, build with intention.
+**If they say "just build something":**
+```
+Let me infer from your docs...
+
+[Read NARRATIVE + VISION, propose direction, confirm]
+```
+
+**Why this matters:** Brand direction exists in the foundation docs even if not explicit. Extract it, confirm it, then build with intention.
 
 ---
 
 ## Product Specs: The Living Build Document
 
-When building a product, maintain `product/SPEC.md` as the source of truth for implementation.
+When building a product (not just content or brand work), maintain a product spec.
 
-**Template sections:** What We're Building | Who It's For | Core Features (table) | Tech Stack | Current Focus | Decisions Made (table) | Open Questions | References (table)
+**1. Check for existing spec:**
+```
+product/SPEC.md        - main product spec
+product/[feature].md   - feature-specific specs
+```
 
-See `templates/` folder for full spec template.
+**2. If no spec exists and they're building product, create one:**
 
-**When to use:**
-- Before starting: Read spec for decisions already made
-- While building: Update feature status, add decisions, note questions
-- After building: Mark features done, document tech choices
+```markdown
+# [Product Name] - Spec
 
-**Spec vs Foundation:**
+## What We're Building
+{2-3 sentences - what is this?}
+
+## Who It's For
+{specific user, not "everyone"}
+
+## Core Features
+| Feature | Status | Notes |
+|---------|--------|-------|
+| {feature} | planned/building/done | |
+
+## Tech Stack
+{what we're using to build it}
+
+## Current Focus
+{what we're working on right now}
+
+## Decisions Made
+| Decision | Choice | Why | Date |
+|----------|--------|-----|------|
+| {decision} | {choice} | {reasoning} | |
+
+## Open Questions
+- {things we haven't figured out yet}
+
+## References
+| Type | Name | Link/Note | What We Like |
+|------|------|-----------|--------------|
+| aesthetic | {site} | {url} | {what to copy} |
+| functional | {product} | {url} | {feature to emulate} |
+| anti | {site} | {url} | {what to avoid} |
+```
+
+**3. Reference the spec when building:**
+- Before starting work, read `product/SPEC.md`
+- Check what's already been decided
+- Check current focus and priorities
+- Don't re-ask questions that have answers in the spec
+
+**4. Update the spec as you build:**
+- Feature completed? Update status to `done`
+- Made a decision? Add to Decisions table
+- Scope changed? Update Core Features
+- New questions? Add to Open Questions
+- Tech choice made? Update Tech Stack
+
+**5. Spec vs Foundation docs:**
 | Doc | Purpose | Updates |
 |-----|---------|---------|
-| VISION.md | Why we're building | Rarely |
-| NARRATIVE.md | How we talk about it | Evolves |
-| product/SPEC.md | What we're building | Every session |
+| VISION.md | Why we're building | Rarely changes |
+| NARRATIVE.md | How we talk about it | Evolves with positioning |
+| product/SPEC.md | What we're building | Updates every session |
 
-**Before building, ensure foundation is complete:**
-- Check VISION.md, ROADMAP.md, NARRATIVE.md, THESIS.md all have real content
-- If any are missing, complete them first before asking "what to build?"
-- Date handling: Dates without year assume future (next year if passed this year)
+The spec is the source of truth for implementation. Keep it current.
+
+**Example flow:**
+```
+User: "Let's build the contract generator"
+
+Claude: *reads product/SPEC.md*
+"Picking up from the spec - we have the basic form done,
+next up is the PDF export. The spec says we're using
+@react-pdf/renderer. Want to continue there?"
+
+*after building*
+Claude: *updates product/SPEC.md*
+- PDF export: done
+- Added decision: "PDF styling matches brand colors"
+```
+
+**IMPORTANT: Don't skip to "what do you want to work on?" until foundation is COMPLETE.**
+
+Before showing status/HUD or asking what to build, check:
+```
+VISION.md    - has real content? (not just template)
+ROADMAP.md   - has dates and phases?
+NARRATIVE.md - has story/messaging?
+THESIS.md    - has why you'll win?
+```
+
+If ANY are missing, say:
+```
+"Before we dive in, let's finish your foundation.
+We have VISION and ROADMAP, but still need NARRATIVE and THESIS.
+These are quick - let me walk you through them."
+```
+
+Then complete the missing docs. THEN show status and ask what to build.
+
+**Date handling:**
+When someone gives a date without a year (e.g., "Jan 30"):
+- If that date has passed this year → assume NEXT year
+- If that date hasn't happened yet → assume THIS year
+- Always confirm: "Jan 30, 2026 - that's X days from now. Sound right?"
+
+Never assume a past date for a launch/ship date. People don't ship in the past.
+
+**Then gather build context:**
+
+```
+Foundation is set. Before we build:
+
+1. Any existing repos or code to build on?
+2. References or examples you like?
+3. [Specific question based on what they're building]
+```
+
+If they have repos/references:
+- Add as submodules: `git submodule add <url> references/<name>`
+- Or clone to `references/` folder
+- Now you have context to build smarter
+
+**Check for GitHub remote:**
+```bash
+git remote -v
+```
+
+If no remote configured, offer to create one:
+```
+No GitHub repo yet. Want me to create one?
+
+I can run:
+  gh repo create [name] --private --source=. --push
+
+Just let me know the name (and if you want it public or private).
+```
+
+This uses their local `gh` CLI - no platform account needed.
 
 ---
 
 ## Session Feedback
 
-Every few sessions, ask: "How's JFL doing this session? (0-5)"
+Every few sessions (or at natural breakpoints), ask:
 
-- **0-2:** Ask what went wrong, log to `.jfl/feedback.jsonl` with details
-- **3-5:** Log rating only
+```
+Quick check - how's JFL doing this session? (0-5)
 
-Don't ask every session - maybe every 3rd or after major milestones.
+0 = broken/frustrating
+3 = fine
+5 = amazing
+```
+
+**If 0-2 (bad):**
+```
+Sorry to hear that. What went wrong?
+(I'll log this to help improve JFL)
+```
+
+Capture to `.jfl/feedback.jsonl`:
+```json
+{"date": "2024-01-18", "rating": 1, "issue": "kept asking open-ended questions", "session_context": "onboarding new project"}
+```
+
+**If 3-5 (ok/good):**
+```
+Thanks! Keep shipping.
+```
+
+Just log the rating:
+```json
+{"date": "2024-01-18", "rating": 5}
+```
+
+**For paid users:** Offer to share feedback with JFL team to improve the product.
+**For free users:** Stays local unless they opt-in.
+
+Don't ask every session - maybe every 3rd session or after major milestones.
 
 Then:
 1. Get right into building
@@ -869,15 +1244,45 @@ Then:
 
 ## After Planning
 
-Before building, ask clarifying questions:
-1. Specific question about their use case
-2. Question about scope/priorities
-3. Question about integrations/APIs
+If you make a plan (architecture, skill design, etc.), don't just ask "want me to build it?"
+
+**Stop and ask clarifying questions first:**
+
+```
+Before I build this:
+
+1. [Specific question about their use case]
+2. [Question about scope/priorities]
+3. [Question about integrations/APIs]
 4. Any references or examples to pull in?
+```
 
-If foundation docs are empty, offer to capture what you learned into VISION.md, ROADMAP.md, etc.
+**Also check the foundational docs.** If VISION.md, ROADMAP.md, etc. are empty, offer to capture what you've learned:
 
-Accept any format: pictures, documents, voice notes, links, stream of consciousness.
+```
+Also - your VISION.md is empty. Based on what you said,
+you're building [summary]. Want me to capture that so
+we have context for future sessions?
+```
+
+This way the docs get populated naturally through building, not through forms.
+
+**Make it easy to share context:**
+
+```
+I'll help you work through this. Send me anything:
+- Pictures, screenshots
+- Documents, PDFs
+- Voice notes, transcripts
+- Links, references
+- Stream of consciousness
+
+I'll process it and pull out what matters.
+```
+
+Don't make them structure their thoughts. Meet them where they are.
+
+The plan is a draft. Refine it with them before executing. They know things you don't.
 
 ---
 
@@ -930,38 +1335,121 @@ Run `/hud` to show the project dashboard.
 
 ## Team Configuration
 
-**Owner** (full edit access - must authenticate via `jfl login`):
-- **Name:** {owner_name}
-- **GitHub Username:** {owner_github_username}
-- **x402 Address:** {owner_wallet_address}
+> Edit this section with your team. **JFL auth identity must match to get access.**
 
-**Core Team** (authenticated access):
+### Owner
+<!-- The person who can edit all files directly -->
+<!-- These identities get owner access when authenticated via jfl login -->
+**Name:** {owner_name}
+**GitHub Username:** {owner_github_username}
+**x402 Address:** {owner_wallet_address}
+
+### Core Team
+<!-- People with deeper access - must be authenticated -->
 | Name | GitHub Username | x402 Address | Role |
 |------|-----------------|--------------|------|
 | | | | |
 
-**Contributors:** Identified by `suggestions/{name}.md` file. New users onboarded as contributors.
+### Contributors
+<!-- Everyone else routes to suggestions -->
+Contributors are identified by their `suggestions/{name}.md` file.
+New authenticated users without a suggestions file get onboarded as contributors.
 
 ---
 
 ## Onboarding Flows
 
-**New Contributor:** Orient → Profile → Assign
-1. Explain VISION.md and NARRATIVE.md
-2. Capture their strengths, role, time commitment in `suggestions/{name}.md`
-3. Assign tasks from `knowledge/TASKS.md`
+### New Contributor (First Time)
 
-**Returning (> 7 days):** Show updates since last visit, remind them what they were working on
+Walk them through step by step:
 
-**Regular (< 7 days):** Show /hud dashboard, ask what to work on
+```
+Welcome to {project_name}!
+
+Let me get you oriented.
+```
+
+**Step 1: The Vision**
+Read `knowledge/VISION.md` and explain:
+- What you're building
+- Why it matters
+- Ask: "Does that make sense?"
+
+**Step 2: The Narrative**
+Read `knowledge/NARRATIVE.md` and explain:
+- How you tell the story
+- Key messages
+- Ask: "How does that land?"
+
+**Step 3: Their Profile**
+Ask:
+```
+Tell me about you:
+
+1. What are your strengths? (Be specific)
+2. What role do you see yourself playing?
+3. How much time can you give? (hours/week)
+4. Anything you're NOT good at?
+```
+
+Save to their `suggestions/{name}.md` under `## PROFILE`.
+
+**Step 4: Assign Tasks**
+Show available tasks from `knowledge/TASKS.md` or `templates/collaboration/TASKS.md`.
+
+---
+
+### Returning Contributor (Been Gone > 7 days)
+
+```
+Hey {name}. Welcome back!
+
+Since you were last here:
+{list updates from knowledge/UPDATES.md or recent changes}
+
+You were working on:
+{from their suggestions file}
+
+Ready to continue?
+```
+
+---
+
+### Regular Return (< 7 days)
+
+Keep it quick:
+```
+Hey {name}. {X} days to launch.
+
+{Show /hud dashboard}
+
+What do you want to work on?
+```
 
 ---
 
 ## Knowledge Sources
 
-**Check VISION.md status:** If `EMERGENT` → synthesize from living docs. If `DECLARED` → use declared vision.
+### Understanding the Vision
 
-**When EMERGENT, synthesize from:** Product specs → GTM strategy → `content/articles/` → `drafts/` → CRM notes → `knowledge/VISION.md`
+**Check VISION.md status first:**
+- If `Status: EMERGENT` → Synthesize from living docs below
+- If `Status: DECLARED` → Use the declared vision, stop synthesizing
+
+Vision is blurry at the start and gets teased out through product development. But at some point, the founder nails it.
+
+**When EMERGENT**, synthesize understanding from living docs:
+
+| Priority | Document | What It Tells You |
+|----------|----------|-------------------|
+| 1 | Product specs, if any | What you're actually building |
+| 2 | GTM strategy docs | Who you're targeting and why |
+| 3 | `content/articles/` | How you explain it to the world |
+| 4 | `drafts/` | Active pitches to real people |
+| 5 | CRM notes (`./crm prep [name]`) | What resonates with real people |
+| 6 | `knowledge/VISION.md` | Pointer doc + current synthesis |
+
+When someone asks "what is this?", read the living docs and synthesize. The vision crystallizes through building and selling, not through declaration.
 
 ### Other Strategic Docs
 
@@ -1042,26 +1530,116 @@ Claude: "Nice! Marking complete.
 
 ## Skills Available
 
-| Skill | Purpose | Key Commands |
-|-------|---------|--------------|
-| `/hud` | Project dashboard | `(default)` full dashboard, `--compact` one-line |
-| `/brand-architect` | Brand creation | `(default)` full workflow, `marks`, `colors` |
-| `/web-architect` | Asset implementation | `audit`, `implement all` |
-| `/content` | Content creation | `thread [topic]`, `post [topic]`, `article [topic]`, `one-pager [topic]` |
-| `/video` | Founder video scripts | `idea [topic]`, `script [topic]`, `hook [topic]`, `story [exp]`, `batch [theme]` |
-| `/startup` | Startup guidance | `(default)` assess stage, `next`, `validate [idea]`, `mvp [idea]`, `customers`, `launch` |
+### /hud - Project Dashboard
 
-See `skills/` folder for detailed documentation on each skill.
+Shows timeline, phases, tasks. See `skills/hud/SKILL.md`.
+
+```
+/hud                    # Full dashboard
+/hud --compact          # One-line status
+```
+
+### /brand-architect - Brand Creation
+
+Generates marks, colors, typography. See `skills/brand-architect/SKILL.md`.
+
+```
+/brand-architect              # Full workflow
+/brand-architect marks        # Just marks
+/brand-architect colors       # Just colors
+```
+
+### /web-architect - Asset Implementation
+
+Generates final assets. See `skills/web-architect/SKILL.md`.
+
+```
+/web-architect audit          # Check completeness
+/web-architect implement all  # Generate everything
+```
+
+### /content - Content Creation
+
+Generates threads, articles, one-pagers. See `skills/content-creator/SKILL.md`.
+
+```
+/content thread [topic]       # Twitter thread
+/content post [topic]         # Single post
+/content article [topic]      # Long-form
+/content one-pager [topic]    # Print-ready summary
+```
+
+### /video - Founder Video Content
+
+Generates viral short-form video scripts. Based on Jun Yuh's frameworks. See `skills/founder-video/SKILL.md`.
+
+```
+/video idea [topic]           # Generate concept with hook options
+/video script [topic]         # Full script with shot list
+/video hook [topic]           # 5 hook variations
+/video story [experience]     # Extract video from your story
+/video batch [theme]          # Weekly content batch (7-day plan)
+/video repurpose [source]     # Rule of 7 repurposing
+/video diagnose [problem]     # Fix underperforming videos
+```
+
+### /startup - The Startup Journey
+
+Startup stages from idea to scale, informed by Paul Graham + Garry Tan. See `skills/startup/SKILL.md`.
+
+```
+/startup                      # Where am I? What's next?
+/startup stage                # Assess current stage from docs
+/startup next                 # The one thing to do this week
+/startup validate [idea]      # PG-style idea critique
+/startup mvp [idea]           # Scope to 2-week MVP
+/startup customers            # How to find your first 10
+/startup launch               # Launch playbook
+/startup fundraise [stage]    # Fundraising by stage
+/startup pg [topic]           # What would PG say?
+/startup garry [topic]        # What would Garry say?
+```
 
 ---
 
 ## The Workflow Phases
 
-1. **Foundation** - Copy templates to `knowledge/`, fill VISION/NARRATIVE/THESIS/ROADMAP
-2. **Collaboration Setup** - Edit Team section, create `suggestions/` files, set up `./crm`
-3. **Brand** - Fill `BRAND_BRIEF.md`, run `/brand-architect`, record decisions, run `/web-architect implement all`
-4. **Content** - Use `/content` for threads/posts/articles, preview in `previews/content/`
-5. **Launch** - Track with `/hud`, execute tasks, ship it
+### Phase 1: Foundation
+
+Set up strategic docs:
+1. Copy templates from `templates/strategic/` to `knowledge/`
+2. Fill in VISION, NARRATIVE, THESIS, ROADMAP
+3. This informs everything else
+
+### Phase 2: Collaboration Setup
+
+Configure team:
+1. Edit Team section above with owner/team info
+2. Create `suggestions/{name}.md` for each contributor
+3. Set up CRM via `./crm` CLI (syncs to Google Sheets)
+
+### Phase 3: Brand
+
+Create visual identity:
+1. Fill out `knowledge/BRAND_BRIEF.md`
+2. Run `/brand-architect`
+3. Preview options in `previews/brand/`
+4. Record decisions in `knowledge/BRAND_DECISIONS.md`
+5. Run `/web-architect implement all`
+
+### Phase 4: Content
+
+Generate launch content:
+1. Use `/content` to create threads, posts, articles
+2. Preview in `previews/content/`
+3. Create one-pagers with PDF export
+
+### Phase 5: Launch
+
+Coordinate the launch:
+1. Track with `/hud`
+2. Execute tasks from `knowledge/TASKS.md`
+3. Ship it
 
 ---
 
@@ -1185,3 +1763,103 @@ What's your name? I'll get you set up.
 5. **Ship it** - The goal is launch, not endless iteration
 
 ---
+
+## INTERNAL: Template Distribution (JFL Team Only)
+
+**When you make changes that should reach ALL jfl users globally, update the template repo.**
+
+### Architecture
+
+```
+jfl-template (402goose/jfl-template)     ← SOURCE OF TRUTH
+    ↑
+    │ jfl init / jfl update pulls from here
+    │
+┌───┴────────────────────────────────────┐
+│ User's project                         │
+│ ├── CLAUDE.md                          │
+│ ├── .claude/settings.json              │
+│ ├── scripts/session/*.sh               │
+│ ├── knowledge/                         │
+│ └── ...                                │
+└────────────────────────────────────────┘
+```
+
+### When to Update jfl-template
+
+Update the template repo when changing:
+- `CLAUDE.md` - instructions for Claude
+- `.claude/settings.json` - hooks (SessionStart, Stop, etc.)
+- `scripts/session/*.sh` - session management scripts
+- `knowledge/*.md` - default knowledge templates
+- `templates/` - doc templates
+- `.claude/skills/` - bundled skills
+- `crm` - CRM CLI wrapper
+
+### How to Update
+
+**From JFL-GTM repo:**
+
+```bash
+# 1. Make changes in product/template/
+#    (This is the dev copy, test here first)
+
+# 2. Test the changes locally
+
+# 3. Copy to jfl-template repo
+cd /tmp
+rm -rf jfl-template
+git clone git@github.com:402goose/jfl-template.git
+cd jfl-template
+
+# 4. Copy updated files
+cp -r /path/to/JFL-GTM/product/template/* .
+cp -r /path/to/JFL-GTM/product/template/.[!.]* . 2>/dev/null || true
+
+# 5. Commit and push
+git add -A
+git commit -m "feat: description of what changed"
+git push origin main
+```
+
+**Or use this one-liner:**
+
+```bash
+# From JFL-GTM root:
+./scripts/sync-template.sh "commit message here"
+```
+
+### What Happens on User Side
+
+- **New users (`jfl init`)**: Get the latest template immediately
+- **Existing users (`jfl update`)**: Syncs these paths from template:
+  - `CLAUDE.md`
+  - `.claude/`
+  - `.mcp.json`
+  - `context-hub`
+  - `templates/`
+  - `scripts/`
+
+### Files NOT Synced on Update (preserved)
+
+These are project-specific and never overwritten:
+- `knowledge/` (their filled-in docs)
+- `product/` (their product code)
+- `suggestions/`
+- `content/`
+- `previews/`
+- `.jfl/config.json`
+
+### Testing Template Changes
+
+1. Make changes in `product/template/`
+2. Run `jfl init test-project` in /tmp to verify init works
+3. Create a project, run `jfl update` to verify update works
+4. If both work, sync to jfl-template repo
+
+### Remember
+
+- **jfl-template is lightweight** (~500KB) - only template files
+- **jfl-platform has code** (~50MB) - packages, scripts, etc.
+- Users should NEVER clone jfl-platform just for templates
+- Keep jfl-template in sync with product/template/
