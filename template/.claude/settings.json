@@ -44,6 +44,16 @@
             "command": "if echo \"$TOOL_INPUT\" | grep -q '\"status\":\\s*\"completed\"'; then BRANCH=$(cat .jfl/current-session-branch.txt 2>/dev/null || git branch --show-current); echo ''; echo '═══════════════════════════════════════════════════════════'; echo '📝 JOURNAL REQUIRED: Task completed'; echo '═══════════════════════════════════════════════════════════'; echo 'WRITE JOURNAL ENTRY NOW. File: .jfl/journal/'\"${BRANCH}\"'.jsonl'; echo '═══════════════════════════════════════════════════════════'; fi"
           }
         ]
+      },
+      {
+        "matcher": "Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "FILE=$(echo \"$TOOL_INPUT\" | grep -oE '\"file_path\":\\s*\"[^\"]+\"' | head -1 | sed 's/.*\"\\([^\"]*\\)\"/\\1/'); if echo \"$FILE\" | grep -q '\\.jfl/inbox/service-update-.*\\.trigger'; then echo ''; echo ''; echo '═══════════════════════════════════════════════════════════'; echo '📡 SERVICE UPDATE DETECTED'; echo '═══════════════════════════════════════════════════════════'; jfl gtm process-service-update 2>/dev/null || echo 'GTM command not available'; fi",
+            "async": true
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [

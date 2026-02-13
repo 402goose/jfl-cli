@@ -748,6 +748,20 @@ program
 // ============================================================================
 // HELP
 // ============================================================================
+// GTM COMMANDS
+// ============================================================================
+
+const gtm = program.command("gtm").description("GTM workspace management")
+
+gtm
+  .command("process-service-update [event-file]")
+  .description("Process service sync notification (called by hooks)")
+  .action(async (eventFile) => {
+    const { gtmProcessUpdate } = await import("./commands/gtm-process-update.js")
+    await gtmProcessUpdate(eventFile)
+  })
+
+// ============================================================================
 
 program
   .command("help")

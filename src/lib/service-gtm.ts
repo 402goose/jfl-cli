@@ -1083,6 +1083,21 @@ export async function phoneHomeToGTM(
   try {
     const notified = await notifyGTMAgent(gtmPath, serviceName, payload);
     payload.agent_notified = notified;
+
+    // Write trigger file for GTM hooks to detect
+    if (notified) {
+      const inboxDir = path.join(gtmPath, ".jfl", "inbox");
+      if (!fs.existsSync(inboxDir)) {
+        fs.mkdirSync(inboxDir, { recursive: true });
+      }
+
+      const triggerFile = path.join(inboxDir, `service-update-${serviceName}-${Date.now()}.trigger`);
+      fs.writeFileSync(triggerFile, JSON.stringify({
+        service: serviceName,
+        timestamp: syncTimestamp,
+        message: `Service ${serviceName} completed session - agent notification ready`
+      }));
+    }
   } catch (error: any) {
     errors.push(`Agent notification failed: ${error.message}`);
     payload.agent_notified = false;
