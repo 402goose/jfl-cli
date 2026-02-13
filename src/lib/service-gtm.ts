@@ -24,6 +24,20 @@ export interface ServiceConfig {
     knowledge: boolean;
     content: boolean;
   };
+  environments?: {
+    [key: string]: {
+      code_path: string;
+      start_command: string;
+      port: number | null;
+      env: Record<string, string>;
+      health_check: {
+        enabled: boolean;
+        url: string;
+        interval: number;
+        timeout: number;
+      } | null;
+    };
+  };
 }
 
 export interface ServiceRegistration {

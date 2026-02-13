@@ -28,6 +28,7 @@ import {
   writeAgentDefinition,
 } from "../lib/agent-generator.js"
 import { writeSkillFiles } from "../lib/skill-generator.js"
+import { syncPeerAgents, getRegisteredServices } from "../lib/peer-agent-generator.js"
 import type { ServiceConfig, GTMConfig } from "../lib/service-gtm.js"
 
 export interface OnboardOptions {
@@ -283,7 +284,9 @@ function setupServiceGTMLink(
   serviceName: string,
   serviceType: ServiceMetadata["type"],
   description: string,
-  gtmPath: string
+  gtmPath: string,
+  workingBranch: string,
+  metadata?: ServiceMetadata
 ): void {
   // 1. Create/update service's .jfl/config.json
   const serviceJflDir = join(servicePath, ".jfl")
@@ -306,10 +309,29 @@ function setupServiceGTMLink(
   serviceConfig.type = "service"
   serviceConfig.service_type = serviceType
   serviceConfig.gtm_parent = gtmPath
+  serviceConfig.working_branch = workingBranch
   serviceConfig.sync_to_parent = {
     journal: true,
     knowledge: false,
     content: false,
+  }
+
+  // Add environments config with detected commands
+  if (metadata) {
+    serviceConfig.environments = {
+      development: {
+        code_path: servicePath,
+        start_command: metadata.commands?.start || "echo 'No start command configured'",
+        port: metadata.port || null,
+        env: { NODE_ENV: "development" },
+        health_check: metadata.healthcheck ? {
+          enabled: true,
+          url: metadata.healthcheck,
+          interval: 30000,
+          timeout: 5000
+        } : null
+      }
+    }
   }
 
   writeFileSync(serviceConfigPath, JSON.stringify(serviceConfig, null, 2) + "\n")
@@ -550,12 +572,63 @@ export async function onboardCommand(
     port = parseInt(portInput as string, 10)
   }
 
+  // If no start command detected, prompt user
+  if (!detectedMetadata.commands?.start) {
+    console.log()
+    p.note(
+      `Could not auto-detect start command.\n\n` +
+      `Examples:\n` +
+      `  • npm run dev\n` +
+      `  • yarn start\n` +
+      `  • make run\n` +
+      `  • docker-compose up\n` +
+      `  • python manage.py runserver\n` +
+      `  • go run main.go\n` +
+      `  • mint dev`,
+      "⚠️  Manual Input Required"
+    )
+
+    const startCommand = await p.text({
+      message: "How do you start this service in development?",
+      placeholder: "npm run dev",
+      validate: (value) => {
+        if (!value) return "Start command is required"
+        return undefined
+      }
+    })
+
+    if (p.isCancel(startCommand)) {
+      p.cancel("Onboarding cancelled")
+      return
+    }
+
+    detectedMetadata.commands = { ...detectedMetadata.commands, start: startCommand as string }
+    console.log(chalk.green(`✓ Using: ${startCommand}`))
+  }
+
   const enableMCP = await p.confirm({
     message: "Enable MCP (Model Context Protocol) for AI agent coordination?",
     initialValue: false
   })
 
   if (p.isCancel(enableMCP)) {
+    p.cancel("Onboarding cancelled")
+    return
+  }
+
+  // Ask for working branch
+  const workingBranch = await p.text({
+    message: "Working branch? (session branches will be created from this)",
+    placeholder: "main",
+    initialValue: "main",
+    validate: (value) => {
+      if (!value) return "Working branch is required"
+      if (!/^[a-zA-Z0-9/_-]+$/.test(value)) return "Invalid branch name"
+      return undefined
+    }
+  })
+
+  if (p.isCancel(workingBranch)) {
     p.cancel("Onboarding cancelled")
     return
   }
@@ -573,12 +646,13 @@ export async function onboardCommand(
 
   console.log()
   p.note(
-    `Name:         ${chalk.cyan(metadata.name)}\n` +
-    `Type:         ${chalk.cyan(metadata.type)}\n` +
-    `Description:  ${chalk.gray(metadata.description)}\n` +
-    `Port:         ${metadata.port ? chalk.cyan(metadata.port) : chalk.gray("None")}\n` +
-    `MCP:          ${enableMCP ? chalk.green("Enabled") : chalk.gray("Disabled")}\n` +
-    `Version:      ${chalk.gray(metadata.version)}`,
+    `Name:           ${chalk.cyan(metadata.name)}\n` +
+    `Type:           ${chalk.cyan(metadata.type)}\n` +
+    `Description:    ${chalk.gray(metadata.description)}\n` +
+    `Port:           ${metadata.port ? chalk.cyan(metadata.port) : chalk.gray("None")}\n` +
+    `Working Branch: ${chalk.cyan(workingBranch as string)}\n` +
+    `MCP:            ${enableMCP ? chalk.green("Enabled") : chalk.gray("Disabled")}\n` +
+    `Version:        ${chalk.gray(metadata.version)}`,
     chalk.hex("#00FF88")("📋 Final Configuration")
   )
 
@@ -645,7 +719,9 @@ export async function onboardCommand(
     metadata.name,
     metadata.type,
     metadata.description,
-    gtmPath
+    gtmPath,
+    workingBranch as string,
+    metadata
   )
 
   console.log()
@@ -658,6 +734,52 @@ export async function onboardCommand(
   const agentDef = generateAgentDefinition(metadata, servicePath, gtmPath)
   const agentFile = writeAgentDefinition(agentDef, gtmPath)
   console.log(chalk.green(`✓ Created agent definition: ${agentFile}`))
+
+  // Step 2.5: Sync peer agents
+  console.log(chalk.cyan("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"))
+  console.log(chalk.cyan("  Peer Agent Synchronization"))
+  console.log(chalk.cyan("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"))
+
+  try {
+    // Sync peer agents for this new service
+    const peerSyncResult = syncPeerAgents(servicePath, gtmPath)
+    console.log(
+      chalk.green(
+        `✓ Synced ${peerSyncResult.added} peer agent(s) to this service`
+      )
+    )
+
+    // Also sync TO other services (add this new service as a peer)
+    const registeredServices = getRegisteredServices(gtmPath)
+    let peersUpdated = 0
+
+    for (const peer of registeredServices) {
+      if (peer.name !== metadata.name) {
+        const peerPath = resolve(peer.path.startsWith("/") ? peer.path : join(gtmPath, peer.path))
+
+        if (existsSync(peerPath)) {
+          try {
+            const peerResult = syncPeerAgents(peerPath, gtmPath)
+            if (peerResult.added > 0 || peerResult.updated > 0) {
+              peersUpdated++
+            }
+          } catch (err: any) {
+            // Non-fatal - peer sync can fail if peer service isn't fully set up
+            console.log(chalk.yellow(`⚠️  Could not sync to peer ${peer.name}: ${err.message}`))
+          }
+        }
+      }
+    }
+
+    if (peersUpdated > 0) {
+      console.log(chalk.green(`✓ Updated ${peersUpdated} peer service(s) with this service`))
+    }
+  } catch (error: any) {
+    console.log(chalk.yellow(`⚠️  Peer sync failed: ${error.message}`))
+    console.log(chalk.gray("   Run 'jfl services sync-agents' later to sync peer agents"))
+  }
+
+  console.log()
 
   // Step 3: Generate skill wrapper
   const skillDir = writeSkillFiles(metadata, servicePath, gtmPath)

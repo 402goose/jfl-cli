@@ -41,6 +41,19 @@ export function detectServiceType(path: string): ServiceMetadata["type"] {
     return "container"
   }
 
+  // Check for Mintlify docs project
+  const docsJson = join(path, "docs.json")
+  const mintJson = join(path, "mint.json")
+
+  if (existsSync(docsJson)) {
+    const content = readFileSync(docsJson, "utf-8")
+    if (content.includes("mintlify")) {
+      return "infrastructure" // docs aren't operational services
+    }
+  } else if (existsSync(mintJson)) {
+    return "infrastructure"
+  }
+
   // Check for package.json (Node.js)
   if (existsSync(join(path, "package.json"))) {
     const pkg = JSON.parse(readFileSync(join(path, "package.json"), "utf-8"))
@@ -262,6 +275,62 @@ export function detectVersion(path: string): string {
 }
 
 /**
+ * Detect package manager from lockfiles
+ */
+function detectPackageManager(path: string): "npm" | "yarn" | "pnpm" | "bun" | null {
+  if (existsSync(join(path, "bun.lockb"))) return "bun"
+  if (existsSync(join(path, "pnpm-lock.yaml"))) return "pnpm"
+  if (existsSync(join(path, "yarn.lock"))) return "yarn"
+  if (existsSync(join(path, "package-lock.json"))) return "npm"
+  return null
+}
+
+/**
+ * Scan README for start commands
+ * Returns detected command or null
+ */
+function scanReadmeForCommand(path: string): string | null {
+  // Find README file (case-insensitive)
+  const readmeFiles = ["README.md", "README.MD", "readme.md", "README", "readme"]
+  let readme = null
+
+  for (const file of readmeFiles) {
+    const readmePath = join(path, file)
+    if (existsSync(readmePath)) {
+      readme = readFileSync(readmePath, "utf-8")
+      break
+    }
+  }
+
+  if (!readme) return null
+
+  // Pattern 1: Code blocks with commands
+  // Match: ```bash\nnpm run dev\n```
+  const codeBlockPattern = /```(?:bash|sh|shell)?\s*\n\s*((?:npm|yarn|pnpm|bun|make|docker|mint|python|go)\s+[^\n]+)/gi
+  const codeBlockMatch = codeBlockPattern.exec(readme)
+  if (codeBlockMatch) {
+    return codeBlockMatch[1].trim()
+  }
+
+  // Pattern 2: Command after $ or >
+  // Match: $ npm run dev
+  const dollarPattern = /[\$>]\s*((?:npm|yarn|pnpm|bun|make|docker|mint|python|go)\s+[^\n]+)/i
+  const dollarMatch = dollarPattern.exec(readme)
+  if (dollarMatch) {
+    return dollarMatch[1].trim()
+  }
+
+  // Pattern 3: "Run: <command>" or "Start: <command>"
+  const runPattern = /(?:run|start|development):\s*((?:npm|yarn|pnpm|bun|make|docker|mint|python|go)\s+[^\n]+)/i
+  const runMatch = runPattern.exec(readme)
+  if (runMatch) {
+    return runMatch[1].trim()
+  }
+
+  return null
+}
+
+/**
  * Generate commands for service management
  */
 export function detectCommands(
@@ -274,24 +343,25 @@ export function detectCommands(
   // Node.js projects
   if (existsSync(join(path, "package.json"))) {
     const pkg = JSON.parse(readFileSync(join(path, "package.json"), "utf-8"))
+    const pkgManager = detectPackageManager(path) || "npm"
 
     if (pkg.scripts?.dev) {
-      commands.start = `cd ${path} && npm run dev`
+      commands.start = `cd ${path} && ${pkgManager} run dev`
     } else if (pkg.scripts?.start) {
-      commands.start = `cd ${path} && npm start`
+      commands.start = `cd ${path} && ${pkgManager} start`
     }
 
     if (pkg.scripts?.build) {
-      commands.build = `cd ${path} && npm run build`
+      commands.build = `cd ${path} && ${pkgManager} run build`
     }
 
     if (pkg.scripts?.test) {
-      commands.test = `cd ${path} && npm test`
+      commands.test = `cd ${path} && ${pkgManager} test`
     }
 
     if (port) {
       commands.stop = `lsof -ti :${port} | xargs kill -9 2>/dev/null || true`
-      commands.logs = `echo 'Check terminal where npm run dev is running'`
+      commands.logs = `echo 'Check terminal where ${pkgManager} run dev is running'`
     }
   }
 
@@ -335,6 +405,14 @@ export function detectCommands(
     commands.start = `cd ${path} && docker build -t ${serviceName} . && docker run -d --name ${serviceName} ${serviceName}`
     commands.stop = `docker stop ${serviceName} && docker rm ${serviceName}`
     commands.logs = `docker logs -f ${serviceName}`
+  }
+
+  // Fallback: Try README scanning if no start command detected
+  if (!commands.start) {
+    const readmeCommand = scanReadmeForCommand(path)
+    if (readmeCommand) {
+      commands.start = `cd ${path} && ${readmeCommand}`
+    }
   }
 
   return commands
