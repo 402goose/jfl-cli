@@ -515,6 +515,7 @@ export async function onboardCommand(
       { value: "web", label: "Web - Frontend application", hint: detectedMetadata.type === "web" ? "detected" : "" },
       { value: "worker", label: "Worker - Background jobs/queue", hint: detectedMetadata.type === "worker" ? "detected" : "" },
       { value: "cli", label: "CLI - Command-line tool", hint: detectedMetadata.type === "cli" ? "detected" : "" },
+      { value: "library", label: "Library - Plugin, package, or shared code", hint: detectedMetadata.type === "library" ? "detected" : "" },
       { value: "infrastructure", label: "Infrastructure - Database, cache, etc.", hint: detectedMetadata.type === "infrastructure" ? "detected" : "" },
       { value: "container", label: "Container - Docker service", hint: detectedMetadata.type === "container" ? "detected" : "" },
     ],
@@ -572,8 +573,8 @@ export async function onboardCommand(
     port = parseInt(portInput as string, 10)
   }
 
-  // If no start command detected, prompt user
-  if (!detectedMetadata.commands?.start) {
+  // If no start command detected, prompt user (skip for library types)
+  if (!detectedMetadata.commands?.start && serviceType !== "library") {
     console.log()
     p.note(
       `Could not auto-detect start command.\n\n` +
@@ -604,6 +605,9 @@ export async function onboardCommand(
 
     detectedMetadata.commands = { ...detectedMetadata.commands, start: startCommand as string }
     console.log(chalk.green(`✓ Using: ${startCommand}`))
+  } else if (serviceType === "library" && !detectedMetadata.commands?.start) {
+    // For libraries, start command is optional - use build if available, otherwise skip
+    console.log(chalk.gray("ℹ  Libraries don't require a start command (not standalone services)"))
   }
 
   const enableMCP = await p.confirm({

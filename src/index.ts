@@ -221,7 +221,7 @@ program
   .command("onboard <path-or-url>")
   .description("Onboard a service repo as a service agent")
   .option("-n, --name <name>", "Override service name")
-  .option("-t, --type <type>", "Override service type (web, api, container, worker, cli, infrastructure)")
+  .option("-t, --type <type>", "Override service type (web, api, container, worker, cli, infrastructure, library)")
   .option("-d, --description <desc>", "Override service description")
   .option("--skip-git", "Skip git clone (treat URL as local path)")
   .action(async (pathOrUrl, options) => {

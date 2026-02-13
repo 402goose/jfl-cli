@@ -95,6 +95,13 @@ function generatePeerCapabilities(serviceType: string): string[] {
       caps.push("Provide interactive tools")
       break
 
+    case "library":
+      caps.push("Provide reusable functionality")
+      caps.push("Support code development and testing")
+      caps.push("Maintain documentation and examples")
+      caps.push("Build and publish artifacts")
+      break
+
     case "infrastructure":
       caps.push("Monitor system health")
       caps.push("Aggregate metrics and logs")
@@ -236,6 +243,14 @@ function generateWhenToUse(serviceType: string, serviceName: string): string {
 - Coordinate async operations
 - Trigger or schedule jobs
 - Verify job processing results`
+
+    case "library":
+      return `Use \`@peer-service-${serviceName}\` when you need to:
+- Understand library APIs and interfaces
+- Work on plugin or package features
+- Run library tests and builds
+- Update documentation
+- Debug integration issues`
 
     case "infrastructure":
       return `Use \`@peer-service-${serviceName}\` when you need to:

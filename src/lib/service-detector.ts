@@ -16,7 +16,7 @@ import { execSync } from "child_process"
 
 export interface ServiceMetadata {
   name: string
-  type: "web" | "api" | "container" | "worker" | "cli" | "infrastructure"
+  type: "web" | "api" | "container" | "worker" | "cli" | "infrastructure" | "library"
   description: string
   port: number | null
   version: string
@@ -36,6 +36,11 @@ export interface ServiceMetadata {
  * Detect service type from codebase structure
  */
 export function detectServiceType(path: string): ServiceMetadata["type"] {
+  // Check for OpenClaw plugin
+  if (existsSync(join(path, "openclaw.plugin.json"))) {
+    return "library"
+  }
+
   // Check for Docker
   if (existsSync(join(path, "Dockerfile")) || existsSync(join(path, "docker-compose.yml"))) {
     return "container"
@@ -70,6 +75,11 @@ export function detectServiceType(path: string): ServiceMetadata["type"] {
       pkg.dependencies?.["koa"]
     ) {
       return "api"
+    }
+
+    // Detect npm library (has exports/main but no start script)
+    if ((pkg.exports || pkg.main) && !pkg.scripts?.start && !pkg.scripts?.dev) {
+      return "library"
     }
 
     // Generic Node.js app

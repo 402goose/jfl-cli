@@ -316,6 +316,15 @@ jfl onboard /path/to/service --name my-api
 
 # Onboard with type
 jfl onboard /path/to/service --type api
+
+# Service types:
+# - api: REST/GraphQL services
+# - web: Frontend applications
+# - worker: Background jobs/queues
+# - cli: Command-line tools
+# - library: Plugins, packages, shared code
+# - infrastructure: Databases, caches, etc.
+# - container: Docker services
 ```
 
 ## Example: stratus.run Service

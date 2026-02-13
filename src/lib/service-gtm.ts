@@ -15,7 +15,7 @@ import axios from "axios";
 export interface ServiceConfig {
   name: string;
   type: "service" | "gtm";
-  service_type?: "web" | "api" | "worker" | "daemon" | "cli" | "infrastructure" | "container";
+  service_type?: "web" | "api" | "worker" | "daemon" | "cli" | "infrastructure" | "container" | "library";
   description: string;
   gtm_parent?: string;
   working_branch?: string;
