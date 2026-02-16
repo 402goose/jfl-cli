@@ -1,0 +1,24 @@
+{
+  "name": "jfl-cli",
+  "type": "service",
+  "service_type": "cli",
+  "description": "JFL CLI - npm package for AI-powered GTM and development workflows",
+  "gtm_parent": "/Users/alectaggart/CascadeProjects/JFL-GTM",
+  "working_branch": "main",
+  "sync_to_parent": {
+    "journal": true,
+    "knowledge": false,
+    "content": false
+  },
+  "environments": {
+    "development": {
+      "code_path": "/Users/alectaggart/CascadeProjects/jfl-cli",
+      "start_command": "cd /Users/alectaggart/CascadeProjects/jfl-cli && npm run dev",
+      "port": null,
+      "env": {
+        "NODE_ENV": "development"
+      },
+      "health_check": null
+    }
+  }
+}
