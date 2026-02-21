@@ -686,7 +686,8 @@ program
 // CLAWDBOT INTEGRATION (backward-compat alias — see: jfl openclaw plugin)
 // ============================================================================
 
-const clawdbot = program.command("clawdbot").description("Manage JFL plugin for OpenClaw gateway (alias: jfl openclaw plugin)")
+const clawdbot = program.command("clawdbot").description("Manage JFL plugin for OpenClaw gateway (alias: jfl openclaw plugin)");
+(clawdbot as any)._hidden = true
 
 clawdbot
   .command("setup")
