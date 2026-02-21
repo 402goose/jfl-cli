@@ -75,17 +75,38 @@ function setState(threadId: string, s: SessionState) {
 // OpenClaw helpers
 // ============================================================================
 
-async function openclaw(cmd: string): Promise<string> {
+async function openclaw(cmd: string, cwd?: string): Promise<string> {
   const { stdout } = await execAsync(`jfl openclaw ${cmd}`, {
     timeout: 30000,
     env: { ...process.env },
+    cwd,
   })
   return stdout.trim()
 }
 
-async function openclawJSON(cmd: string): Promise<any> {
-  const raw = await openclaw(`${cmd} --json`)
+async function openclawJSON(cmd: string, cwd?: string): Promise<any> {
+  const raw = await openclaw(`${cmd} --json`, cwd)
   return JSON.parse(raw)
+}
+
+async function ensureContextHub(gtmPath: string): Promise<boolean> {
+  try {
+    // Check if hub is healthy
+    const status = await openclawJSON("status", gtmPath)
+    if (status.context_hub?.healthy) return true
+  } catch { /* hub not running */ }
+
+  // Start hub from within GTM directory
+  try {
+    await execAsync("jfl context-hub start", {
+      cwd: gtmPath,
+      timeout: 15000,
+      env: { ...process.env },
+    })
+    return true
+  } catch {
+    return false
+  }
 }
 
 async function ensureJFL(): Promise<boolean> {
@@ -200,10 +221,13 @@ async function activateGTM(gtmPath: string, ctx: Context) {
 
   try {
     // Register agent with GTM (idempotent)
-    await openclawJSON(`register -g "${gtmPath}" -a ${agent}`)
+    await openclawJSON(`register -g "${gtmPath}" -a ${agent}`, gtmPath)
+
+    // Ensure context hub is running from the GTM directory
+    await ensureContextHub(gtmPath)
 
     // Start session
-    const session = await openclawJSON(`session-start -a ${agent} -g "${gtmPath}"`)
+    const session = await openclawJSON(`session-start -a ${agent} -g "${gtmPath}"`, gtmPath)
 
     setState(ctx.threadId, {
       gtmPath,
@@ -522,8 +546,11 @@ export async function onSessionStart(event: { agentId: string; platform: string;
     const agent = existing.agentId || event.agentId || `clawd-${event.platform}`
 
     try {
+      // Ensure context hub is running from the GTM directory
+      await ensureContextHub(existing.gtmPath)
+
       // Try to resume or start a new session
-      const session = await openclawJSON(`session-start -a ${agent} -g "${existing.gtmPath}"`)
+      const session = await openclawJSON(`session-start -a ${agent} -g "${existing.gtmPath}"`, existing.gtmPath)
       setState(event.threadId, { ...existing, sessionBranch: session.session_id })
 
       return {
@@ -564,13 +591,13 @@ export async function onSessionStart(event: { agentId: string; platform: string;
  */
 export async function onBeforeTurn(event: { agentId: string; threadId: string; message?: string }) {
   const s = getState(event.threadId)
-  if (!s?.activated || !s?.sessionBranch) return { prependContext: "" }
+  if (!s?.activated || !s?.sessionBranch || !s?.gtmPath) return { prependContext: "" }
 
   let contextBlock = ""
   try {
     const query = event.message?.slice(0, 100) || ""
     if (query.length > 10) {
-      const items = await openclawJSON(`context -q "${query.replace(/"/g, '\\"')}"`)
+      const items = await openclawJSON(`context -q "${query.replace(/"/g, '\\"')}"`, s.gtmPath)
       if (Array.isArray(items) && items.length > 0) {
         const relevant = items.slice(0, 3).map((i: any) =>
           `- [${i.type}] ${i.title}: ${(i.content || "").slice(0, 150)}`
@@ -594,11 +621,11 @@ export async function onAfterTurn(event: {
   detectedIntent?: string
 }) {
   const s = getState(event.threadId)
-  if (!s?.activated || !s?.sessionBranch) return
+  if (!s?.activated || !s?.sessionBranch || !s?.gtmPath) return
 
   // Heartbeat (auto-commit)
   try {
-    await openclaw("heartbeat --json")
+    await openclaw("heartbeat --json", s.gtmPath)
   } catch { /* non-fatal */ }
 
   // Auto-capture decisions/completions
@@ -613,7 +640,7 @@ export async function onAfterTurn(event: {
     if (type) {
       const title = event.response.slice(0, 80).replace(/\n/g, " ")
       try {
-        await openclaw(`journal --type ${type} --title "${title.replace(/"/g, '\\"')}" --summary "${title.replace(/"/g, '\\"')}"`)
+        await openclaw(`journal --type ${type} --title "${title.replace(/"/g, '\\"')}" --summary "${title.replace(/"/g, '\\"')}"`, s.gtmPath)
       } catch { /* non-fatal */ }
     }
   }
@@ -625,10 +652,10 @@ export async function onAfterTurn(event: {
  */
 export async function onSessionEnd(event: { agentId: string; threadId: string }) {
   const s = getState(event.threadId)
-  if (!s?.activated || !s?.sessionBranch) return
+  if (!s?.activated || !s?.sessionBranch || !s?.gtmPath) return
 
   try {
-    await openclawJSON("session-end --sync")
+    await openclawJSON("session-end --sync", s.gtmPath)
   } catch { /* never block shutdown */ }
 
   // Keep activated state but clear session
