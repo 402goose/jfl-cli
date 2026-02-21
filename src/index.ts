@@ -746,6 +746,128 @@ program
   })
 
 // ============================================================================
+// OPENCLAW (runtime-agnostic agent protocol)
+// ============================================================================
+
+const openclaw = program.command("openclaw").description("OpenClaw agent protocol - runtime-agnostic JFL integration")
+
+openclaw
+  .command("session-start")
+  .description("Start an agent session (branch, auto-commit, Context Hub)")
+  .requiredOption("-a, --agent <name>", "Agent name/ID")
+  .option("-g, --gtm <path>", "GTM workspace path")
+  .option("--json", "Output JSON")
+  .action(async (options) => {
+    const { sessionStartCommand } = await import("./commands/openclaw.js")
+    await sessionStartCommand(options)
+  })
+
+openclaw
+  .command("session-end")
+  .description("End session (commit, merge, cleanup)")
+  .option("-s, --sync", "Sync to GTM parent (for services)")
+  .option("--json", "Output JSON")
+  .action(async (options) => {
+    const { sessionEndCommand } = await import("./commands/openclaw.js")
+    await sessionEndCommand(options)
+  })
+
+openclaw
+  .command("heartbeat")
+  .description("Health pulse (auto-commit, check Context Hub)")
+  .option("--json", "Output JSON")
+  .action(async (options) => {
+    const { heartbeatCommand: openclawHeartbeat } = await import("./commands/openclaw.js")
+    await openclawHeartbeat(options)
+  })
+
+openclaw
+  .command("context")
+  .description("Get unified context from Context Hub")
+  .option("-q, --query <query>", "Search query")
+  .option("-t, --task-type <type>", "Task type (code, spec, content, strategy, general)")
+  .option("--json", "Output JSON")
+  .action(async (options) => {
+    const { contextCommand } = await import("./commands/openclaw.js")
+    await contextCommand(options)
+  })
+
+openclaw
+  .command("journal")
+  .description("Write a journal entry")
+  .requiredOption("--type <type>", "Entry type (feature, fix, decision, milestone, spec, discovery)")
+  .requiredOption("--title <title>", "Entry title")
+  .requiredOption("--summary <summary>", "Entry summary")
+  .option("--detail <detail>", "Full detail")
+  .option("--files <files>", "Comma-separated file paths")
+  .option("--json", "Output JSON")
+  .action(async (options) => {
+    const { journalCommand } = await import("./commands/openclaw.js")
+    await journalCommand(options)
+  })
+
+openclaw
+  .command("status")
+  .description("Show agent session state and health")
+  .option("--json", "Output JSON")
+  .action(async (options) => {
+    const { statusCommand: openclawStatus } = await import("./commands/openclaw.js")
+    await openclawStatus(options)
+  })
+
+openclaw
+  .command("gtm-list")
+  .description("List registered GTM workspaces")
+  .option("--json", "Output JSON")
+  .action(async (options) => {
+    const { gtmListCommand } = await import("./commands/openclaw.js")
+    await gtmListCommand(options)
+  })
+
+openclaw
+  .command("gtm-switch")
+  .description("Switch active GTM workspace")
+  .argument("<gtm-id>", "GTM ID to switch to")
+  .option("--json", "Output JSON")
+  .action(async (gtmId, options) => {
+    const { gtmSwitchCommand } = await import("./commands/openclaw.js")
+    await gtmSwitchCommand(gtmId, options)
+  })
+
+openclaw
+  .command("gtm-create")
+  .description("Create and register a new GTM workspace")
+  .argument("<name>", "GTM workspace name")
+  .option("-p, --path <dir>", "Target directory")
+  .option("--json", "Output JSON")
+  .action(async (name, options) => {
+    const { gtmCreateCommand } = await import("./commands/openclaw.js")
+    await gtmCreateCommand(name, options)
+  })
+
+openclaw
+  .command("register")
+  .description("Register agent with a GTM workspace")
+  .requiredOption("-g, --gtm <path>", "GTM workspace path")
+  .option("-a, --agent <name>", "Agent name (auto-detected from manifest)")
+  .option("--json", "Output JSON")
+  .action(async (options) => {
+    const { registerCommand } = await import("./commands/openclaw.js")
+    await registerCommand(options)
+  })
+
+openclaw
+  .command("tag")
+  .description("Send message to a service agent")
+  .argument("<service>", "Service name")
+  .argument("<message>", "Message to send")
+  .option("--json", "Output JSON")
+  .action(async (service, message, options) => {
+    const { tagCommand } = await import("./commands/openclaw.js")
+    await tagCommand(service, message, options)
+  })
+
+// ============================================================================
 // HELP
 // ============================================================================
 // GTM COMMANDS
@@ -786,6 +908,7 @@ program
     console.log("    jfl voice             Voice input commands")
     console.log("    jfl ralph             AI agent loop (ralph-tui)")
     console.log("    jfl context-hub       Context Hub (unified AI context)")
+    console.log("    jfl openclaw          OpenClaw agent protocol")
     console.log("    jfl test              Test onboarding (isolated)")
 
     console.log(chalk.cyan("\n  Platform (requires login):"))

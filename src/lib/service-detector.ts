@@ -36,8 +36,20 @@ export interface ServiceMetadata {
  * Detect service type from codebase structure
  */
 export function detectServiceType(path: string): ServiceMetadata["type"] {
-  // Check for OpenClaw plugin
+  // Check for OpenClaw plugin - parse manifest for enriched type detection
   if (existsSync(join(path, "openclaw.plugin.json"))) {
+    try {
+      const manifest = JSON.parse(readFileSync(join(path, "openclaw.plugin.json"), "utf-8"))
+      const runtimeType = manifest.runtime?.type
+      // Map runtime types to service types
+      if (runtimeType === "clawdbot") return "worker"
+      if (runtimeType === "claude-code" || runtimeType === "cursor") return "cli"
+      // Default: infer from capabilities
+      const caps: string[] = manifest.agent?.capabilities || []
+      if (caps.includes("session_create")) return "worker"
+    } catch {
+      // Malformed manifest, fall through
+    }
     return "library"
   }
 
@@ -543,6 +555,22 @@ export function extractServiceMetadata(path: string): ServiceMetadata {
 
   // Generate description
   let description = `${type.charAt(0).toUpperCase() + type.slice(1)} service`
+
+  // Enrich from OpenClaw manifest if present
+  const openclawManifest = join(path, "openclaw.plugin.json")
+  if (existsSync(openclawManifest)) {
+    try {
+      const manifest = JSON.parse(readFileSync(openclawManifest, "utf-8"))
+      if (manifest.agent?.description) {
+        description = manifest.agent.description
+      }
+      if (manifest.agent?.name && !name) {
+        // Use agent name as fallback service name
+      }
+    } catch {
+      // Malformed manifest
+    }
+  }
 
   if (existsSync(join(path, "package.json"))) {
     const pkg = JSON.parse(readFileSync(join(path, "package.json"), "utf-8"))
