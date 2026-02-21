@@ -179,21 +179,20 @@ export async function initCommand(options?: { name?: string }) {
     }
 
     let productRepo = null
-    let productPath = null
 
-    // Ask about product repo
+    // Ask about product repo (registered as service, NOT a submodule)
     const productChoice = await p.select({
       message: "Product repo:",
       options: [
         {
-          label: "I have an existing repo (add as submodule)",
+          label: "I have an existing repo",
           value: "existing",
-          hint: "Requires: git"
+          hint: "Register as a service"
         },
         {
           label: "Create a new repo for me",
           value: "create",
-          hint: "Requires: git, gh CLI, gh auth login"
+          hint: "Requires: gh CLI"
         },
         {
           label: "I'll add it later",
@@ -227,21 +226,9 @@ export async function initCommand(options?: { name?: string }) {
         }
 
         productRepo = repoUrl as string
+        p.log.success(`Product repo registered: ${productRepo}`)
+        p.log.info("Use service agents to work on product code directly in its own repo.")
 
-        // Add as submodule
-        const submoduleSpinner = ora("Adding product repo as submodule...").start()
-        try {
-          execSync(`git submodule add ${productRepo} product`, {
-            cwd: projectPath,
-            stdio: "pipe",
-          })
-          submoduleSpinner.succeed("Product repo linked!")
-          productPath = "product/"
-        } catch (err: any) {
-          submoduleSpinner.fail("Failed to add submodule")
-          console.log(chalk.yellow("  You can add it manually later:"))
-          console.log(chalk.gray(`  git submodule add ${productRepo} product`))
-        }
       } else if (productChoice === "create") {
         // Check if gh CLI is available
         try {
@@ -292,12 +279,11 @@ export async function initCommand(options?: { name?: string }) {
 
             const createSpinner = ora("Creating product repo...").start()
             try {
-              // Create the repo on GitHub
               const visFlag = visibility === "private" ? "--private" : "--public"
               const finalRepoName = (repoName as string).trim().replace(/\s+/g, '-')
 
               try {
-                execSync(`gh repo create ${finalRepoName} ${visFlag} --clone`, {
+                execSync(`gh repo create ${finalRepoName} ${visFlag}`, {
                   cwd: projectPath,
                   stdio: "pipe",
                   encoding: "utf-8",
@@ -309,25 +295,18 @@ export async function initCommand(options?: { name?: string }) {
                   encoding: "utf-8",
                 }).trim()
 
-                // Move the cloned repo to product/ and set up as submodule
-                execSync(`mv ${finalRepoName} product`, { cwd: projectPath, stdio: "pipe" })
-                execSync(`git submodule add ${repoUrl} product`, { cwd: projectPath, stdio: "pipe" })
-
                 createSpinner.succeed(`Product repo created: ${repoUrl}`)
                 productRepo = repoUrl
-                productPath = "product/"
                 repoCreated = true
 
               } catch (createErr: any) {
-                // Show the actual error from gh CLI
                 createSpinner.fail("Failed to create repo")
                 console.log("")
 
                 const errorMsg = createErr.stderr || createErr.message || String(createErr)
 
-                // Check if it's a "name already exists" error
                 if (errorMsg.includes("already exists") || errorMsg.includes("Name already exists")) {
-                  console.log(chalk.yellow("⚠️  That name is already taken on your GitHub"))
+                  console.log(chalk.yellow("That name is already taken on your GitHub"))
                   console.log("")
 
                   if (attemptCount < maxAttempts) {
@@ -337,28 +316,22 @@ export async function initCommand(options?: { name?: string }) {
                     })
 
                     if (p.isCancel(retry) || !retry) {
-                      p.log.info("Skipping repo creation. Add it later with:")
-                      p.log.info("  git submodule add <repo-url> product")
+                      p.log.info("Skipping repo creation. Register it later with:")
+                      p.log.info("  jfl services add <repo-url>")
                       break
                     }
-                    // Loop will continue with attemptCount++
                   } else {
-                    p.log.warning("Max attempts reached. Add repo manually later:")
-                    p.log.info("  git submodule add <repo-url> product")
+                    p.log.warning("Max attempts reached. Register repo later:")
+                    p.log.info("  jfl services add <repo-url>")
                     break
                   }
                 } else if (errorMsg.includes("authentication") || errorMsg.includes("not logged in") || errorMsg.includes("HTTP 401")) {
-                  // Check if it's an authentication issue
                   console.log(chalk.red("GitHub authentication required"))
                   console.log("")
                   p.log.info("Authenticate with GitHub:")
                   p.log.info("  gh auth login")
-                  console.log("")
-                  p.log.info("Then try again or add the repo manually:")
-                  p.log.info(`  gh repo create ${finalRepoName} ${visFlag}`)
                   break
                 } else {
-                  // Other error
                   console.log(chalk.red("Error from GitHub CLI:"))
                   console.log(chalk.gray(errorMsg))
                   console.log("")
@@ -367,19 +340,16 @@ export async function initCommand(options?: { name?: string }) {
                 }
               }
             } catch (err: any) {
-              // Break out of retry loop on unexpected errors
               break
             }
           }
         } catch {
           p.log.warning("GitHub CLI (gh) not found. Install it to create repos:")
           p.log.info("brew install gh && gh auth login")
-          p.log.info("\nOr create the repo manually and add as submodule:")
-          p.log.info("git submodule add <repo-url> product")
         }
       } else {
-        p.log.info("Add your product repo later:")
-        p.log.info("git submodule add <repo-url> product")
+        p.log.info("Register your product repo later:")
+        p.log.info("  jfl services add <repo-url>")
       }
     }
 
@@ -411,9 +381,7 @@ export async function initCommand(options?: { name?: string }) {
 
     if (productRepo) {
       config.product_repo = productRepo
-    }
-    if (productPath) {
-      config.product_path = productPath
+      config.registered_services = [{ name: "product", repo: productRepo }]
     }
 
     writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n")
@@ -829,7 +797,7 @@ export async function initCommand(options?: { name?: string }) {
       "├── previews/       ← Generated assets\n" +
       "├── templates/      ← Doc templates\n" +
       "├── CLAUDE.md       ← AI instructions\n" +
-      "└── product/        ← Your code (add as submodule)"
+      "└── product/        ← Specs only (code lives in its own repo)"
 
     if (onboardedServices.length > 0) {
       successMessage += "\n\nService Agents Ready:\n"
@@ -895,7 +863,7 @@ export async function initCommand(options?: { name?: string }) {
     // If not launching, show manual instructions
     let nextSteps = `cd ${projectName}\n\nThen:`
     if (!productRepo) {
-      nextSteps += "\n  git submodule add <your-product-repo> product"
+      nextSteps += "\n  jfl services add <your-product-repo>  # Register product"
     }
     nextSteps += "\n  jfl status           # Check status"
     nextSteps += "\n  claude               # Start Claude Code"

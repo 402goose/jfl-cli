@@ -115,25 +115,22 @@ export async function repairCommand() {
   let productPath = ""
   let setup = "building-product" // Default
 
-  // Check if product/ exists and is a submodule
-  const productDir = join(cwd, "product")
-  if (existsSync(productDir)) {
+  // Check config for registered product repo
+  const existingConfigPath = join(cwd, ".jfl", "config.json")
+  if (existsSync(existingConfigPath)) {
     try {
-      const gitmodulesPath = join(cwd, ".gitmodules")
-      if (existsSync(gitmodulesPath)) {
-        const gitmodules = readFileSync(gitmodulesPath, "utf-8")
-        const productMatch = gitmodules.match(/\[submodule "product"\][^[]*url = (.+)/m)
-        if (productMatch) {
-          productRepo = productMatch[1].trim()
-          productPath = "product/"
-          setup = "building-product"
-          console.log(chalk.green(`\n✓ Detected product repo: ${productRepo}`))
-        }
+      const config = JSON.parse(readFileSync(existingConfigPath, "utf-8"))
+      if (config.product_repo) {
+        productRepo = config.product_repo
+        setup = "building-product"
+        console.log(chalk.green(`\n✓ Product repo registered: ${productRepo}`))
       }
     } catch (err) {
       // Ignore errors
     }
-  } else if (existsSync(join(cwd, "knowledge")) && existsSync(join(cwd, "content"))) {
+  }
+
+  if (!productRepo && existsSync(join(cwd, "knowledge")) && existsSync(join(cwd, "content"))) {
     // Has knowledge and content but no product → GTM only
     setup = "gtm-only"
   }
@@ -184,9 +181,10 @@ export async function repairCommand() {
   // Add product repo if found
   if (productRepo) {
     config.product_repo = productRepo
-  }
-  if (productPath) {
-    config.product_path = productPath
+    config.registered_services = config.registered_services || []
+    if (!config.registered_services.some((s: any) => s.repo === productRepo)) {
+      config.registered_services.push({ name: "product", repo: productRepo })
+    }
   }
 
   // Write config
