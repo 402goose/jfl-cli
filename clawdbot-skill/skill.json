@@ -2,12 +2,18 @@
   "name": "jfl-gtm",
   "version": "0.2.0",
   "displayName": "JFL - Just Fucking Launch",
-  "description": "Your team's context layer. Any AI. Any task. Gives your agent persistent memory, sessions, and team coordination via OpenClaw.",
+  "description": "Persistent memory, sessions, journals, and team coordination for your agent via OpenClaw.",
   "emoji": "🚀",
   "author": "402goose",
   "repository": "https://github.com/402goose/jfl-cli",
   "category": "productivity",
   "bootSequence": true,
+  "hooks": {
+    "session_start": "onSessionStart",
+    "before_turn": "onBeforeTurn",
+    "after_turn": "onAfterTurn",
+    "session_end": "onSessionEnd"
+  },
   "requirements": {
     "cli": {
       "name": "jfl",

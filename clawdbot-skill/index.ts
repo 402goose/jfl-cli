@@ -450,6 +450,172 @@ async function findGTMs(): Promise<GTM[]> {
 }
 
 // ============================================================================
+// LIFECYCLE HOOKS (Clawdbot calls these automatically)
+// ============================================================================
+
+/**
+ * session_start — fires when Clawdbot session begins.
+ * Auto-registers, starts OpenClaw session, injects context.
+ * User never sees or runs this.
+ */
+export async function onSessionStart(event: { agentId: string; platform: string; threadId: string }) {
+  const hasJFL = await ensureJFL()
+  if (!hasJFL) return { prependContext: "" }
+
+  const agent = event.agentId || `clawd-${event.platform}`
+
+  // Find default GTM (from registry or filesystem)
+  let gtmPath: string | null = null
+  try {
+    const gtms = await openclawJSON("gtm-list")
+    if (Array.isArray(gtms) && gtms.length > 0) {
+      const defaultGtm = gtms.find((g: any) => g.default) || gtms[0]
+      gtmPath = defaultGtm.path
+    }
+  } catch { /* no registry yet */ }
+
+  if (!gtmPath) {
+    const gtms = await findGTMs()
+    if (gtms.length > 0) {
+      gtmPath = gtms[0].path
+      // Auto-register first GTM found
+      try {
+        await openclawJSON(`register -g "${gtmPath}" -a ${agent}`)
+      } catch { /* non-fatal */ }
+    }
+  }
+
+  if (!gtmPath) {
+    return { prependContext: "<jfl-session>No GTM workspace found. Run /jfl to set up.</jfl-session>" }
+  }
+
+  // Start session
+  try {
+    const session = await openclawJSON(`session-start -a ${agent} -g "${gtmPath}"`)
+    const gtmName = gtmPath.split("/").pop() || "unknown"
+
+    setState(event.threadId, {
+      gtmPath,
+      gtmName,
+      agentId: agent,
+      sessionBranch: session.session_id,
+    })
+
+    // Inject session context so agent knows where it is
+    const context = [
+      `<jfl-session>`,
+      `GTM: ${gtmName} (${gtmPath})`,
+      `Session: ${session.session_id}`,
+      `Branch: ${session.branch}`,
+      `Context Hub: ${session.context_hub.healthy ? "running" : "offline"}`,
+      `Auto-commit: ${session.auto_commit.running ? "active (120s)" : "off"}`,
+      ``,
+      `You are working inside this JFL session. All file operations happen on branch ${session.branch}.`,
+      `Use 'jfl openclaw context -q "..."' to search project knowledge.`,
+      `Use 'jfl openclaw journal --type T --title T --summary S' after completing work.`,
+      `Use 'jfl openclaw tag <service> "msg"' to message service agents.`,
+      `</jfl-session>`,
+    ].join("\n")
+
+    return {
+      prependContext: context,
+      workspace: gtmPath,
+      env: {
+        JFL_SESSION_WORKTREE: gtmPath,
+        JFL_SESSION_BRANCH: session.branch,
+        JFL_AGENT_ID: agent,
+      },
+    }
+  } catch (error: any) {
+    return {
+      prependContext: `<jfl-session>Session start failed: ${error.message}. Run /jfl to retry.</jfl-session>`,
+    }
+  }
+}
+
+/**
+ * before_turn — fires before each agent response.
+ * Injects fresh context so the agent has project awareness.
+ */
+export async function onBeforeTurn(event: { agentId: string; threadId: string; message?: string }) {
+  const s = getState(event.threadId)
+  if (!s?.sessionBranch) return { prependContext: "" }
+
+  // Lightweight context injection — don't slow down every turn
+  let contextBlock = ""
+  try {
+    // If the user's message mentions something searchable, query context
+    const query = event.message?.slice(0, 100) || ""
+    if (query.length > 10) {
+      const items = await openclawJSON(`context -q "${query.replace(/"/g, '\\"')}"`)
+      if (Array.isArray(items) && items.length > 0) {
+        const relevant = items.slice(0, 3).map((i: any) =>
+          `- [${i.type}] ${i.title}: ${(i.content || "").slice(0, 150)}`
+        ).join("\n")
+        contextBlock = `<jfl-context>\nRelevant context for this message:\n${relevant}\n</jfl-context>`
+      }
+    }
+  } catch { /* non-fatal — context hub might be down */ }
+
+  return { prependContext: contextBlock }
+}
+
+/**
+ * after_turn — fires after each agent response.
+ * Auto-captures decisions/completions as journal entries + runs heartbeat.
+ */
+export async function onAfterTurn(event: {
+  agentId: string
+  threadId: string
+  response?: string
+  detectedIntent?: string
+}) {
+  const s = getState(event.threadId)
+  if (!s?.sessionBranch) return
+
+  // Run heartbeat (auto-commits pending changes)
+  try {
+    await openclaw("heartbeat --json")
+  } catch { /* non-fatal */ }
+
+  // Auto-capture decisions/completions from agent response
+  if (event.detectedIntent && event.response) {
+    const intentMap: Record<string, string> = {
+      decision: "decision",
+      completed: "feature",
+      fixed: "fix",
+      learned: "discovery",
+    }
+    const type = intentMap[event.detectedIntent]
+    if (type) {
+      const title = event.response.slice(0, 80).replace(/\n/g, " ")
+      try {
+        await openclaw(`journal --type ${type} --title "${title.replace(/"/g, '\\"')}" --summary "${title.replace(/"/g, '\\"')}"`)
+      } catch { /* non-fatal */ }
+    }
+  }
+}
+
+/**
+ * session_end — fires when Clawdbot session ends (explicit, timeout, or compaction).
+ * Commits everything, merges branch, cleans up. Fully automatic.
+ */
+export async function onSessionEnd(event: { agentId: string; threadId: string }) {
+  const s = getState(event.threadId)
+  if (!s?.sessionBranch) return
+
+  try {
+    await openclawJSON("session-end --sync")
+  } catch { /* cleanup should never block shutdown */ }
+
+  // Clear session state but keep GTM registration
+  setState(event.threadId, {
+    ...s,
+    sessionBranch: null,
+  })
+}
+
+// ============================================================================
 // Util
 // ============================================================================
 
@@ -457,4 +623,14 @@ function stripAnsi(str: string): string {
   return str.replace(/\x1b\[[0-9;]*m/g, "")
 }
 
-export default { onBoot, onCallback, onCommand }
+export default {
+  // Interactive (user-triggered)
+  onBoot,
+  onCallback,
+  onCommand,
+  // Lifecycle (Clawdbot-triggered, automatic)
+  onSessionStart,
+  onBeforeTurn,
+  onAfterTurn,
+  onSessionEnd,
+}
