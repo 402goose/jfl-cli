@@ -90,7 +90,7 @@ function copyPluginFiles(srcDir: string): void {
   const pluginTarget = getPluginTarget()
   mkdirSync(pluginTarget, { recursive: true })
 
-  const filesToCopy = ["index.js", "clawdbot.plugin.json"]
+  const filesToCopy = ["index.js", "openclaw.plugin.json"]
 
   for (const file of filesToCopy) {
     const src = join(srcDir, file)
