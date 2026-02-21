@@ -1,14 +1,16 @@
 /**
  * JFL GTM Clawdbot Skill
  *
- * Provides full JFL CLI access from Telegram/Slack with proper session isolation.
- * Uses `jfl session create` and `jfl session exec` for worktree isolation, auto-commit, and journaling.
- * Session state persisted to ~/.clawd/memory/jfl-sessions.json
+ * Uses OpenClaw protocol for session management, context, journaling, and coordination.
+ * Auto-installs jfl CLI if missing. Auto-registers agent with GTM on first use.
+ *
+ * @purpose Clawdbot skill using OpenClaw for full JFL integration
+ * @spec specs/OPENCLAW_SPEC.md
  */
 
 import { exec } from "child_process"
 import { promisify } from "util"
-import { existsSync, readFileSync } from "fs"
+import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs"
 import { join } from "path"
 import { homedir } from "os"
 
@@ -25,126 +27,404 @@ interface GTM {
   path: string
 }
 
-/**
- * Boot sequence - runs when skill first activates
- */
-export async function onBoot(ctx: Context) {
-  // Check if JFL CLI is installed
-  const hasJFL = await checkJFLInstalled()
+interface SessionState {
+  gtmPath: string
+  gtmName: string
+  agentId: string
+  sessionBranch: string | null
+}
 
-  if (!hasJFL) {
-    return {
-      text: "⚠️ JFL CLI not found\n\n" +
-            "Install: npm install -g jfl\n\n" +
-            "Then run /jfl again",
-      buttons: []
+// ============================================================================
+// State persistence
+// ============================================================================
+
+const STATE_DIR = join(homedir(), ".clawd", "memory")
+const STATE_FILE = join(STATE_DIR, "jfl-openclaw.json")
+
+function loadState(): Map<string, SessionState> {
+  try {
+    if (existsSync(STATE_FILE)) {
+      return new Map(Object.entries(JSON.parse(readFileSync(STATE_FILE, "utf-8"))))
     }
-  }
+  } catch { /* ignore */ }
+  return new Map()
+}
 
-  // Find available GTMs
-  const gtms = await findGTMs()
+function saveState(state: Map<string, SessionState>) {
+  mkdirSync(STATE_DIR, { recursive: true })
+  writeFileSync(STATE_FILE, JSON.stringify(Object.fromEntries(state), null, 2))
+}
 
-  if (gtms.length === 0) {
-    return {
-      text: "🚀 JFL - Just Fucking Launch\n\n" +
-            "No GTMs found.\n\n" +
-            "Create one: jfl init\n" +
-            "Then run /jfl again"
+const state = loadState()
+
+function getState(threadId: string): SessionState | undefined {
+  return state.get(threadId)
+}
+
+function setState(threadId: string, s: SessionState) {
+  state.set(threadId, s)
+  saveState(state)
+}
+
+// ============================================================================
+// OpenClaw helpers
+// ============================================================================
+
+async function openclaw(cmd: string): Promise<string> {
+  const { stdout } = await execAsync(`jfl openclaw ${cmd}`, {
+    timeout: 30000,
+    env: { ...process.env },
+  })
+  return stdout.trim()
+}
+
+async function openclawJSON(cmd: string): Promise<any> {
+  const raw = await openclaw(`${cmd} --json`)
+  return JSON.parse(raw)
+}
+
+async function ensureJFL(): Promise<boolean> {
+  try {
+    await execAsync("jfl --version", { timeout: 5000 })
+    return true
+  } catch {
+    // Try to install
+    try {
+      await execAsync("npm install -g jfl", { timeout: 60000 })
+      return true
+    } catch {
+      return false
     }
-  }
-
-  // Show GTM picker (like screenshot)
-  const buttons = gtms.map(g => ({
-    text: `📂 ${g.name}`,
-    callbackData: `select:${g.path}`
-  }))
-
-  return {
-    text: "🚀 JFL - Just Fucking Launch\n\n" +
-          "Your team's context layer. Any AI. Any task.\n\n" +
-          "Open a project:",
-    buttons
   }
 }
 
-/**
- * Handle button clicks
- */
+function agentId(ctx: Context): string {
+  return `clawd-${ctx.platform}-${ctx.userId}`.slice(0, 30)
+}
+
+// ============================================================================
+// Boot
+// ============================================================================
+
+export async function onBoot(ctx: Context) {
+  const hasJFL = await ensureJFL()
+  if (!hasJFL) {
+    return {
+      text: "JFL CLI not found and auto-install failed.\n\nInstall manually: npm install -g jfl\nThen run /jfl again",
+      buttons: [],
+    }
+  }
+
+  // Check if already connected
+  const existing = getState(ctx.threadId)
+  if (existing?.sessionBranch) {
+    // Resume existing session
+    return await showDashboard(existing)
+  }
+
+  // Find GTMs
+  const gtms = await findGTMs()
+  if (gtms.length === 0) {
+    return {
+      text: "JFL - Just Fucking Launch\n\nNo GTM workspaces found.\n\nCreate one:\n  jfl init -n 'My Project'\n\nThen run /jfl again",
+    }
+  }
+
+  const buttons = gtms.map((g) => ({
+    text: g.name,
+    callbackData: `select:${g.path}`,
+  }))
+
+  return {
+    text: "JFL - Just Fucking Launch\n\nSelect a project:",
+    buttons,
+  }
+}
+
+// ============================================================================
+// GTM selection + auto-register + session start
+// ============================================================================
+
+async function handleSelectGTM(gtmPath: string, ctx: Context) {
+  const agent = agentId(ctx)
+  const gtmName = gtmPath.split("/").pop() || "unknown"
+
+  try {
+    // Register agent with GTM (idempotent)
+    await openclawJSON(`register -g "${gtmPath}" -a ${agent}`)
+
+    // Start session
+    const session = await openclawJSON(`session-start -a ${agent} -g "${gtmPath}"`)
+
+    setState(ctx.threadId, {
+      gtmPath,
+      gtmName,
+      agentId: agent,
+      sessionBranch: session.session_id,
+    })
+
+    return await showDashboard({
+      gtmPath,
+      gtmName,
+      agentId: agent,
+      sessionBranch: session.session_id,
+    })
+  } catch (error: any) {
+    return { text: `Failed to start session\n\n${error.message}` }
+  }
+}
+
+// ============================================================================
+// Dashboard
+// ============================================================================
+
+async function showDashboard(s: SessionState) {
+  let contextSummary = ""
+  try {
+    const items = await openclawJSON(`context -q "current priorities"`)
+    if (Array.isArray(items) && items.length > 0) {
+      contextSummary = items
+        .slice(0, 3)
+        .map((i: any) => `  ${i.title}`)
+        .join("\n")
+    }
+  } catch { /* hub may be down */ }
+
+  const text = [
+    `${s.gtmName}`,
+    `Session: ${s.sessionBranch || "none"}`,
+    "",
+    contextSummary ? `Recent context:\n${contextSummary}` : "",
+    "",
+    "What do you want to do?",
+  ].filter(Boolean).join("\n")
+
+  return {
+    text,
+    buttons: [
+      [
+        { text: "Dashboard", callbackData: "cmd:hud" },
+        { text: "CRM", callbackData: "cmd:crm" },
+      ],
+      [
+        { text: "Context", callbackData: "cmd:context" },
+        { text: "Status", callbackData: "cmd:status" },
+      ],
+      [
+        { text: "Brand", callbackData: "cmd:brand" },
+        { text: "Content", callbackData: "cmd:content" },
+      ],
+    ],
+  }
+}
+
+// ============================================================================
+// Callbacks
+// ============================================================================
+
 export async function onCallback(data: string, ctx: Context) {
   const [action, value] = data.split(":")
 
-  if (action === "select") {
-    return await handleSelectGTM(value, ctx)
-  }
-
-  if (action === "cmd") {
-    return await handleCommand(value, ctx)
-  }
+  if (action === "select") return await handleSelectGTM(value, ctx)
+  if (action === "cmd") return await handleCommand(value, ctx)
 
   return { text: "Unknown action" }
 }
 
-/**
- * Handle slash commands
- */
-export async function onCommand(cmd: string, args: string[], ctx: Context) {
-  const session = getSession(ctx.threadId)
-
-  if (!session && cmd !== "gtm") {
-    return {
-      text: "⚠️ No GTM selected.\n\nRun /jfl to select a project."
-    }
-  }
+async function handleCommand(cmd: string, ctx: Context) {
+  const s = getState(ctx.threadId)
+  if (!s) return { text: "No session. Run /jfl to select a project." }
 
   switch (cmd) {
-    case "gtm":
-      return await onBoot(ctx)
-
     case "hud":
-      return await runJFLCommand(session!, "hud")
+      return await runInGTM(s, "jfl hud")
+    case "crm":
+      return showCRMMenu()
+    case "context":
+      return await runContext(s)
+    case "status":
+      return await runStatus(s)
+    case "brand":
+      return showBrandMenu()
+    case "content":
+      return showContentMenu()
+    default:
+      return { text: "Unknown command" }
+  }
+}
+
+// ============================================================================
+// Commands
+// ============================================================================
+
+export async function onCommand(cmd: string, args: string[], ctx: Context) {
+  const s = getState(ctx.threadId)
+
+  if (cmd === "jfl" || cmd === "gtm") return await onBoot(ctx)
+
+  if (!s) return { text: "No session active. Run /jfl to select a project." }
+
+  switch (cmd) {
+    case "hud":
+      return await runInGTM(s, "jfl hud")
 
     case "crm":
-      if (args.length === 0) {
-        return showCRMMenu()
-      }
-      return await runCRMCommand(session!, args)
+      if (args.length === 0) return showCRMMenu()
+      return await runInGTM(s, `./crm ${args.join(" ")}`)
+
+    case "context":
+      if (args.length === 0) return await runContext(s)
+      return await runContextQuery(s, args.join(" "))
+
+    case "journal": {
+      const type = args[0] || "discovery"
+      const title = args.slice(1).join(" ") || "Note"
+      await openclaw(`journal --type ${type} --title "${title}" --summary "${title}"`)
+      return { text: `Journal entry written: ${title}` }
+    }
 
     case "brand":
       return showBrandMenu()
 
     case "content":
-      if (args.length === 0) {
-        return showContentMenu()
-      }
-      return await runJFLCommand(session!, `content ${args.join(" ")}`)
+      if (args.length === 0) return showContentMenu()
+      return await runInGTM(s, `jfl content ${args.join(" ")}`)
 
     default:
       return { text: `Unknown command: /${cmd}` }
   }
 }
 
-/**
- * Check if JFL CLI is installed
- */
-async function checkJFLInstalled(): Promise<boolean> {
+// ============================================================================
+// Runners
+// ============================================================================
+
+async function runInGTM(s: SessionState, command: string): Promise<any> {
   try {
-    await execAsync("jfl --version")
-    return true
-  } catch {
-    return false
+    const { stdout } = await execAsync(command, {
+      cwd: s.gtmPath,
+      timeout: 30000,
+      env: { ...process.env },
+    })
+    return { text: stripAnsi(stdout).slice(0, 4000), parseMode: "Markdown" }
+  } catch (error: any) {
+    return { text: `Command failed: ${error.message}` }
   }
 }
 
-/**
- * Find GTMs on this machine
- *
- * A GTM has: .jfl/ + knowledge/ + CLAUDE.md
- * Product repos (jfl-cli, jfl-platform) have .jfl/ but aren't GTMs
- */
-async function findGTMs(): Promise<GTM[]> {
-  const gtms: GTM[] = []
+async function runContext(s: SessionState) {
+  try {
+    const items = await openclawJSON("context")
+    if (!Array.isArray(items) || items.length === 0) {
+      return { text: "No context items found. Context Hub may not be running.\n\nStart it: jfl context-hub start" }
+    }
+    const lines = items.slice(0, 8).map((i: any) =>
+      `[${i.source || i.type}] ${i.title}\n  ${(i.content || "").slice(0, 100)}`
+    )
+    return { text: `Project Context\n\n${lines.join("\n\n")}` }
+  } catch (error: any) {
+    return { text: `Context Hub unreachable: ${error.message}` }
+  }
+}
 
-  // Check common locations
+async function runContextQuery(s: SessionState, query: string) {
+  try {
+    const items = await openclawJSON(`context -q "${query}"`)
+    if (!Array.isArray(items) || items.length === 0) {
+      return { text: `No results for: ${query}` }
+    }
+    const lines = items.slice(0, 5).map((i: any) =>
+      `[${i.source || i.type}] ${i.title}\n  ${(i.content || "").slice(0, 120)}`
+    )
+    return { text: `Results for "${query}"\n\n${lines.join("\n\n")}` }
+  } catch (error: any) {
+    return { text: `Search failed: ${error.message}` }
+  }
+}
+
+async function runStatus(s: SessionState) {
+  try {
+    const status = await openclawJSON("status")
+    const lines = [
+      `Agent: ${status.agent || "none"}`,
+      `Session: ${status.session?.branch || "none"}`,
+      `GTM: ${status.gtm_name || "unknown"}`,
+      `Context Hub: ${status.context_hub?.healthy ? "healthy" : "unreachable"}`,
+      `Agents: ${status.registered_agents?.length || 0} registered`,
+    ]
+    return { text: `OpenClaw Status\n\n${lines.join("\n")}` }
+  } catch (error: any) {
+    return { text: `Status failed: ${error.message}` }
+  }
+}
+
+// ============================================================================
+// Menus
+// ============================================================================
+
+function showCRMMenu() {
+  return {
+    text: "CRM\n\nWhat do you want to do?",
+    buttons: [
+      [
+        { text: "Pipeline", callbackData: "crm:list" },
+        { text: "Stale Deals", callbackData: "crm:stale" },
+      ],
+      [
+        { text: "Prep Call", callbackData: "crm:prep" },
+        { text: "Log Touch", callbackData: "crm:touch" },
+      ],
+    ],
+  }
+}
+
+function showBrandMenu() {
+  return {
+    text: "Brand Architect\n\nWhat do you want to create?",
+    buttons: [
+      [
+        { text: "Logo Marks", callbackData: "brand:marks" },
+        { text: "Colors", callbackData: "brand:colors" },
+      ],
+      [
+        { text: "Typography", callbackData: "brand:typography" },
+        { text: "Full System", callbackData: "brand:full" },
+      ],
+    ],
+  }
+}
+
+function showContentMenu() {
+  return {
+    text: "Content Creator\n\nWhat do you want to create?",
+    buttons: [
+      [
+        { text: "Thread", callbackData: "content:thread" },
+        { text: "Post", callbackData: "content:post" },
+      ],
+      [
+        { text: "Article", callbackData: "content:article" },
+        { text: "One-Pager", callbackData: "content:onepager" },
+      ],
+    ],
+  }
+}
+
+// ============================================================================
+// GTM discovery
+// ============================================================================
+
+async function findGTMs(): Promise<GTM[]> {
+  // First try OpenClaw registry
+  try {
+    const gtms = await openclawJSON("gtm-list")
+    if (Array.isArray(gtms) && gtms.length > 0) {
+      return gtms.map((g: any) => ({ name: g.name, path: g.path }))
+    }
+  } catch { /* fall through to filesystem scan */ }
+
+  // Fallback: scan filesystem
+  const gtms: GTM[] = []
   const searchPaths = [
     join(homedir(), "CascadeProjects"),
     join(homedir(), "Projects"),
@@ -153,334 +433,28 @@ async function findGTMs(): Promise<GTM[]> {
 
   for (const basePath of searchPaths) {
     if (!existsSync(basePath)) continue
-
     try {
-      const { stdout } = await execAsync(`find ${basePath} -maxdepth 2 -name .jfl -type d`)
-      const dirs = stdout.trim().split("\n").filter(Boolean)
-
-      for (const dir of dirs) {
+      const { stdout } = await execAsync(
+        `find "${basePath}" -maxdepth 2 -name .jfl -type d 2>/dev/null`
+      )
+      for (const dir of stdout.trim().split("\n").filter(Boolean)) {
         const gtmPath = dir.replace("/.jfl", "")
-
-        // Filter: Must have knowledge/ and CLAUDE.md to be a GTM
-        const hasKnowledge = existsSync(join(gtmPath, "knowledge"))
-        const hasClaude = existsSync(join(gtmPath, "CLAUDE.md"))
-
-        if (!hasKnowledge || !hasClaude) {
-          continue // Skip product repos
+        if (existsSync(join(gtmPath, "knowledge")) && existsSync(join(gtmPath, "CLAUDE.md"))) {
+          gtms.push({ name: gtmPath.split("/").pop() || "unknown", path: gtmPath })
         }
-
-        const name = gtmPath.split("/").pop() || "unknown"
-        gtms.push({ name, path: gtmPath })
       }
-    } catch {
-      // Skip if find fails
-    }
+    } catch { /* skip */ }
   }
 
   return gtms
 }
 
-/**
- * Session storage (persisted to disk)
- */
-const SESSIONS_FILE = join(homedir(), ".clawd", "memory", "jfl-sessions.json")
+// ============================================================================
+// Util
+// ============================================================================
 
-interface SessionData {
-  gtmPath: string
-  gtmName: string
-  sessionId: string
-  platform: string
+function stripAnsi(str: string): string {
+  return str.replace(/\x1b\[[0-9;]*m/g, "")
 }
 
-function loadSessions(): Map<string, SessionData> {
-  try {
-    if (existsSync(SESSIONS_FILE)) {
-      const data = JSON.parse(readFileSync(SESSIONS_FILE, "utf-8"))
-      return new Map(Object.entries(data))
-    }
-  } catch {
-    // Ignore parse errors
-  }
-  return new Map()
-}
-
-function saveSessions(sessions: Map<string, SessionData>) {
-  try {
-    const data = Object.fromEntries(sessions)
-    const fs = require("fs")
-    fs.mkdirSync(join(homedir(), ".clawd", "memory"), { recursive: true })
-    fs.writeFileSync(SESSIONS_FILE, JSON.stringify(data, null, 2))
-  } catch (error) {
-    console.error("Failed to save sessions:", error)
-  }
-}
-
-const sessions = loadSessions()
-
-function getSession(threadId: string) {
-  return sessions.get(threadId)
-}
-
-function setSession(threadId: string, data: SessionData) {
-  sessions.set(threadId, data)
-  saveSessions(sessions)
-}
-
-/**
- * Handle GTM selection
- */
-async function handleSelectGTM(gtmPath: string, ctx: Context) {
-  const gtmName = gtmPath.split("/").pop() || "unknown"
-
-  try {
-    // Create or get session with proper worktree isolation
-    const { stdout } = await execAsync(
-      `cd ${gtmPath} && jfl session create --platform ${ctx.platform} --thread ${ctx.threadId}`
-    )
-    const sessionId = stdout.trim()
-
-    // Store session with ID
-    setSession(ctx.threadId, {
-      gtmPath,
-      gtmName,
-      sessionId,
-      platform: ctx.platform
-    })
-
-    // Show command menu
-    const commands = [
-      [
-        { text: "📊 Dashboard", callbackData: "cmd:hud" },
-        { text: "👥 CRM", callbackData: "cmd:crm" }
-      ],
-      [
-        { text: "🎨 Brand", callbackData: "cmd:brand" },
-        { text: "✍️ Content", callbackData: "cmd:content" }
-      ],
-      [
-        { text: "🔄 Sync", callbackData: "cmd:sync" },
-        { text: "📝 Status", callbackData: "cmd:status" }
-      ]
-    ]
-
-    return {
-      text: `✓ Session created: ${gtmName}\n\n` +
-            `Session ID: ${sessionId}\n` +
-            `Isolated worktree with auto-commit enabled.\n\n` +
-            `What do you want to do?`,
-      buttons: commands
-    }
-  } catch (error: any) {
-    return {
-      text: `❌ Failed to create session\n\n${error.message}\n\n` +
-            `Make sure you're in a JFL GTM directory.`
-    }
-  }
-}
-
-/**
- * Handle command button
- */
-async function handleCommand(cmd: string, ctx: Context) {
-  const session = getSession(ctx.threadId)
-
-  if (!session) {
-    return { text: "⚠️ Session expired. Run /jfl to select a GTM." }
-  }
-
-  switch (cmd) {
-    case "hud":
-      return await runJFLCommand(session, "hud")
-
-    case "crm":
-      return showCRMMenu()
-
-    case "brand":
-      return showBrandMenu()
-
-    case "content":
-      return showContentMenu()
-
-    case "sync":
-      return await runGitSync(session)
-
-    case "status":
-      return await runGitStatus(session)
-
-    default:
-      return { text: "Unknown command" }
-  }
-}
-
-/**
- * Run JFL command (uses session exec for isolation)
- */
-async function runJFLCommand(session: SessionData, command: string) {
-  try {
-    // Use jfl session exec to run command in isolated worktree
-    const { stdout, stderr } = await execAsync(
-      `cd ${session.gtmPath} && jfl session exec "${session.sessionId}" "${command}"`,
-      {
-        env: { ...process.env, JFL_PLATFORM: session.platform }
-      }
-    )
-
-    const output = stdout || stderr
-    const formatted = formatForTelegram(output)
-
-    return {
-      text: formatted,
-      parseMode: "Markdown"
-    }
-  } catch (error: any) {
-    return {
-      text: `❌ Error running jfl ${command}\n\n${error.message}`
-    }
-  }
-}
-
-/**
- * Run CRM command (uses session exec for isolation)
- */
-async function runCRMCommand(session: SessionData, args: string[]) {
-  try {
-    // Use session exec to run CRM in isolated worktree
-    const { stdout } = await execAsync(
-      `cd ${session.gtmPath} && jfl session exec "${session.sessionId}" "./crm ${args.join(" ")}"`
-    )
-    const formatted = formatForTelegram(stdout)
-
-    return {
-      text: formatted,
-      parseMode: "Markdown"
-    }
-  } catch (error: any) {
-    return {
-      text: `❌ Error running crm\n\n${error.message}`
-    }
-  }
-}
-
-/**
- * Show CRM menu
- */
-function showCRMMenu() {
-  return {
-    text: "👥 CRM\n\nWhat do you want to do?",
-    buttons: [
-      [
-        { text: "📋 List Pipeline", callbackData: "crm:list" },
-        { text: "⏰ Stale Deals", callbackData: "crm:stale" }
-      ],
-      [
-        { text: "📞 Prep Call", callbackData: "crm:prep" },
-        { text: "✏️ Log Touch", callbackData: "crm:touch" }
-      ]
-    ]
-  }
-}
-
-/**
- * Show brand menu
- */
-function showBrandMenu() {
-  return {
-    text: "🎨 Brand Architect\n\nWhat do you want to create?",
-    buttons: [
-      [
-        { text: "Logo Marks", callbackData: "brand:marks" },
-        { text: "Color Palette", callbackData: "brand:colors" }
-      ],
-      [
-        { text: "Typography", callbackData: "brand:typography" },
-        { text: "Full System", callbackData: "brand:full" }
-      ]
-    ]
-  }
-}
-
-/**
- * Show content menu
- */
-function showContentMenu() {
-  return {
-    text: "✍️ Content Creator\n\nWhat do you want to create?",
-    buttons: [
-      [
-        { text: "Twitter Thread", callbackData: "content:thread" },
-        { text: "Single Post", callbackData: "content:post" }
-      ],
-      [
-        { text: "Article", callbackData: "content:article" },
-        { text: "One-Pager", callbackData: "content:onepager" }
-      ]
-    ]
-  }
-}
-
-/**
- * Git sync (runs in session worktree)
- */
-async function runGitSync(session: SessionData) {
-  try {
-    // Session exec automatically runs session-sync.sh before command
-    const { stdout } = await execAsync(
-      `cd ${session.gtmPath} && jfl session exec "${session.sessionId}" "git status --short"`
-    )
-
-    return {
-      text: `✓ Synced ${session.gtmName}\n\nSession-sync runs automatically before each command.\n\n${stdout || "Working tree clean"}`
-    }
-  } catch (error: any) {
-    return {
-      text: `❌ Sync failed\n\n${error.message}`
-    }
-  }
-}
-
-/**
- * Git status (runs in session worktree)
- */
-async function runGitStatus(session: SessionData) {
-  try {
-    // Use session exec to check status in isolated worktree
-    const { stdout } = await execAsync(
-      `cd ${session.gtmPath} && jfl session exec "${session.sessionId}" "git status --short && echo '---' && git log --oneline -5"`
-    )
-
-    return {
-      text: `📊 Status: ${session.gtmName}\nSession: ${session.sessionId}\n\n\`\`\`\n${stdout}\n\`\`\``,
-      parseMode: "Markdown"
-    }
-  } catch (error: any) {
-    return {
-      text: `❌ Status failed\n\n${error.message}`
-    }
-  }
-}
-
-/**
- * Format CLI output for Telegram
- * Optimized for mobile viewing
- */
-function formatForTelegram(output: string): string {
-  return output
-    // Strip ANSI color codes
-    .replace(/\x1b\[[0-9;]*m/g, "")
-    // Convert long separator lines to short ones (mobile-friendly)
-    .replace(/[━─]{20,}/g, "━━━━━━━━━")
-    // Keep single box-drawing characters as-is (they render fine)
-    .replace(/[┌┐└┘├┤┬┴┼]/g, "")
-    // Convert vertical bars
-    .replace(/[│┃]/g, "")
-    // Add spacing around emoji headers for readability
-    .replace(/^(📊|👥|🎨|✍️|🔄|📝)/gm, "\n$1")
-    // Preserve emoji and structure
-    .trim()
-}
-
-export default {
-  onBoot,
-  onCallback,
-  onCommand
-}
+export default { onBoot, onCallback, onCommand }

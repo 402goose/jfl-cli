@@ -1,27 +1,29 @@
 {
   "name": "jfl-gtm",
-  "version": "0.1.0-local",
+  "version": "0.2.0",
   "displayName": "JFL - Just Fucking Launch",
-  "description": "Your team's context layer. Any AI. Any task.",
+  "description": "Your team's context layer. Any AI. Any task. Gives your agent persistent memory, sessions, and team coordination via OpenClaw.",
   "emoji": "🚀",
   "author": "402goose",
-  "repository": "local-dev",
+  "repository": "https://github.com/402goose/jfl-cli",
   "category": "productivity",
   "bootSequence": true,
   "requirements": {
     "cli": {
       "name": "jfl",
-      "check": "jfl --version",
-      "minVersion": "0.1.0",
+      "check": "jfl openclaw --help",
+      "minVersion": "0.1.1",
       "install": {
         "npm": "jfl"
       }
     }
   },
   "commands": {
-    "/gtm": "GTM operations (list, select, status)",
-    "/hud": "Show GTM dashboard", 
+    "/jfl": "Select a GTM workspace",
+    "/hud": "Show project dashboard",
     "/crm": "CRM operations (list, touch, prep)",
+    "/context": "Search project context",
+    "/journal": "Write a journal entry",
     "/brand": "Brand architect workflow",
     "/content": "Create content (thread, post, article)"
   }
