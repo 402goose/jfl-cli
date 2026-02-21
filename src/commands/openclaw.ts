@@ -180,7 +180,7 @@ export async function sessionStartCommand(options: {
   // Check Context Hub health
   let hubHealthy = false
   try {
-    const resp = await axios.get(`${CONTEXT_HUB_URL}/api/health`, { timeout: 3000 })
+    const resp = await axios.get(`${CONTEXT_HUB_URL}/health`, { timeout: 3000 })
     hubHealthy = resp.data?.status === "ok"
   } catch {
     // Hub not running - try to start it
@@ -340,7 +340,7 @@ export async function heartbeatCommand(options: { json?: boolean }) {
   // Check Context Hub
   let hubHealthy = false
   try {
-    const resp = await axios.get(`${CONTEXT_HUB_URL}/api/health`, { timeout: 3000 })
+    const resp = await axios.get(`${CONTEXT_HUB_URL}/health`, { timeout: 3000 })
     hubHealthy = resp.data?.status === "ok"
   } catch {
     // Hub down
@@ -503,7 +503,7 @@ export async function statusCommand(options: { json?: boolean }) {
   // Check Context Hub
   let hubHealthy = false
   try {
-    const resp = await axios.get(`${CONTEXT_HUB_URL}/api/health`, { timeout: 3000 })
+    const resp = await axios.get(`${CONTEXT_HUB_URL}/health`, { timeout: 3000 })
     hubHealthy = resp.data?.status === "ok"
   } catch {
     // Down
