@@ -182,6 +182,68 @@ All context is stored as markdown and JSONL in your git repository. This means:
 
 ---
 
+## Clawdbot Integration
+
+JFL ships with a Clawdbot plugin for Telegram-based agents.
+
+```bash
+# Install plugin into Clawdbot
+jfl clawdbot setup
+
+# Check installation status
+jfl clawdbot status
+```
+
+After setup, restart your gateway (`clawdbot gateway`). The plugin is dormant until you activate it:
+
+1. Send `/jfl` in Telegram
+2. Pick a project (or auto-picks if you have one)
+3. Plugin activates — context injection, decision capture, auto-commit
+
+**Telegram Commands:**
+
+| Command | What it does |
+|---------|-------------|
+| `/jfl` | Activate JFL / show status |
+| `/context <query>` | Search project knowledge |
+| `/journal <type> <title> \| <summary>` | Write a journal entry |
+| `/hud` | Project dashboard |
+
+**What the plugin does automatically:**
+- Injects relevant project context before every AI response
+- Captures decisions to the journal after responses
+- Auto-commits work periodically
+- Manages session branches for isolated work
+
+**Claude also gets tools** (`jfl_context`, `jfl_journal`) it can use proactively without you asking.
+
+---
+
+## OpenClaw Protocol
+
+OpenClaw is JFL's runtime-agnostic agent protocol. Any AI agent can become a JFL team member:
+
+```bash
+# Register agent with a GTM workspace
+jfl openclaw register -g /path/to/gtm -a my-agent
+
+# Start session (creates branch, auto-commit, Context Hub)
+jfl openclaw session-start -a my-agent --json
+
+# Search project context
+jfl openclaw context -q "pricing decisions" --json
+
+# Write journal entry
+jfl openclaw journal --type decision --title "Chose OAuth" --summary "Better for multi-tenant"
+
+# End session (merge, cleanup)
+jfl openclaw session-end --json
+```
+
+All commands support `--json` for programmatic use. See `jfl openclaw --help` for the full command list.
+
+---
+
 ## Context Hub
 
 Context Hub is a local daemon (port 4242) that provides unified context to any AI:
@@ -514,13 +576,21 @@ jfl --version                 # Show version
 
 ---
 
-## What's New in 0.1.0
+## What's New
 
-- ✨ Auto-update on session start (checks npm registry, 24h cache)
-- 🔍 Synopsis command (`jfl synopsis [hours] [author]`)
-- 🏥 Improved doctor checks with categorized output
-- 🐛 Fixed auto-merge failure that caused branch pileup
-- 📊 Context Hub productization improvements
+**0.2.0**
+- OpenClaw protocol — runtime-agnostic agent integration (`jfl openclaw`)
+- Clawdbot plugin — single install, dormant until /jfl, full lifecycle hooks
+- `jfl clawdbot setup` — one command to install plugin
+- Agent tools (jfl_context, jfl_journal) for proactive AI behavior
+- GTM detection via config.json type field (no more false positives on service repos)
+
+**0.1.0**
+- Auto-update on session start (checks npm registry, 24h cache)
+- Synopsis command (`jfl synopsis [hours] [author]`)
+- Improved doctor checks with categorized output
+- Fixed auto-merge failure that caused branch pileup
+- Context Hub productization improvements
 
 ---
 

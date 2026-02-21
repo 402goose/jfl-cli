@@ -1,36 +1,19 @@
 {
-  "name": "jfl-gtm",
-  "version": "0.2.0",
+  "name": "jfl",
+  "version": "1.0.0",
   "displayName": "JFL - Just Fucking Launch",
-  "description": "Persistent memory, sessions, journals, and team coordination for your agent via OpenClaw.",
+  "description": "Project context layer — persistent memory, sessions, journals, team coordination. Install with: jfl clawdbot setup",
   "emoji": "🚀",
   "author": "402goose",
   "repository": "https://github.com/402goose/jfl-cli",
   "category": "productivity",
-  "bootSequence": true,
-  "hooks": {
-    "session_start": "onSessionStart",
-    "before_turn": "onBeforeTurn",
-    "after_turn": "onAfterTurn",
-    "session_end": "onSessionEnd"
-  },
   "requirements": {
     "cli": {
       "name": "jfl",
-      "check": "jfl openclaw --help",
-      "minVersion": "0.1.1",
+      "check": "jfl --version",
       "install": {
         "npm": "jfl"
       }
     }
-  },
-  "commands": {
-    "/jfl": "Select a GTM workspace",
-    "/hud": "Show project dashboard",
-    "/crm": "CRM operations (list, touch, prep)",
-    "/context": "Search project context",
-    "/journal": "Write a journal entry",
-    "/brand": "Brand architect workflow",
-    "/content": "Create content (thread, post, article)"
   }
 }

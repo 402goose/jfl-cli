@@ -45,6 +45,7 @@ import {
   searchSkillsCommand,
 } from "./commands/skills.js"
 import { ralphCommand, showRalphHelp } from "./commands/ralph.js"
+import { clawdbotSetupCommand, clawdbotStatusCommand } from "./commands/clawdbot.js"
 import {
   ensureDayPass,
   showDayPassStatus,
@@ -685,65 +686,20 @@ program
 // CLAWDBOT INTEGRATION
 // ============================================================================
 
-program
-  .command("clawdbot")
-  .description("Install JFL skill for Clawdbot")
-  .action(() => {
-    try {
-      // Check if clawdbot is installed
-      execSync("which clawdbot", { stdio: "pipe" })
-    } catch {
-      console.log(chalk.red("\n❌ Clawdbot not installed"))
-      console.log(chalk.gray("   Install Clawdbot first: https://clawd.bot\n"))
-      process.exit(1)
-    }
+const clawdbot = program.command("clawdbot").description("Manage JFL plugin for Clawdbot gateway")
 
-    const __filename = fileURLToPath(import.meta.url)
-    const __dirname = join(__filename, "..")
+clawdbot
+  .command("setup")
+  .description("Install JFL plugin into Clawdbot and configure it")
+  .action(clawdbotSetupCommand)
 
-    const skillsDir = join(homedir(), ".clawdbot/skills")
-    const targetPath = join(skillsDir, "jfl-gtm")
+clawdbot
+  .command("status")
+  .description("Show JFL Clawdbot plugin installation status")
+  .action(clawdbotStatusCommand)
 
-    // Find the skill source (either in node_modules or local dev)
-    let skillSource: string | null = null
-
-    // Try node_modules first (installed via npm)
-    const npmSkillPath = join(__dirname, "../clawdbot-skill")
-    if (existsSync(npmSkillPath)) {
-      skillSource = npmSkillPath
-    }
-
-    if (!skillSource) {
-      console.log(chalk.red("\n❌ JFL Clawdbot skill not found"))
-      console.log(chalk.gray("   This shouldn't happen. Please report a bug.\n"))
-      process.exit(1)
-    }
-
-    // Create .clawdbot/skills directory if it doesn't exist
-    if (!existsSync(skillsDir)) {
-      mkdirSync(skillsDir, { recursive: true })
-    }
-
-    // Remove existing symlink if present
-    if (existsSync(targetPath)) {
-      try {
-        unlinkSync(targetPath)
-      } catch (error) {
-        console.log(chalk.yellow("⚠️  Could not remove existing skill (continuing)"))
-      }
-    }
-
-    // Create symlink
-    try {
-      symlinkSync(skillSource, targetPath)
-      console.log(chalk.green("\n✓ JFL skill installed for Clawdbot"))
-      console.log(chalk.gray("   Clawdbot will auto-detect the skill"))
-      console.log(chalk.cyan("\n   Ready! Use /jfl in Telegram/Slack/Discord\n"))
-    } catch (error: any) {
-      console.log(chalk.red(`\n❌ Failed to install skill: ${error.message}\n`))
-      process.exit(1)
-    }
-  })
+// Default action: show status
+clawdbot.action(clawdbotStatusCommand)
 
 // ============================================================================
 // OPENCLAW (runtime-agnostic agent protocol)

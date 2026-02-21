@@ -1,138 +1,59 @@
 ---
-name: jfl-gtm
-description: JFL agent integration via OpenClaw - persistent memory, sessions, journals, team coordination
-metadata: {"clawdbot":{"emoji":"🚀","requires":{"bins":["jfl"]}}}
+name: jfl
+description: Project context layer — persistent memory, sessions, journals, team coordination. Activates with /jfl.
+metadata: {"clawdbot":{"emoji":"🚀","requires":{"bins":["jfl"]},"install":[{"kind":"node","package":"jfl","label":"JFL CLI","bins":["jfl"]}]}}
 ---
 
-# JFL - OpenClaw Agent Skill
+# JFL - Just Fucking Launch
 
-You are a JFL team member. You have persistent memory, isolated sessions, and team coordination via the OpenClaw protocol.
+Project context layer for AI agents. Persistent memory, isolated sessions, automatic journaling, and team coordination.
 
-## Setup (automatic)
+## First-Time Setup
 
-On first run, this skill handles everything:
+If the JFL Clawdbot plugin is not installed yet, run this command:
 
-1. **jfl CLI** — if not installed, runs `npm install -g jfl`
-2. **Agent registration** — `jfl openclaw register -g <gtm-path> -a <your-id>`
-3. **Session** — `jfl openclaw session-start -a <your-id>`
-4. **Context Hub** — auto-started by session-start
-
-You don't configure anything. Just run `/jfl` and pick a project.
-
-## What You Get
-
-**Memory that compounds.** Every session writes to a journal. Every future session reads that journal. Decisions, learnings, and progress persist across sessions and across agents.
-
-**Isolated sessions.** Your work happens on a git branch. Auto-commit runs every 2 minutes. Your session can't conflict with other agents working on the same project.
-
-**Team awareness.** You can see what other agents are doing via context search. You can tag service agents with messages.
-
-## Lifecycle
-
-Your session follows this flow:
-
-```
-Boot          → jfl openclaw session-start -a <id> --json
-               (creates branch, starts auto-commit, ensures Context Hub)
-
-During work   → jfl openclaw context --query "..." --json
-               (get project context: knowledge, journal, code)
-
-               → jfl openclaw heartbeat --json
-               (auto-commit, health check — run every ~2 min)
-
-Task done     → jfl openclaw journal --type <type> --title "..." --summary "..."
-               (write what you did to the journal)
-
-Shutdown      → jfl openclaw session-end --json
-               (commit, merge branch, clean up)
+```bash
+jfl clawdbot setup
 ```
 
-## Commands Reference
+This copies the JFL plugin to Clawdbot and configures it. After that, the gateway needs a restart (`clawdbot gateway`). Then /jfl will appear in Telegram.
 
-All commands support `--json` for structured output.
+**Check if already set up:**
+```bash
+jfl clawdbot status
+```
+
+## What JFL Does
+
+When activated (via /jfl in Telegram):
+
+- **Context injection** — searches project knowledge before every response
+- **Decision capture** — automatically journals decisions you make
+- **Auto-commit** — saves work to git every ~2 minutes
+- **Session isolation** — your work happens on a separate branch
+
+## Telegram Commands (after plugin setup)
 
 | Command | What it does |
 |---------|-------------|
-| `jfl openclaw register -g <path> -a <id>` | Register with a GTM workspace |
-| `jfl openclaw session-start -a <id>` | Start session (branch + auto-commit) |
-| `jfl openclaw session-end` | End session (merge + cleanup) |
-| `jfl openclaw heartbeat` | Health pulse + auto-commit |
-| `jfl openclaw context -q "query"` | Search project context |
-| `jfl openclaw journal --type T --title T --summary S` | Write journal entry |
-| `jfl openclaw status` | Show agent/session/GTM state |
-| `jfl openclaw gtm-list` | List registered GTM workspaces |
-| `jfl openclaw gtm-switch <id>` | Switch to different GTM |
-| `jfl openclaw tag <service> "message"` | Message a service agent |
+| `/jfl` | Activate JFL / show status |
+| `/context <query>` | Search project knowledge |
+| `/journal <type> <title> \| <summary>` | Write a journal entry |
+| `/hud` | Project dashboard |
 
-## Journal Types
+## Tools (Claude uses these automatically)
 
-When you finish work, write a journal entry. Types:
+| Tool | When to use |
+|------|------------|
+| `jfl_context` | Someone asks about the project, past decisions, what's been done |
+| `jfl_journal` | A decision is made, task completed, bug fixed, something learned |
 
-| Type | When |
-|------|------|
-| `feature` | Built something new |
-| `fix` | Fixed a bug |
-| `decision` | Made a choice between options |
-| `discovery` | Learned something important |
-| `milestone` | Hit a major goal |
+## Creating a Project
 
-Example:
-```bash
-jfl openclaw journal --type decision --title "Chose OAuth over API keys" --summary "OAuth better for multi-tenant; API keys too easy to leak. Using GitHub provider." --files "src/auth.ts"
-```
-
-## Proactive Behaviors
-
-**Do these automatically. Don't wait to be asked.**
-
-| Trigger | Action |
-|---------|--------|
-| Session starts | `jfl openclaw context` to load project state |
-| Someone mentions the project | Search context for relevant info |
-| A decision is made | Write a `decision` journal entry immediately |
-| You finish a task | Write a `feature`/`fix` journal entry |
-| Someone asks "what's next?" | Search context for roadmap + recent work |
-| You learn something | Write a `discovery` journal entry |
-| 2 minutes pass | `jfl openclaw heartbeat` to save work |
-
-## Context Search
-
-The Context Hub aggregates journal entries, knowledge docs, and code files. Query it naturally:
+If no GTM workspace exists:
 
 ```bash
-# What are we building?
-jfl openclaw context -q "vision and product" --json
-
-# What did we decide about pricing?
-jfl openclaw context -q "pricing decision" --json
-
-# Recent work on auth
-jfl openclaw context -q "authentication" --json
+jfl init -n "My Project"
 ```
 
-## Multi-GTM
-
-You can work across multiple projects:
-
-```bash
-jfl openclaw gtm-list --json          # See all projects
-jfl openclaw gtm-switch other-project  # Switch to another
-```
-
-## Service Coordination
-
-Tag other agents working on services:
-
-```bash
-jfl openclaw tag jfl-platform "deploy when ready"
-jfl openclaw tag 402-cat-rust "health check"
-```
-
-Events appear in `.jfl/service-events.jsonl` in the GTM workspace.
-
-## Key Principle
-
-**You are not a CLI wrapper. You are a team member.**
-
-Read context, synthesize understanding, make decisions, write journals. The value is in coordination and memory, not just running commands.
+This creates the workspace with knowledge docs, journal, and context hub config.

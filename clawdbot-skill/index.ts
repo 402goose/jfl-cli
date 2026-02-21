@@ -1,8 +1,12 @@
 /**
  * JFL GTM Clawdbot Skill
  *
- * Uses OpenClaw protocol for session management, context, journaling, and coordination.
- * Auto-installs jfl CLI if missing. Auto-registers agent with GTM on first use.
+ * Dormant until user engages via /jfl. Then activates sessions, context,
+ * journaling, and coordination via OpenClaw protocol.
+ *
+ * On install: explains what JFL does and how to use it.
+ * On /jfl: lets user pick a GTM workspace, then activates.
+ * While active: auto-injects context, captures decisions, auto-commits.
  *
  * @purpose Clawdbot skill using OpenClaw for full JFL integration
  * @spec specs/OPENCLAW_SPEC.md
@@ -10,7 +14,7 @@
 
 import { exec } from "child_process"
 import { promisify } from "util"
-import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs"
+import { existsSync, readFileSync, writeFileSync, mkdirSync, readdirSync } from "fs"
 import { join } from "path"
 import { homedir } from "os"
 
@@ -32,6 +36,7 @@ interface SessionState {
   gtmName: string
   agentId: string
   sessionBranch: string | null
+  activated: boolean
 }
 
 // ============================================================================
@@ -88,7 +93,6 @@ async function ensureJFL(): Promise<boolean> {
     await execAsync("jfl --version", { timeout: 5000 })
     return true
   } catch {
-    // Try to install
     try {
       await execAsync("npm install -g jfl", { timeout: 60000 })
       return true
@@ -103,51 +107,96 @@ function agentId(ctx: Context): string {
 }
 
 // ============================================================================
-// Boot
+// Welcome / Intro (shown on first use or install)
+// ============================================================================
+
+const WELCOME_MESSAGE = `JFL - Just Fucking Launch
+
+Your project context layer. I track decisions, save context, and keep everything synced across sessions.
+
+What I do when active:
+- Search project context before responding
+- Capture decisions into the journal automatically
+- Auto-commit your work every 2 minutes
+- Coordinate with other agents on the team
+
+Commands:
+/jfl — Activate / select a project
+/context <query> — Search project knowledge
+/journal <type> <title> | <summary> — Log work
+/hud — Project dashboard
+
+To get started, use /jfl to pick a project.`
+
+const ACTIVATION_MESSAGE = (gtmName: string) => `JFL activated: ${gtmName}
+
+I'll now:
+- Search context before each response
+- Capture decisions automatically
+- Auto-commit work periodically
+
+Commands:
+/context <query> — Search project context
+/journal <type> <title> | <summary> — Log work
+/hud — Project dashboard
+/jfl — Status`
+
+// ============================================================================
+// Boot (on /jfl command)
 // ============================================================================
 
 export async function onBoot(ctx: Context) {
   const hasJFL = await ensureJFL()
   if (!hasJFL) {
     return {
-      text: "JFL CLI not found and auto-install failed.\n\nInstall manually: npm install -g jfl\nThen run /jfl again",
-      buttons: [],
+      text: "JFL CLI not found and auto-install failed.\n\nInstall manually:\n  npm install -g jfl\n\nThen run /jfl again.",
     }
   }
 
-  // Check if already connected
+  // Check if already activated
   const existing = getState(ctx.threadId)
-  if (existing?.sessionBranch) {
-    // Resume existing session
-    return await showDashboard(existing)
+  if (existing?.activated && existing?.sessionBranch) {
+    return await showStatus(existing)
   }
 
-  // Find GTMs
+  // Find available GTMs
   const gtms = await findGTMs()
   if (gtms.length === 0) {
     return {
-      text: "JFL - Just Fucking Launch\n\nNo GTM workspaces found.\n\nCreate one:\n  jfl init -n 'My Project'\n\nThen run /jfl again",
+      text: "No GTM workspaces found.\n\nCreate one:\n  jfl init -n 'My Project'\n\nThen run /jfl again.",
     }
   }
 
+  // Single GTM → auto-activate
+  if (gtms.length === 1) {
+    return await activateGTM(gtms[0].path, ctx)
+  }
+
+  // Multiple GTMs → let user pick
   const buttons = gtms.map((g) => ({
     text: g.name,
     callbackData: `select:${g.path}`,
   }))
 
   return {
-    text: "JFL - Just Fucking Launch\n\nSelect a project:",
+    text: "Select a project:",
     buttons,
   }
 }
 
 // ============================================================================
-// GTM selection + auto-register + session start
+// Activation
 // ============================================================================
 
-async function handleSelectGTM(gtmPath: string, ctx: Context) {
+async function activateGTM(gtmPath: string, ctx: Context) {
   const agent = agentId(ctx)
-  const gtmName = gtmPath.split("/").pop() || "unknown"
+
+  // Read GTM name from config
+  let gtmName = gtmPath.split("/").pop() || "unknown"
+  try {
+    const cfg = JSON.parse(readFileSync(join(gtmPath, ".jfl", "config.json"), "utf-8"))
+    if (cfg.name) gtmName = cfg.name
+  } catch {}
 
   try {
     // Register agent with GTM (idempotent)
@@ -161,58 +210,55 @@ async function handleSelectGTM(gtmPath: string, ctx: Context) {
       gtmName,
       agentId: agent,
       sessionBranch: session.session_id,
+      activated: true,
     })
 
-    return await showDashboard({
+    return { text: ACTIVATION_MESSAGE(gtmName) }
+  } catch (error: any) {
+    // Session start failed but registration may have worked
+    setState(ctx.threadId, {
       gtmPath,
       gtmName,
       agentId: agent,
-      sessionBranch: session.session_id,
+      sessionBranch: null,
+      activated: true,
     })
-  } catch (error: any) {
-    return { text: `Failed to start session\n\n${error.message}` }
+    return { text: `JFL activated: ${gtmName}\n\nSession start failed: ${error.message}\nContext and journaling still work.` }
   }
 }
 
 // ============================================================================
-// Dashboard
+// Status (shown when /jfl is called while active)
 // ============================================================================
 
-async function showDashboard(s: SessionState) {
-  let contextSummary = ""
+async function showStatus(s: SessionState) {
+  let hubStatus = "unknown"
   try {
-    const items = await openclawJSON(`context -q "current priorities"`)
-    if (Array.isArray(items) && items.length > 0) {
-      contextSummary = items
-        .slice(0, 3)
-        .map((i: any) => `  ${i.title}`)
-        .join("\n")
-    }
-  } catch { /* hub may be down */ }
-
-  const text = [
-    `${s.gtmName}`,
-    `Session: ${s.sessionBranch || "none"}`,
-    "",
-    contextSummary ? `Recent context:\n${contextSummary}` : "",
-    "",
-    "What do you want to do?",
-  ].filter(Boolean).join("\n")
+    const status = await openclawJSON("status")
+    hubStatus = status.context_hub?.healthy ? "running" : "offline"
+  } catch {
+    hubStatus = "offline"
+  }
 
   return {
-    text,
+    text: [
+      `JFL active: ${s.gtmName}`,
+      `Session: ${s.sessionBranch || "none"}`,
+      `Context Hub: ${hubStatus}`,
+      ``,
+      `Commands:`,
+      `/context <query> — Search`,
+      `/journal <type> <title> | <summary> — Log`,
+      `/hud — Dashboard`,
+    ].join("\n"),
     buttons: [
       [
         { text: "Dashboard", callbackData: "cmd:hud" },
-        { text: "CRM", callbackData: "cmd:crm" },
+        { text: "Search Context", callbackData: "cmd:context" },
       ],
       [
-        { text: "Context", callbackData: "cmd:context" },
-        { text: "Status", callbackData: "cmd:status" },
-      ],
-      [
-        { text: "Brand", callbackData: "cmd:brand" },
-        { text: "Content", callbackData: "cmd:content" },
+        { text: "Switch Project", callbackData: "cmd:switch" },
+        { text: "End Session", callbackData: "cmd:end" },
       ],
     ],
   }
@@ -225,7 +271,7 @@ async function showDashboard(s: SessionState) {
 export async function onCallback(data: string, ctx: Context) {
   const [action, value] = data.split(":")
 
-  if (action === "select") return await handleSelectGTM(value, ctx)
+  if (action === "select") return await activateGTM(value, ctx)
   if (action === "cmd") return await handleCommand(value, ctx)
 
   return { text: "Unknown action" }
@@ -233,7 +279,7 @@ export async function onCallback(data: string, ctx: Context) {
 
 async function handleCommand(cmd: string, ctx: Context) {
   const s = getState(ctx.threadId)
-  if (!s) return { text: "No session. Run /jfl to select a project." }
+  if (!s?.activated) return { text: "JFL not active. Use /jfl to select a project." }
 
   switch (cmd) {
     case "hud":
@@ -243,11 +289,22 @@ async function handleCommand(cmd: string, ctx: Context) {
     case "context":
       return await runContext(s)
     case "status":
-      return await runStatus(s)
+      return await showStatus(s)
     case "brand":
       return showBrandMenu()
     case "content":
       return showContentMenu()
+    case "switch": {
+      // Deactivate current
+      setState(ctx.threadId, { ...s, activated: false, sessionBranch: null })
+      try { await openclawJSON("session-end --sync") } catch {}
+      return await onBoot(ctx)
+    }
+    case "end": {
+      try { await openclawJSON("session-end --sync") } catch {}
+      setState(ctx.threadId, { ...s, activated: false, sessionBranch: null })
+      return { text: `Session ended for ${s.gtmName}.\n\nUse /jfl to start again.` }
+    }
     default:
       return { text: "Unknown command" }
   }
@@ -258,11 +315,10 @@ async function handleCommand(cmd: string, ctx: Context) {
 // ============================================================================
 
 export async function onCommand(cmd: string, args: string[], ctx: Context) {
-  const s = getState(ctx.threadId)
-
   if (cmd === "jfl" || cmd === "gtm") return await onBoot(ctx)
 
-  if (!s) return { text: "No session active. Run /jfl to select a project." }
+  const s = getState(ctx.threadId)
+  if (!s?.activated) return { text: "JFL not active. Use /jfl to select a project first." }
 
   switch (cmd) {
     case "hud":
@@ -280,7 +336,7 @@ export async function onCommand(cmd: string, args: string[], ctx: Context) {
       const type = args[0] || "discovery"
       const title = args.slice(1).join(" ") || "Note"
       await openclaw(`journal --type ${type} --title "${title}" --summary "${title}"`)
-      return { text: `Journal entry written: ${title}` }
+      return { text: `Journal entry written: [${type}] ${title}` }
     }
 
     case "brand":
@@ -342,22 +398,6 @@ async function runContextQuery(s: SessionState, query: string) {
   }
 }
 
-async function runStatus(s: SessionState) {
-  try {
-    const status = await openclawJSON("status")
-    const lines = [
-      `Agent: ${status.agent || "none"}`,
-      `Session: ${status.session?.branch || "none"}`,
-      `GTM: ${status.gtm_name || "unknown"}`,
-      `Context Hub: ${status.context_hub?.healthy ? "healthy" : "unreachable"}`,
-      `Agents: ${status.registered_agents?.length || 0} registered`,
-    ]
-    return { text: `OpenClaw Status\n\n${lines.join("\n")}` }
-  } catch (error: any) {
-    return { text: `Status failed: ${error.message}` }
-  }
-}
-
 // ============================================================================
 // Menus
 // ============================================================================
@@ -411,8 +451,16 @@ function showContentMenu() {
 }
 
 // ============================================================================
-// GTM discovery
+// GTM discovery (only returns type:"gtm", never services)
 // ============================================================================
+
+function readJflConfig(dir: string): { type?: string; name?: string } | null {
+  try {
+    return JSON.parse(readFileSync(join(dir, ".jfl", "config.json"), "utf-8"))
+  } catch {
+    return null
+  }
+}
 
 async function findGTMs(): Promise<GTM[]> {
   // First try OpenClaw registry
@@ -423,7 +471,7 @@ async function findGTMs(): Promise<GTM[]> {
     }
   } catch { /* fall through to filesystem scan */ }
 
-  // Fallback: scan filesystem
+  // Fallback: scan filesystem for type:"gtm" directories
   const gtms: GTM[] = []
   const searchPaths = [
     join(homedir(), "CascadeProjects"),
@@ -434,14 +482,21 @@ async function findGTMs(): Promise<GTM[]> {
   for (const basePath of searchPaths) {
     if (!existsSync(basePath)) continue
     try {
-      const { stdout } = await execAsync(
-        `find "${basePath}" -maxdepth 2 -name .jfl -type d 2>/dev/null`
-      )
-      for (const dir of stdout.trim().split("\n").filter(Boolean)) {
-        const gtmPath = dir.replace("/.jfl", "")
-        if (existsSync(join(gtmPath, "knowledge")) && existsSync(join(gtmPath, "CLAUDE.md"))) {
-          gtms.push({ name: gtmPath.split("/").pop() || "unknown", path: gtmPath })
+      const entries = readdirSync(basePath, { withFileTypes: true })
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue
+        const candidate = join(basePath, entry.name)
+        const config = readJflConfig(candidate)
+        if (!config) continue
+
+        // Only include GTMs, not services
+        if (config.type === "gtm") {
+          gtms.push({ name: config.name || entry.name, path: candidate })
+        } else if (!config.type && existsSync(join(candidate, "knowledge"))) {
+          // Legacy: no type field but has knowledge/ → probably a GTM
+          gtms.push({ name: config.name || entry.name, path: candidate })
         }
+        // type:"service" → skip entirely
       }
     } catch { /* skip */ }
   }
@@ -451,100 +506,68 @@ async function findGTMs(): Promise<GTM[]> {
 
 // ============================================================================
 // LIFECYCLE HOOKS (Clawdbot calls these automatically)
+// All hooks check activation state. When dormant, they're no-ops.
 // ============================================================================
 
 /**
  * session_start — fires when Clawdbot session begins.
- * Auto-registers, starts OpenClaw session, injects context.
- * User never sees or runs this.
+ * Does NOT auto-activate. Just checks if JFL is available and notes it.
+ * User must run /jfl to activate.
  */
 export async function onSessionStart(event: { agentId: string; platform: string; threadId: string }) {
-  const hasJFL = await ensureJFL()
-  if (!hasJFL) return { prependContext: "" }
+  const existing = getState(event.threadId)
 
-  const agent = event.agentId || `clawd-${event.platform}`
+  // If already activated from a previous session, re-inject context
+  if (existing?.activated && existing?.gtmPath) {
+    const agent = existing.agentId || event.agentId || `clawd-${event.platform}`
 
-  // Find default GTM (from registry or filesystem)
-  let gtmPath: string | null = null
-  try {
-    const gtms = await openclawJSON("gtm-list")
-    if (Array.isArray(gtms) && gtms.length > 0) {
-      const defaultGtm = gtms.find((g: any) => g.default) || gtms[0]
-      gtmPath = defaultGtm.path
+    try {
+      // Try to resume or start a new session
+      const session = await openclawJSON(`session-start -a ${agent} -g "${existing.gtmPath}"`)
+      setState(event.threadId, { ...existing, sessionBranch: session.session_id })
+
+      return {
+        prependContext: [
+          `<jfl-session>`,
+          `GTM: ${existing.gtmName} (${existing.gtmPath})`,
+          `Session: ${session.session_id}`,
+          `Use /jfl for status. Use /context <query> to search.`,
+          `</jfl-session>`,
+        ].join("\n"),
+      }
+    } catch {
+      // Session start failed but we're still "activated" for the GTM
+      return {
+        prependContext: `<jfl-session>GTM: ${existing.gtmName} (session start failed, commands still work)</jfl-session>`,
+      }
     }
-  } catch { /* no registry yet */ }
+  }
 
-  if (!gtmPath) {
+  // Not activated — stay quiet. Don't inject anything.
+  // Just check if JFL is available for the welcome message later
+  const hasJFL = await ensureJFL()
+  if (hasJFL) {
     const gtms = await findGTMs()
     if (gtms.length > 0) {
-      gtmPath = gtms[0].path
-      // Auto-register first GTM found
-      try {
-        await openclawJSON(`register -g "${gtmPath}" -a ${agent}`)
-      } catch { /* non-fatal */ }
+      return {
+        prependContext: `<jfl-available>JFL is installed with ${gtms.length} project(s) available. User can activate with /jfl.</jfl-available>`,
+      }
     }
   }
 
-  if (!gtmPath) {
-    return { prependContext: "<jfl-session>No GTM workspace found. Run /jfl to set up.</jfl-session>" }
-  }
-
-  // Start session
-  try {
-    const session = await openclawJSON(`session-start -a ${agent} -g "${gtmPath}"`)
-    const gtmName = gtmPath.split("/").pop() || "unknown"
-
-    setState(event.threadId, {
-      gtmPath,
-      gtmName,
-      agentId: agent,
-      sessionBranch: session.session_id,
-    })
-
-    // Inject session context so agent knows where it is
-    const context = [
-      `<jfl-session>`,
-      `GTM: ${gtmName} (${gtmPath})`,
-      `Session: ${session.session_id}`,
-      `Branch: ${session.branch}`,
-      `Context Hub: ${session.context_hub.healthy ? "running" : "offline"}`,
-      `Auto-commit: ${session.auto_commit.running ? "active (120s)" : "off"}`,
-      ``,
-      `You are working inside this JFL session. All file operations happen on branch ${session.branch}.`,
-      `Use 'jfl openclaw context -q "..."' to search project knowledge.`,
-      `Use 'jfl openclaw journal --type T --title T --summary S' after completing work.`,
-      `Use 'jfl openclaw tag <service> "msg"' to message service agents.`,
-      `</jfl-session>`,
-    ].join("\n")
-
-    return {
-      prependContext: context,
-      workspace: gtmPath,
-      env: {
-        JFL_SESSION_WORKTREE: gtmPath,
-        JFL_SESSION_BRANCH: session.branch,
-        JFL_AGENT_ID: agent,
-      },
-    }
-  } catch (error: any) {
-    return {
-      prependContext: `<jfl-session>Session start failed: ${error.message}. Run /jfl to retry.</jfl-session>`,
-    }
-  }
+  return { prependContext: "" }
 }
 
 /**
  * before_turn — fires before each agent response.
- * Injects fresh context so the agent has project awareness.
+ * Only injects context when JFL is active.
  */
 export async function onBeforeTurn(event: { agentId: string; threadId: string; message?: string }) {
   const s = getState(event.threadId)
-  if (!s?.sessionBranch) return { prependContext: "" }
+  if (!s?.activated || !s?.sessionBranch) return { prependContext: "" }
 
-  // Lightweight context injection — don't slow down every turn
   let contextBlock = ""
   try {
-    // If the user's message mentions something searchable, query context
     const query = event.message?.slice(0, 100) || ""
     if (query.length > 10) {
       const items = await openclawJSON(`context -q "${query.replace(/"/g, '\\"')}"`)
@@ -552,17 +575,17 @@ export async function onBeforeTurn(event: { agentId: string; threadId: string; m
         const relevant = items.slice(0, 3).map((i: any) =>
           `- [${i.type}] ${i.title}: ${(i.content || "").slice(0, 150)}`
         ).join("\n")
-        contextBlock = `<jfl-context>\nRelevant context for this message:\n${relevant}\n</jfl-context>`
+        contextBlock = `<jfl-context>\nRelevant context:\n${relevant}\n</jfl-context>`
       }
     }
-  } catch { /* non-fatal — context hub might be down */ }
+  } catch { /* non-fatal */ }
 
   return { prependContext: contextBlock }
 }
 
 /**
  * after_turn — fires after each agent response.
- * Auto-captures decisions/completions as journal entries + runs heartbeat.
+ * Only runs heartbeat + capture when JFL is active.
  */
 export async function onAfterTurn(event: {
   agentId: string
@@ -571,14 +594,14 @@ export async function onAfterTurn(event: {
   detectedIntent?: string
 }) {
   const s = getState(event.threadId)
-  if (!s?.sessionBranch) return
+  if (!s?.activated || !s?.sessionBranch) return
 
-  // Run heartbeat (auto-commits pending changes)
+  // Heartbeat (auto-commit)
   try {
     await openclaw("heartbeat --json")
   } catch { /* non-fatal */ }
 
-  // Auto-capture decisions/completions from agent response
+  // Auto-capture decisions/completions
   if (event.detectedIntent && event.response) {
     const intentMap: Record<string, string> = {
       decision: "decision",
@@ -597,22 +620,19 @@ export async function onAfterTurn(event: {
 }
 
 /**
- * session_end — fires when Clawdbot session ends (explicit, timeout, or compaction).
- * Commits everything, merges branch, cleans up. Fully automatic.
+ * session_end — fires when Clawdbot session ends.
+ * Only cleans up if JFL was active.
  */
 export async function onSessionEnd(event: { agentId: string; threadId: string }) {
   const s = getState(event.threadId)
-  if (!s?.sessionBranch) return
+  if (!s?.activated || !s?.sessionBranch) return
 
   try {
     await openclawJSON("session-end --sync")
-  } catch { /* cleanup should never block shutdown */ }
+  } catch { /* never block shutdown */ }
 
-  // Clear session state but keep GTM registration
-  setState(event.threadId, {
-    ...s,
-    sessionBranch: null,
-  })
+  // Keep activated state but clear session
+  setState(event.threadId, { ...s, sessionBranch: null })
 }
 
 // ============================================================================
@@ -628,7 +648,7 @@ export default {
   onBoot,
   onCallback,
   onCommand,
-  // Lifecycle (Clawdbot-triggered, automatic)
+  // Lifecycle (Clawdbot-triggered, gated by activation)
   onSessionStart,
   onBeforeTurn,
   onAfterTurn,

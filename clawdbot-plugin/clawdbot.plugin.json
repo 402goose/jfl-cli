@@ -1,0 +1,20 @@
+{
+  "id": "jfl",
+  "uiHints": {
+    "workspace": {
+      "label": "GTM Workspace",
+      "placeholder": "Auto-detected from .jfl/config.json",
+      "help": "Path to GTM workspace. Leave empty to auto-detect."
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "workspace": {
+        "type": "string"
+      }
+    },
+    "required": []
+  }
+}
