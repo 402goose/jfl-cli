@@ -683,19 +683,19 @@ program
   })
 
 // ============================================================================
-// CLAWDBOT INTEGRATION
+// CLAWDBOT INTEGRATION (backward-compat alias — see: jfl openclaw plugin)
 // ============================================================================
 
-const clawdbot = program.command("clawdbot").description("Manage JFL plugin for Clawdbot gateway")
+const clawdbot = program.command("clawdbot").description("Manage JFL plugin for OpenClaw gateway (alias: jfl openclaw plugin)")
 
 clawdbot
   .command("setup")
-  .description("Install JFL plugin into Clawdbot and configure it")
+  .description("Install JFL plugin into OpenClaw gateway and configure it")
   .action(clawdbotSetupCommand)
 
 clawdbot
   .command("status")
-  .description("Show JFL Clawdbot plugin installation status")
+  .description("Show JFL OpenClaw plugin installation status")
   .action(clawdbotStatusCommand)
 
 // Default action: show status
@@ -822,6 +822,21 @@ openclaw
     const { tagCommand } = await import("./commands/openclaw.js")
     await tagCommand(service, message, options)
   })
+
+// Gateway plugin management (jfl openclaw plugin)
+const openclawPlugin = openclaw.command("plugin").description("Manage JFL plugin for OpenClaw gateway")
+
+openclawPlugin
+  .command("setup")
+  .description("Install JFL plugin into OpenClaw gateway and configure it")
+  .action(clawdbotSetupCommand)
+
+openclawPlugin
+  .command("status")
+  .description("Show JFL OpenClaw plugin installation status")
+  .action(clawdbotStatusCommand)
+
+openclawPlugin.action(clawdbotStatusCommand)
 
 // ============================================================================
 // HELP
