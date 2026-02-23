@@ -606,31 +606,35 @@ export async function initCommand(options?: { name?: string }) {
 
           // Clone if git URL
           if (isGitURL) {
-            const cloneSpinner = ora(`[1/3] Cloning repository...`).start()
             try {
               const match = servicePathStr.match(/\/([^\/]+?)(\.git)?$/)
               if (!match) {
-                cloneSpinner.fail("Invalid git URL")
+                console.log(chalk.red("  Invalid git URL"))
                 continue
               }
 
               const repoName = match[1]
+              // Resolve code directory BEFORE starting spinner (may prompt user)
               const { getCodeDirectory } = await import("../utils/jfl-config.js")
               const codeDir = await getCodeDirectory()
               const cloneDir = join(codeDir, "repos")
               const repoPath = join(cloneDir, repoName)
 
+              // Start spinner AFTER prompts are done
+              const cloneSpinner = ora(`[1/3] Cloning repository...`).start()
+
               if (existsSync(repoPath)) {
                 cloneSpinner.succeed(`[1/3] Using existing repo at ${repoPath}`)
                 execSync("git pull", { cwd: repoPath, stdio: "pipe" })
               } else {
+                mkdirSync(cloneDir, { recursive: true })
                 execSync(`git clone ${servicePathStr} ${repoPath}`, { stdio: "pipe" })
                 cloneSpinner.succeed(`[1/3] Cloned to ${repoPath}`)
               }
 
               resolvedPath = repoPath
             } catch (err: any) {
-              cloneSpinner.fail("Failed to clone")
+              console.log(chalk.red("  Failed to clone"))
               console.log(chalk.gray(`  ${err.message}`))
               continue
             }

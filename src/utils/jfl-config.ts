@@ -12,7 +12,7 @@ import { join } from "path"
 import { homedir } from "os"
 import path from "path"
 import chalk from "chalk"
-import inquirer from "inquirer"
+import * as p from "@clack/prompts"
 import { JFL_PATHS, JFL_FILES, ensureJflDirs } from "./jfl-paths.js"
 
 // Use XDG-compliant config path
@@ -75,25 +75,25 @@ export async function getCodeDirectory(): Promise<string> {
   }
 
   // First time - ask user
-  console.log(chalk.cyan("\n📁 Code Directory Setup\n"))
-  console.log(chalk.gray("Where do you keep your code repos?\n"))
-
-  const { codeDir } = await inquirer.prompt([{
-    type: "input",
-    name: "codeDir",
-    message: "Code directory:",
-    default: path.join(homedir(), "code"),
+  const defaultDir = path.join(homedir(), "CascadeProjects")
+  const codeDir = await p.text({
+    message: "Where do you keep your code repos?",
+    placeholder: defaultDir,
+    defaultValue: defaultDir,
     validate: (input: string) => {
       if (!input.trim()) return "Directory required"
-      return true
-    }
-  }])
+    },
+  })
 
-  // Save preference
-  setConfig("codeDirectory", codeDir)
-  console.log(chalk.green(`✓ Saved code directory: ${codeDir}\n`))
+  if (p.isCancel(codeDir)) {
+    return defaultDir
+  }
 
-  return codeDir
+  const resolved = (codeDir as string) || defaultDir
+  setConfig("codeDirectory", resolved)
+  p.log.success(`Saved code directory: ${resolved}`)
+
+  return resolved
 }
 
 // ============================================================================
