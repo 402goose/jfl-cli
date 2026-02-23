@@ -1,5 +1,6 @@
 import Conf from "conf"
 import { contextHubCommand } from "../commands/context-hub.js"
+import { getProjectPort } from "./context-hub-port.js"
 
 const config = new Conf({ projectName: "jfl" })
 
@@ -41,7 +42,7 @@ export async function ensureContextHub(): Promise<void> {
 
   // Default: global mode
   const mode = contextHubConfig?.mode ?? "global"
-  const port = contextHubConfig?.port ?? 4242
+  const port = contextHubConfig?.port ?? getProjectPort()
 
   try {
     // First check if it's already running AND healthy
@@ -65,7 +66,7 @@ export async function ensureContextHub(): Promise<void> {
 export function getContextHubConfig(): ContextHubConfig {
   return (config.get("contextHub") as ContextHubConfig) || {
     mode: "global",
-    port: 4242,
+    port: getProjectPort(),
     autoStart: true
   }
 }

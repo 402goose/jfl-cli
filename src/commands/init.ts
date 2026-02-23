@@ -13,6 +13,7 @@ import { writeSkillFiles } from "../lib/skill-generator.js"
 import { getProfile } from "./profile.js"
 import { generateClaudeMdFromProfile } from "../utils/claude-md-generator.js"
 import { validateSettings, fixSettings } from "../utils/settings-validator.js"
+import { persistProjectPort } from "../utils/context-hub-port.js"
 
 const TEMPLATE_REPO = "https://github.com/402goose/jfl-template.git"
 
@@ -386,6 +387,9 @@ export async function initCommand(options?: { name?: string }) {
 
     writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n")
 
+    // Assign deterministic port and write to config + .mcp.json
+    const hubPort = persistProjectPort(projectPath)
+
     // Generate or update CLAUDE.md
     const claudePath = join(projectPath, "CLAUDE.md")
     const profile = getProfile()
@@ -427,256 +431,7 @@ export async function initCommand(options?: { name?: string }) {
       // Ignore commit errors
     }
 
-    // Offer service onboarding
-    p.note(
-      "Set up service agents for your repos (API, web app, etc.).\n" +
-      "Each service gets its own agent that you can invoke via @-mentions.",
-      chalk.hex("#FFA500")("🤖 Service Agents")
-    )
-
-    const onboardServices = await p.confirm({
-      message: "Onboard services now?",
-      initialValue: true,
-    })
-
-    if (p.isCancel(onboardServices)) {
-      p.cancel("Setup cancelled.")
-      process.exit(0)
-    }
-
-    const onboardedServices: string[] = []
-    let serviceCount = 0
-
-    if (onboardServices) {
-      let addingServices = true
-
-      while (addingServices) {
-        const servicePath = await p.text({
-          message: onboardedServices.length === 0
-            ? "Service path or git URL:"
-            : "Add another service (or press Enter to skip):",
-          placeholder: onboardedServices.length === 0
-            ? "/path/to/service or git@github.com:user/repo.git"
-            : "Press Enter to continue",
-          validate: (input: string) => {
-            if (onboardedServices.length === 0 && !input.trim()) {
-              return "Please enter a service path or URL"
-            }
-          },
-        })
-
-        if (p.isCancel(servicePath)) {
-          p.cancel("Setup cancelled.")
-          process.exit(0)
-        }
-
-        // If empty and not first service, user is done adding services
-        if (!servicePath || (servicePath as string).trim() === "") {
-          addingServices = false
-          break
-        }
-
-        serviceCount++
-        const servicePathStr = servicePath as string
-
-        try {
-          console.log(chalk.cyan(`\n━━━ Service ${serviceCount} ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`))
-
-          // Determine if path or URL
-          const isGitURL =
-            servicePathStr.startsWith("git@") ||
-            servicePathStr.startsWith("https://") ||
-            servicePathStr.startsWith("http://")
-
-          let resolvedPath = servicePathStr
-
-          // Clone if git URL
-          if (isGitURL) {
-            const spinner = ora(`[1/4] Cloning repository...`).start()
-            try {
-              // Extract repo name
-              const match = servicePathStr.match(/\/([^\/]+?)(\.git)?$/)
-              if (!match) {
-                spinner.fail("Invalid git URL")
-                continue
-              }
-
-              const repoName = match[1]
-
-              // Use user's code directory preference
-              const { getCodeDirectory } = await import("../utils/jfl-config.js")
-              const codeDir = await getCodeDirectory()
-              const cloneDir = join(codeDir, "repos")
-
-              // Check if already exists
-              const repoPath = join(cloneDir, repoName)
-              if (existsSync(repoPath)) {
-                spinner.succeed(`[1/4] Using existing repo at ${repoPath}`)
-                execSync("git pull", { cwd: repoPath, stdio: "pipe" })
-              } else {
-                // Clone
-                execSync(`git clone ${servicePathStr} ${repoPath}`, { stdio: "pipe" })
-                spinner.succeed(`[1/4] Cloned to ${repoPath}`)
-              }
-
-              resolvedPath = repoPath
-            } catch (err: any) {
-              spinner.fail("Failed to clone")
-              console.log(chalk.gray(`  ${err.message}`))
-              continue
-            }
-          } else {
-            // Local path - resolve and check exists
-            resolvedPath = join(process.cwd(), servicePathStr)
-            if (!existsSync(resolvedPath)) {
-              console.log(chalk.red(`  Path does not exist: ${resolvedPath}`))
-              continue
-            }
-          }
-
-          // Auto-detect metadata
-          const stepNum = isGitURL ? 2 : 1
-          const totalSteps = 4
-          const spinner = ora(`[${stepNum}/${totalSteps}] Detecting service metadata...`).start()
-          let metadata
-          try {
-            metadata = extractServiceMetadata(resolvedPath)
-            spinner.succeed(`[${stepNum}/${totalSteps}] Detected: ${chalk.cyan(metadata.name)} (${chalk.gray(metadata.type)})`)
-          } catch (err: any) {
-            spinner.fail("Failed to detect metadata")
-            console.log(chalk.gray(`  ${err.message}`))
-            continue
-          }
-
-          // Run onboard script
-          const onboardStepNum = isGitURL ? 3 : 2
-          const onboardSpinner = ora(`[${onboardStepNum}/${totalSteps}] Setting up agent infrastructure...`).start()
-          try {
-            const scriptPath = join(projectPath, "scripts/services/onboard-service.sh")
-
-            if (!existsSync(scriptPath)) {
-              onboardSpinner.fail(`[${onboardStepNum}/${totalSteps}] Onboard script not found`)
-              console.log(chalk.yellow("  Skipping - install services system first"))
-              continue
-            }
-
-            // Run onboard-service.sh
-            onboardSpinner.text = `[${onboardStepNum}/${totalSteps}] Creating service infrastructure...`
-            execSync(
-              `bash "${scriptPath}" "${resolvedPath}" "${metadata.name}" "${metadata.type}" "${metadata.description}"`,
-              {
-                cwd: projectPath,
-                stdio: "pipe",
-              }
-            )
-
-            // Generate agent definition
-            const agentStepNum = isGitURL ? 4 : 3
-            onboardSpinner.text = `[${agentStepNum}/${totalSteps}] Generating agent definition...`
-            const agentDef = generateAgentDefinition(metadata, resolvedPath, projectPath)
-            writeAgentDefinition(agentDef, projectPath)
-
-            // Generate skill wrapper
-            onboardSpinner.text = `[${agentStepNum}/${totalSteps}] Generating skill wrapper...`
-            writeSkillFiles(metadata, resolvedPath, projectPath)
-
-            // Update manifests
-            const manifestStepNum = isGitURL ? 4 : 3
-            onboardSpinner.text = `[${manifestStepNum}/${totalSteps}] Updating GTM manifests...`
-
-            // Update services.json
-            const servicesFile = join(projectPath, ".jfl/services.json")
-            if (existsSync(servicesFile)) {
-              const services = JSON.parse(readFileSync(servicesFile, "utf-8"))
-
-              services[metadata.name] = {
-                name: metadata.name.charAt(0).toUpperCase() + metadata.name.slice(1),
-                type: metadata.type === "web" || metadata.type === "api" ? "process" : metadata.type,
-                description: metadata.description,
-                path: resolvedPath,
-              }
-
-              if (metadata.port) {
-                services[metadata.name].port = metadata.port
-                services[metadata.name].detection = `lsof -i :${metadata.port} | grep LISTEN`
-              }
-
-              if (metadata.commands) {
-                services[metadata.name].commands = {}
-                if (metadata.commands.start) services[metadata.name].commands.start = metadata.commands.start
-                if (metadata.commands.stop) services[metadata.name].commands.stop = metadata.commands.stop
-                if (metadata.commands.logs) services[metadata.name].commands.logs = metadata.commands.logs
-              }
-
-              if (metadata.healthcheck) {
-                services[metadata.name].healthcheck = metadata.healthcheck
-              }
-
-              writeFileSync(servicesFile, JSON.stringify(services, null, 2) + "\n")
-            }
-
-            // Update projects.manifest.json
-            const manifestFile = join(projectPath, ".jfl/projects.manifest.json")
-            if (existsSync(manifestFile)) {
-              const manifest = JSON.parse(readFileSync(manifestFile, "utf-8"))
-
-              if (!manifest.projects) {
-                manifest.projects = {}
-              }
-
-              manifest.projects[metadata.name] = {
-                type: "service",
-                service_type: metadata.type,
-                location: resolvedPath,
-                description: metadata.description,
-                agent_enabled: true,
-              }
-
-              writeFileSync(manifestFile, JSON.stringify(manifest, null, 2) + "\n")
-            }
-
-            onboardSpinner.succeed(
-              `[${totalSteps}/${totalSteps}] ${chalk.green("✓")} Service agent ready: ${chalk.cyan("@" + metadata.name)}`
-            )
-            onboardedServices.push(metadata.name)
-            console.log()
-          } catch (err: any) {
-            onboardSpinner.fail("Failed to onboard service")
-            console.log(chalk.gray(`  ${err.message}`))
-            continue
-          }
-        } catch (err: any) {
-          console.log(chalk.red(`  Error: ${err.message}`))
-        }
-      }
-
-      if (onboardedServices.length > 0) {
-        console.log(chalk.cyan("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"))
-        p.log.success(`${chalk.bold(onboardedServices.length)} service agent${onboardedServices.length > 1 ? "s" : ""} ready!`)
-        console.log()
-        onboardedServices.forEach((name) => {
-          console.log(chalk.green("  ✓") + chalk.cyan(` @${name}`) + chalk.gray(` - invoke via @-mention or /${name}`))
-        })
-        console.log()
-
-        // Commit the service onboarding
-        try {
-          execSync(`git add .`, { cwd: projectPath, stdio: "pipe" })
-          execSync(`git commit -m "Onboard services: ${onboardedServices.join(", ")}"`, {
-            cwd: projectPath,
-            stdio: "pipe"
-          })
-        } catch {
-          // Ignore commit errors
-        }
-      } else {
-        p.log.info("No services onboarded. Add them later with: jfl onboard <path|url>")
-      }
-    } else {
-      p.log.info("Skip service onboarding. Add services later with: jfl onboard <path|url>")
-    }
-
-    // Offer semantic search setup
+    // Offer semantic search setup (before service onboarding for smoother flow)
     p.note(
       "Search your workspace by meaning, not just keywords.\n" +
       "Requires qmd (local search engine) + ~1.5GB for models.",
@@ -784,6 +539,225 @@ export async function initCommand(options?: { name?: string }) {
       }
     } else {
       console.log(chalk.gray("  Enable later with /search in Claude Code"))
+    }
+
+    // Offer service onboarding
+    p.note(
+      "Set up service agents for your repos (API, web app, etc.).\n" +
+      "Each service gets its own agent that you can invoke via @-mentions.",
+      chalk.hex("#FFA500")("Service Agents")
+    )
+
+    const onboardServices = await p.confirm({
+      message: "Onboard services now?",
+      initialValue: true,
+    })
+
+    if (p.isCancel(onboardServices)) {
+      p.cancel("Setup cancelled.")
+      process.exit(0)
+    }
+
+    const onboardedServices: string[] = []
+    let serviceCount = 0
+
+    if (onboardServices) {
+      let addingServices = true
+
+      while (addingServices) {
+        const servicePath = await p.text({
+          message: onboardedServices.length === 0
+            ? "Service path or git URL:"
+            : "Add another service (or press Enter to skip):",
+          placeholder: onboardedServices.length === 0
+            ? "/path/to/service or git@github.com:user/repo.git"
+            : "Press Enter to continue",
+          validate: (input: string) => {
+            if (onboardedServices.length === 0 && !input.trim()) {
+              return "Please enter a service path or URL"
+            }
+          },
+        })
+
+        if (p.isCancel(servicePath)) {
+          p.cancel("Setup cancelled.")
+          process.exit(0)
+        }
+
+        // If empty and not first service, user is done adding services
+        if (!servicePath || (servicePath as string).trim() === "") {
+          addingServices = false
+          break
+        }
+
+        serviceCount++
+        const servicePathStr = servicePath as string
+
+        try {
+          console.log(chalk.cyan(`\n━━━ Service ${serviceCount} ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n`))
+
+          // Determine if path or URL
+          const isGitURL =
+            servicePathStr.startsWith("git@") ||
+            servicePathStr.startsWith("https://") ||
+            servicePathStr.startsWith("http://")
+
+          let resolvedPath = servicePathStr
+
+          // Clone if git URL
+          if (isGitURL) {
+            const cloneSpinner = ora(`[1/3] Cloning repository...`).start()
+            try {
+              const match = servicePathStr.match(/\/([^\/]+?)(\.git)?$/)
+              if (!match) {
+                cloneSpinner.fail("Invalid git URL")
+                continue
+              }
+
+              const repoName = match[1]
+              const { getCodeDirectory } = await import("../utils/jfl-config.js")
+              const codeDir = await getCodeDirectory()
+              const cloneDir = join(codeDir, "repos")
+              const repoPath = join(cloneDir, repoName)
+
+              if (existsSync(repoPath)) {
+                cloneSpinner.succeed(`[1/3] Using existing repo at ${repoPath}`)
+                execSync("git pull", { cwd: repoPath, stdio: "pipe" })
+              } else {
+                execSync(`git clone ${servicePathStr} ${repoPath}`, { stdio: "pipe" })
+                cloneSpinner.succeed(`[1/3] Cloned to ${repoPath}`)
+              }
+
+              resolvedPath = repoPath
+            } catch (err: any) {
+              cloneSpinner.fail("Failed to clone")
+              console.log(chalk.gray(`  ${err.message}`))
+              continue
+            }
+          } else {
+            // Local path - resolve and check exists
+            resolvedPath = join(process.cwd(), servicePathStr)
+            if (!existsSync(resolvedPath)) {
+              console.log(chalk.red(`  Path does not exist: ${resolvedPath}`))
+              continue
+            }
+          }
+
+          // Auto-detect metadata
+          const detectStep = isGitURL ? 2 : 1
+          const totalSteps = isGitURL ? 3 : 2
+          const detectSpinner = ora(`[${detectStep}/${totalSteps}] Detecting service metadata...`).start()
+          let metadata
+          try {
+            metadata = extractServiceMetadata(resolvedPath)
+            detectSpinner.succeed(`[${detectStep}/${totalSteps}] Detected: ${chalk.cyan(metadata.name)} (${chalk.gray(metadata.type)})`)
+          } catch (err: any) {
+            detectSpinner.fail("Failed to detect metadata")
+            console.log(chalk.gray(`  ${err.message}`))
+            continue
+          }
+
+          // Generate agent definition + skill wrapper (no shell script needed)
+          const genStep = isGitURL ? 3 : 2
+          const genSpinner = ora(`[${genStep}/${totalSteps}] Generating agent & skill...`).start()
+          try {
+            // Generate agent definition
+            const agentDef = generateAgentDefinition(metadata, resolvedPath, projectPath)
+            writeAgentDefinition(agentDef, projectPath)
+
+            // Generate skill wrapper
+            writeSkillFiles(metadata, resolvedPath, projectPath)
+
+            // Update services.json
+            const servicesFile = join(projectPath, ".jfl/services.json")
+            if (existsSync(servicesFile)) {
+              const services = JSON.parse(readFileSync(servicesFile, "utf-8"))
+
+              services[metadata.name] = {
+                name: metadata.name.charAt(0).toUpperCase() + metadata.name.slice(1),
+                type: metadata.type === "web" || metadata.type === "api" ? "process" : metadata.type,
+                description: metadata.description,
+                path: resolvedPath,
+              }
+
+              if (metadata.port) {
+                services[metadata.name].port = metadata.port
+                services[metadata.name].detection = `lsof -i :${metadata.port} | grep LISTEN`
+              }
+
+              if (metadata.commands) {
+                services[metadata.name].commands = {} as any
+                if (metadata.commands.start) (services[metadata.name].commands as any).start = metadata.commands.start
+                if (metadata.commands.stop) (services[metadata.name].commands as any).stop = metadata.commands.stop
+                if (metadata.commands.logs) (services[metadata.name].commands as any).logs = metadata.commands.logs
+              }
+
+              if (metadata.healthcheck) {
+                services[metadata.name].healthcheck = metadata.healthcheck
+              }
+
+              writeFileSync(servicesFile, JSON.stringify(services, null, 2) + "\n")
+            }
+
+            // Update projects.manifest.json
+            const manifestFile = join(projectPath, ".jfl/projects.manifest.json")
+            if (existsSync(manifestFile)) {
+              const manifest = JSON.parse(readFileSync(manifestFile, "utf-8"))
+
+              if (!manifest.projects) {
+                manifest.projects = {}
+              }
+
+              manifest.projects[metadata.name] = {
+                type: "service",
+                service_type: metadata.type,
+                location: resolvedPath,
+                description: metadata.description,
+                agent_enabled: true,
+              }
+
+              writeFileSync(manifestFile, JSON.stringify(manifest, null, 2) + "\n")
+            }
+
+            genSpinner.succeed(
+              `[${totalSteps}/${totalSteps}] ${chalk.green("✓")} Service agent ready: ${chalk.cyan("@" + metadata.name)}`
+            )
+            onboardedServices.push(metadata.name)
+            console.log()
+          } catch (err: any) {
+            genSpinner.fail("Failed to onboard service")
+            console.log(chalk.gray(`  ${err.message}`))
+            continue
+          }
+        } catch (err: any) {
+          console.log(chalk.red(`  Error: ${err.message}`))
+        }
+      }
+
+      if (onboardedServices.length > 0) {
+        console.log(chalk.cyan("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"))
+        p.log.success(`${chalk.bold(onboardedServices.length)} service agent${onboardedServices.length > 1 ? "s" : ""} ready!`)
+        console.log()
+        onboardedServices.forEach((name) => {
+          console.log(chalk.green("  ✓") + chalk.cyan(` @${name}`) + chalk.gray(` - invoke via @-mention or /${name}`))
+        })
+        console.log()
+
+        // Commit the service onboarding
+        try {
+          execSync(`git add .`, { cwd: projectPath, stdio: "pipe" })
+          execSync(`git commit -m "Onboard services: ${onboardedServices.join(", ")}"`, {
+            cwd: projectPath,
+            stdio: "pipe"
+          })
+        } catch {
+          // Ignore commit errors
+        }
+      } else {
+        p.log.info("No services onboarded. Add them later with: jfl onboard <path|url>")
+      }
+    } else {
+      p.log.info("Skip service onboarding. Add services later with: jfl onboard <path|url>")
     }
 
     // Success message

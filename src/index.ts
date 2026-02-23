@@ -113,11 +113,11 @@ program
   .command("context-hub")
   .description("Manage Context Hub daemon (unified context for AI agents)")
   .argument("[action]", "start, stop, restart, status, ensure, query, serve")
-  .option("-p, --port <port>", "Port to run on (default: 4242)", "4242")
+  .option("-p, --port <port>", "Port to run on (default: per-project)")
   .option("-g, --global", "Run in global mode (serve all GTM projects)")
   .action(async (action, options) => {
     await contextHubCommand(action, {
-      port: parseInt(options.port, 10),
+      port: options.port ? parseInt(options.port, 10) : undefined,
       global: options.global || false,
     })
   })

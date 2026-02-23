@@ -13,7 +13,9 @@ import * as fs from "fs"
 import * as path from "path"
 import { execSync } from "child_process"
 
-const CONTEXT_HUB_URL = process.env.CONTEXT_HUB_URL || "http://localhost:4242"
+import { getProjectHubUrl } from "../utils/context-hub-port.js"
+
+const CONTEXT_HUB_URL = process.env.CONTEXT_HUB_URL || getProjectHubUrl()
 const TOKEN_FILE = ".jfl/context-hub.token"
 
 // ============================================================================

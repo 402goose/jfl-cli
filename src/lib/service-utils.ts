@@ -13,6 +13,7 @@ import { execSync } from "child_process"
 import chalk from "chalk"
 import ora, { Ora } from "ora"
 import { JFL_PATHS } from "../utils/jfl-paths.js"
+import { getProjectPort } from "../utils/context-hub-port.js"
 
 // ============================================================================
 // Types
@@ -92,7 +93,7 @@ export function writeCliVersion(version: string, services?: Record<string, { ver
     version,
     updated_at: new Date().toISOString(),
     services: services || {
-      "context-hub": { version, port: 4242 },
+      "context-hub": { version, port: getProjectPort() },
       "service-manager": { version, port: 3402 }
     }
   }
@@ -413,7 +414,7 @@ export async function restartCoreServices(
   const contextHubResult = await restartService("context-hub", {
     stopCommand: "jfl context-hub stop",
     startCommand: "jfl context-hub ensure",
-    healthCheck: "http://localhost:4242/health",
+    healthCheck: `http://localhost:${getProjectPort()}/health`,
     timeout: 5000
   })
 
@@ -444,7 +445,7 @@ export async function validateCoreServices(): Promise<{
   // Check Context Hub
   const contextHubHealth = await checkServiceHealth(
     "context-hub",
-    "http://localhost:4242/health",
+    `http://localhost:${getProjectPort()}/health`,
     ".jfl/context-hub.pid"
   )
 

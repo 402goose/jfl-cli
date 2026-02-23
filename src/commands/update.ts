@@ -22,6 +22,7 @@ import {
   restartCoreServices,
   validateCoreServices
 } from "../lib/service-utils.js"
+import { persistProjectPort } from "../utils/context-hub-port.js"
 
 const TEMPLATE_REPO = "https://github.com/402goose/jfl-template.git"
 const TEMP_DIR = ".jfl-update-temp"
@@ -354,6 +355,20 @@ export async function updateCommand(options: { dry?: boolean; autoUpdate?: boole
     for (const p of PRESERVE_PATHS) {
       if (fs.existsSync(path.join(cwd, p))) {
         console.log(chalk.gray(`    • ${p}`))
+      }
+    }
+
+    // Migrate existing projects to per-project Context Hub ports
+    const configPath2 = path.join(cwd, ".jfl", "config.json")
+    if (fs.existsSync(configPath2)) {
+      try {
+        const cfg = JSON.parse(fs.readFileSync(configPath2, "utf-8"))
+        if (!cfg.contextHub?.port) {
+          const port = persistProjectPort(cwd)
+          console.log(chalk.green(`\n  ✓ Assigned Context Hub port: ${port}`))
+        }
+      } catch {
+        // Non-fatal
       }
     }
 

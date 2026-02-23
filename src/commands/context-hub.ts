@@ -23,8 +23,7 @@ import {
 } from "../lib/memory-db.js"
 import { searchMemories } from "../lib/memory-search.js"
 import { indexJournalEntries, startPeriodicIndexing } from "../lib/memory-indexer.js"
-
-const DEFAULT_PORT = 4242
+import { getProjectPort } from "../utils/context-hub-port.js"
 const PID_FILE = ".jfl/context-hub.pid"
 const LOG_FILE = ".jfl/logs/context-hub.log"
 const TOKEN_FILE = ".jfl/context-hub.token"
@@ -898,7 +897,7 @@ export async function contextHubCommand(
 ) {
   const isGlobal = options.global || false
   const projectRoot = isGlobal ? homedir() : process.cwd()
-  const port = options.port || DEFAULT_PORT
+  const port = options.port || getProjectPort(projectRoot)
 
   // Ensure directories exist
   if (isGlobal) {
@@ -1203,7 +1202,7 @@ export async function contextHubCommand(
       console.log("    jfl context-hub query       Quick context query")
       console.log()
       console.log(chalk.gray("  Options:"))
-      console.log("    --port <port>   Port to run on (default: 4242)")
+      console.log("    --port <port>   Port to run on (default: per-project)")
       console.log()
     }
   }

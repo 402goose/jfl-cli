@@ -28,8 +28,9 @@ import {
   type AgentSession,
 } from "../lib/openclaw-registry.js"
 import { findProjectRoot, isInJFLProject } from "../utils/jfl-config.js"
+import { getProjectHubUrl } from "../utils/context-hub-port.js"
 
-const CONTEXT_HUB_URL = process.env.CONTEXT_HUB_URL || "http://localhost:4242"
+const CONTEXT_HUB_URL = process.env.CONTEXT_HUB_URL || getProjectHubUrl()
 
 // ============================================================================
 // Helpers

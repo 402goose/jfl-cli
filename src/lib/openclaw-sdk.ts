@@ -15,6 +15,7 @@ import { execSync } from "child_process"
 import { existsSync, readFileSync, appendFileSync, mkdirSync } from "fs"
 import { join } from "path"
 import axios, { type AxiosInstance } from "axios"
+import { getProjectHubUrl } from "../utils/context-hub-port.js"
 
 // ============================================================================
 // Types
@@ -106,7 +107,7 @@ export class OpenClawClient {
 
   constructor(config: OpenClawConfig) {
     this.agentId = config.agentId
-    this.hubUrl = config.hubUrl || "http://localhost:4242"
+    this.hubUrl = config.hubUrl || getProjectHubUrl()
     this.gtmPath = config.gtmPath || null
 
     this.http = axios.create({

@@ -11,6 +11,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { execSync } from "child_process";
 import axios from "axios";
+import { getProjectHubUrl } from "../utils/context-hub-port.js";
 
 export interface ServiceConfig {
   name: string;
@@ -740,7 +741,7 @@ export async function phoneHomeToGTM(
     // Check Context Hub connectivity
     try {
       
-      await axios.get("http://localhost:4242/health", { timeout: 1000 });
+      await axios.get(`${getProjectHubUrl(servicePath)}/health`, { timeout: 1000 });
       healthData.context_hub_connected = true;
     } catch {
       healthData.context_hub_connected = false;

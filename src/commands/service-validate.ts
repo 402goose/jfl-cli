@@ -10,6 +10,7 @@ import fs from 'fs';
 import path from 'path';
 import { execSync } from 'child_process';
 import chalk from 'chalk';
+import { getProjectPort, getProjectHubUrl } from '../utils/context-hub-port.js';
 
 interface ValidationCheck {
   category: string;
@@ -411,12 +412,13 @@ async function checkContextAndJournal(cwd: string, config: ServiceConfig): Promi
 
   // Check Context Hub connectivity
   try {
-    const response = await fetch('http://localhost:4242/health');
+    const hubUrl = getProjectHubUrl(cwd);
+    const response = await fetch(`${hubUrl}/health`);
     if (response.ok) {
       checks.push({
         category: 'Context Hub',
         status: 'pass',
-        message: 'Reachable at http://localhost:4242',
+        message: `Reachable at ${hubUrl}`,
         fixable: false
       });
     } else {
@@ -453,7 +455,7 @@ async function checkContextAndJournal(cwd: string, config: ServiceConfig): Promi
               command: 'jfl-context-hub-mcp',
               args: [],
               env: {
-                CONTEXT_HUB_URL: 'http://localhost:4242'
+                CONTEXT_HUB_URL: getProjectHubUrl(cwd)
               }
             }
           }
