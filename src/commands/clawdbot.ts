@@ -1,10 +1,11 @@
 /**
- * Clawdbot Plugin Management
+ * OpenClaw Gateway Plugin Management
  *
- * Installs and manages the JFL plugin for Clawdbot gateway.
- * Copies plugin files to ~/.clawdbot/plugins/jfl/ and configures clawdbot.json.
+ * Installs and manages the JFL plugin for OpenClaw gateway.
+ * Copies plugin files to ~/.openclaw/plugins/jfl/ (or ~/.clawdbot/plugins/jfl/ for legacy installs)
+ * and configures the gateway config file.
  *
- * @purpose CLI commands for installing/checking JFL Clawdbot plugin
+ * @purpose CLI commands for installing/checking JFL OpenClaw gateway plugin
  */
 
 import chalk from "chalk"
@@ -15,22 +16,39 @@ import { execSync } from "child_process"
 import { fileURLToPath } from "url"
 import * as path from "path"
 
-const CLAWDBOT_DIR = join(homedir(), ".clawdbot")
-const PLUGINS_DIR = join(CLAWDBOT_DIR, "plugins")
-const PLUGIN_TARGET = join(PLUGINS_DIR, "jfl")
-const CLAWDBOT_CONFIG = join(CLAWDBOT_DIR, "clawdbot.json")
+const OPENCLAW_DIR = join(homedir(), ".openclaw")
+const CLAWDBOT_DIR = join(homedir(), ".clawdbot") // legacy fallback
 
-function isClawdbotInstalled(): boolean {
-  // Check for ~/.clawdbot/ directory
-  if (existsSync(CLAWDBOT_DIR)) return true
+function resolveGatewayDir(): string | null {
+  if (existsSync(OPENCLAW_DIR)) return OPENCLAW_DIR
+  if (existsSync(CLAWDBOT_DIR)) return CLAWDBOT_DIR
+  return null
+}
 
-  // Check for clawdbot binary
+function getPluginTarget(): string {
+  const dir = resolveGatewayDir() ?? OPENCLAW_DIR
+  return join(dir, "plugins", "jfl")
+}
+
+function getConfigPath(): string {
+  const dir = resolveGatewayDir()
+  if (!dir) throw new Error("No gateway installation found")
+  const openclawConfig = join(dir, "openclaw.json")
+  const clawdbotConfig = join(dir, "clawdbot.json")
+  return existsSync(openclawConfig) ? openclawConfig : clawdbotConfig
+}
+
+function isGatewayInstalled(): boolean {
+  if (resolveGatewayDir() !== null) return true
+  try {
+    execSync("which openclaw", { stdio: "pipe" })
+    return true
+  } catch {}
   try {
     execSync("which clawdbot", { stdio: "pipe" })
     return true
-  } catch {
-    return false
-  }
+  } catch {}
+  return false
 }
 
 function getPluginSourceDir(): string {
@@ -41,16 +59,24 @@ function getPluginSourceDir(): string {
 }
 
 function isPluginInstalled(): boolean {
-  return existsSync(PLUGIN_TARGET) && existsSync(join(PLUGIN_TARGET, "index.js"))
+  const pluginTarget = getPluginTarget()
+  return existsSync(pluginTarget) && existsSync(join(pluginTarget, "index.js"))
 }
 
 function isPluginEnabledInConfig(): { loaded: boolean; enabled: boolean } {
-  if (!existsSync(CLAWDBOT_CONFIG)) {
+  let configPath: string
+  try {
+    configPath = getConfigPath()
+  } catch {
+    return { loaded: false, enabled: false }
+  }
+
+  if (!existsSync(configPath)) {
     return { loaded: false, enabled: false }
   }
 
   try {
-    const config = JSON.parse(readFileSync(CLAWDBOT_CONFIG, "utf-8"))
+    const config = JSON.parse(readFileSync(configPath, "utf-8"))
     const paths: string[] = config?.plugins?.load?.paths ?? []
     const loaded = paths.some((p: string) => p.includes("plugins/jfl") || p.includes("plugins\\jfl"))
     const enabled = config?.plugins?.entries?.jfl?.enabled === true
@@ -61,86 +87,91 @@ function isPluginEnabledInConfig(): { loaded: boolean; enabled: boolean } {
 }
 
 function copyPluginFiles(srcDir: string): void {
-  // Create target directory
-  mkdirSync(PLUGIN_TARGET, { recursive: true })
+  const pluginTarget = getPluginTarget()
+  mkdirSync(pluginTarget, { recursive: true })
 
-  // Copy all files from plugin source
-  const filesToCopy = ["index.js", "clawdbot.plugin.json"]
+  const filesToCopy = ["index.js", "openclaw.plugin.json"]
 
   for (const file of filesToCopy) {
     const src = join(srcDir, file)
     if (existsSync(src)) {
-      copyFileSync(src, join(PLUGIN_TARGET, file))
+      copyFileSync(src, join(pluginTarget, file))
     }
   }
 
-  // Also copy index.ts if present (for reference)
   const tsSource = join(srcDir, "index.ts")
   if (existsSync(tsSource)) {
-    copyFileSync(tsSource, join(PLUGIN_TARGET, "index.ts"))
+    copyFileSync(tsSource, join(pluginTarget, "index.ts"))
   }
 
-  // Create a minimal package.json so Clawdbot can load it as a module
   const packageJson = {
     name: "jfl-clawdbot-plugin",
     version: "0.1.0",
-    description: "JFL plugin for Clawdbot",
+    description: "JFL plugin for OpenClaw gateway",
     main: "index.js",
     type: "module",
   }
-  writeFileSync(join(PLUGIN_TARGET, "package.json"), JSON.stringify(packageJson, null, 2) + "\n")
+  writeFileSync(join(pluginTarget, "package.json"), JSON.stringify(packageJson, null, 2) + "\n")
 }
 
-function updateClawdbotConfig(): void {
+function updateGatewayConfig(): void {
+  let configPath: string
+  try {
+    configPath = getConfigPath()
+  } catch {
+    // No gateway dir found — write to openclaw.json
+    const gatewayDir = OPENCLAW_DIR
+    mkdirSync(gatewayDir, { recursive: true })
+    configPath = join(gatewayDir, "openclaw.json")
+  }
+
   let config: Record<string, any> = {}
 
-  if (existsSync(CLAWDBOT_CONFIG)) {
+  if (existsSync(configPath)) {
     try {
-      config = JSON.parse(readFileSync(CLAWDBOT_CONFIG, "utf-8"))
+      config = JSON.parse(readFileSync(configPath, "utf-8"))
     } catch {
-      // If config is malformed, start fresh
       config = {}
     }
   }
 
-  // Ensure plugins structure exists
   if (!config.plugins) config.plugins = {}
   if (!config.plugins.load) config.plugins.load = {}
   if (!Array.isArray(config.plugins.load.paths)) config.plugins.load.paths = []
   if (!config.plugins.entries) config.plugins.entries = {}
 
-  // Add plugin path if not already present
-  const pluginPath = PLUGIN_TARGET
+  const pluginTarget = getPluginTarget()
   const alreadyLoaded = config.plugins.load.paths.some(
     (p: string) => p.includes("plugins/jfl") || p.includes("plugins\\jfl")
   )
   if (!alreadyLoaded) {
-    config.plugins.load.paths.push(pluginPath)
+    config.plugins.load.paths.push(pluginTarget)
   }
 
-  // Add plugin entry if not already present
   if (!config.plugins.entries.jfl) {
     config.plugins.entries.jfl = { enabled: true }
   } else {
     config.plugins.entries.jfl.enabled = true
   }
 
-  writeFileSync(CLAWDBOT_CONFIG, JSON.stringify(config, null, 2) + "\n")
+  writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n")
 }
 
 export async function clawdbotSetupCommand(): Promise<void> {
-  console.log(chalk.bold("\n  JFL Clawdbot Plugin Setup\n"))
+  console.log(chalk.bold("\n  JFL OpenClaw Plugin Setup\n"))
 
-  // Step 1: Check if Clawdbot is installed
-  if (!isClawdbotInstalled()) {
-    console.log(chalk.red("  Clawdbot not found."))
-    console.log(chalk.gray("  Looking for ~/.clawdbot/ directory or clawdbot binary.\n"))
-    console.log(chalk.gray("  Install Clawdbot first: https://clawd.bot\n"))
+  if (!isGatewayInstalled()) {
+    console.log(chalk.red("  OpenClaw is not installed."))
+    console.log()
+    console.log(chalk.gray("  Install it from: ") + chalk.white("https://openclaw.dev"))
+    console.log()
+    console.log(chalk.gray("  (Also supports legacy ~/.clawdbot installations)"))
+    console.log()
     process.exit(1)
   }
-  console.log(chalk.green("  [1/4] Clawdbot detected"))
+  const gatewayDir = resolveGatewayDir()!
+  console.log(chalk.green("  [1/4] OpenClaw detected") + chalk.gray(` (${gatewayDir})`))
 
-  // Step 2: Find plugin source files
   const pluginSrc = getPluginSourceDir()
   if (!existsSync(pluginSrc) || !existsSync(join(pluginSrc, "index.js"))) {
     console.log(chalk.red("  Plugin source files not found."))
@@ -150,7 +181,6 @@ export async function clawdbotSetupCommand(): Promise<void> {
   }
   console.log(chalk.green("  [2/4] Plugin source located"))
 
-  // Step 3: Copy plugin files
   const updating = isPluginInstalled()
   try {
     copyPluginFiles(pluginSrc)
@@ -164,43 +194,50 @@ export async function clawdbotSetupCommand(): Promise<void> {
     process.exit(1)
   }
 
-  // Step 4: Update clawdbot.json config
   try {
-    updateClawdbotConfig()
-    console.log(chalk.green("  [4/4] Clawdbot config updated"))
+    updateGatewayConfig()
+    console.log(chalk.green("  [4/4] Gateway config updated"))
   } catch (err: any) {
     console.log(chalk.red(`  Failed to update config: ${err.message}`))
-    console.log(chalk.gray("  You may need to manually add the plugin to ~/.clawdbot/clawdbot.json\n"))
+    console.log(chalk.gray("  You may need to manually add the plugin to your gateway config\n"))
     process.exit(1)
   }
 
-  // Success
+  const pluginTarget = getPluginTarget()
+  let configPath: string
+  try {
+    configPath = getConfigPath()
+  } catch {
+    configPath = join(gatewayDir, "openclaw.json")
+  }
+
   console.log(chalk.green("\n  JFL plugin installed successfully.\n"))
-  console.log(chalk.gray("  Plugin path:  ") + chalk.white(PLUGIN_TARGET))
-  console.log(chalk.gray("  Config:       ") + chalk.white(CLAWDBOT_CONFIG))
+  console.log(chalk.gray("  Plugin path:  ") + chalk.white(pluginTarget))
+  console.log(chalk.gray("  Config:       ") + chalk.white(configPath))
   console.log()
   console.log(chalk.cyan("  Restart your gateway to load the plugin:"))
-  console.log(chalk.white("    clawdbot gateway"))
+  console.log(chalk.white("    openclaw gateway"))
   console.log()
 }
 
 export async function clawdbotStatusCommand(): Promise<void> {
-  console.log(chalk.bold("\n  JFL Clawdbot Plugin Status\n"))
+  console.log(chalk.bold("\n  JFL OpenClaw Plugin Status\n"))
 
-  // Clawdbot installed?
-  const installed = isClawdbotInstalled()
+  const installed = isGatewayInstalled()
+  const gatewayDir = resolveGatewayDir()
   console.log(
     installed
-      ? chalk.green("  Clawdbot:     ") + "installed"
-      : chalk.red("  Clawdbot:     ") + "not found"
+      ? chalk.green("  OpenClaw:     ") + "installed" + (gatewayDir ? chalk.gray(` (${gatewayDir})`) : "")
+      : chalk.red("  OpenClaw:     ") + "not found"
   )
 
   if (!installed) {
-    console.log(chalk.gray("\n  Install Clawdbot first: https://clawd.bot\n"))
+    console.log(chalk.gray("\n  Install OpenClaw from: ") + chalk.white("https://openclaw.dev"))
+    console.log(chalk.gray("  (Also supports legacy ~/.clawdbot installations)\n"))
     return
   }
 
-  // Plugin installed?
+  const pluginTarget = getPluginTarget()
   const pluginInstalled = isPluginInstalled()
   console.log(
     pluginInstalled
@@ -209,16 +246,14 @@ export async function clawdbotStatusCommand(): Promise<void> {
   )
 
   if (pluginInstalled) {
-    console.log(chalk.gray("  Plugin path:  ") + PLUGIN_TARGET)
+    console.log(chalk.gray("  Plugin path:  ") + pluginTarget)
 
-    // Show plugin files
     try {
-      const files = readdirSync(PLUGIN_TARGET)
+      const files = readdirSync(pluginTarget)
       console.log(chalk.gray("  Files:        ") + files.join(", "))
     } catch { /* skip */ }
   }
 
-  // Config status?
   const { loaded, enabled } = isPluginEnabledInConfig()
   console.log(
     loaded
@@ -231,12 +266,11 @@ export async function clawdbotStatusCommand(): Promise<void> {
       : chalk.yellow("  Enabled:      ") + "no"
   )
 
-  // Suggestions
   if (!pluginInstalled) {
-    console.log(chalk.cyan("\n  Run 'jfl clawdbot setup' to install the plugin.\n"))
+    console.log(chalk.cyan("\n  Run 'jfl openclaw plugin setup' to install the plugin.\n"))
   } else if (!loaded || !enabled) {
-    console.log(chalk.cyan("\n  Run 'jfl clawdbot setup' to fix the configuration.\n"))
+    console.log(chalk.cyan("\n  Run 'jfl openclaw plugin setup' to fix the configuration.\n"))
   } else {
-    console.log(chalk.green("\n  Everything looks good. Use /jfl in your Clawdbot gateway.\n"))
+    console.log(chalk.green("\n  Everything looks good. Use /jfl in your OpenClaw gateway.\n"))
   }
 }
