@@ -192,6 +192,53 @@ const TOOLS = [
       type: "object" as const,
       properties: {}
     }
+  },
+  {
+    name: "events_publish",
+    description: "Publish an event to the MAP event bus. Use to signal state changes, task completion, or custom events.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        type: {
+          type: "string",
+          description: "Event type (e.g., 'task:completed', 'decision:made', 'journal:entry', 'custom')"
+        },
+        source: {
+          type: "string",
+          description: "Event source identifier (e.g., 'claude-code', 'peter-parker')"
+        },
+        data: {
+          type: "object",
+          description: "Event payload data"
+        },
+        target: {
+          type: "string",
+          description: "Optional specific consumer"
+        }
+      },
+      required: ["type", "source"]
+    }
+  },
+  {
+    name: "events_recent",
+    description: "Get recent events from the MAP event bus. Check what happened across services and agents.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        pattern: {
+          type: "string",
+          description: "Glob pattern to filter events (e.g., 'peter:*', 'session:*', '*')"
+        },
+        since: {
+          type: "string",
+          description: "ISO date - only return events after this time"
+        },
+        limit: {
+          type: "number",
+          description: "Maximum events to return (default: 20)"
+        }
+      }
+    }
   }
 ]
 
@@ -652,6 +699,34 @@ async function handleToolCall(name: string, args: any): Promise<string> {
 - Date range: ${result.date_range.earliest ? new Date(result.date_range.earliest as string).toISOString().split('T')[0] : 'N/A'} to ${result.date_range.latest ? new Date(result.date_range.latest as string).toISOString().split('T')[0] : 'N/A'}
 - Embeddings: ${result.embeddings.available ? `✓ ${result.embeddings.count} indexed` : '✗ Not available'}
 - Last index: ${result.last_index ? new Date(result.last_index as string).toISOString() : 'N/A'}`
+    }
+
+    case "events_publish": {
+      const result = await callContextHub("/api/events", {
+        type: args.type,
+        source: args.source,
+        target: args.target,
+        data: args.data || {},
+      })
+      return `Event published: ${result.type} (${result.id})`
+    }
+
+    case "events_recent": {
+      const params = new URLSearchParams()
+      if (args.pattern) params.set("pattern", args.pattern)
+      if (args.since) params.set("since", args.since)
+      params.set("limit", String(args.limit || 20))
+
+      const result = await callContextHub(`/api/events?${params.toString()}`)
+      if (!result.events || result.events.length === 0) {
+        return "No events found."
+      }
+
+      const lines = result.events.map((e: any, i: number) => {
+        const time = new Date(e.ts).toISOString().replace('T', ' ').slice(0, 19)
+        return `${i + 1}. [${e.type}] from ${e.source} (${time})\n   ${JSON.stringify(e.data).slice(0, 150)}`
+      })
+      return `${result.count} event(s):\n\n${lines.join('\n\n')}`
     }
 
     default:

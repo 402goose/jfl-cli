@@ -2,11 +2,17 @@
  * Ralph TUI Command
  *
  * Pass-through to ralph-tui for autonomous task execution.
- * Requires Bun runtime.
+ * Injects --listen for event bridge when available.
+ *
+ * @purpose CLI pass-through to ralph-tui with MAP event bridge integration
  */
 
 import { spawn, execSync } from "child_process"
+import * as fs from "fs"
+import * as path from "path"
 import chalk from "chalk"
+import { PeterParkerBridge } from "../lib/peter-parker-bridge.js"
+import { getProjectHubUrl } from "../utils/context-hub-port.js"
 
 function hasRalphTui(): boolean {
   try {
@@ -26,10 +32,17 @@ function hasBun(): boolean {
   }
 }
 
+function getAuthToken(projectRoot: string): string | null {
+  const tokenPath = path.join(projectRoot, ".jfl", "context-hub.token")
+  if (fs.existsSync(tokenPath)) {
+    return fs.readFileSync(tokenPath, "utf-8").trim()
+  }
+  return null
+}
+
 export async function ralphCommand(args: string[]): Promise<void> {
-  // Check if ralph-tui is installed
   if (!hasRalphTui()) {
-    console.log(chalk.yellow("\n⚠️  ralph-tui is not installed\n"))
+    console.log(chalk.yellow("\n  ralph-tui is not installed\n"))
 
     if (!hasBun()) {
       console.log(chalk.gray("ralph-tui requires Bun runtime."))
@@ -43,8 +56,29 @@ export async function ralphCommand(args: string[]): Promise<void> {
     return
   }
 
-  // Pass through to ralph-tui with all args
-  const child = spawn("ralph-tui", args, {
+  const projectRoot = process.cwd()
+  const finalArgs = [...args]
+
+  // Inject --listen if running a task and not already set
+  const isRunCommand = finalArgs[0] === "run"
+  const hasListen = finalArgs.includes("--listen")
+  if (isRunCommand && !hasListen) {
+    finalArgs.push("--listen")
+  }
+
+  // Start event bridge if Context Hub token available
+  const token = getAuthToken(projectRoot)
+  let bridge: PeterParkerBridge | null = null
+
+  if (token && isRunCommand) {
+    bridge = new PeterParkerBridge({
+      contextHubUrl: getProjectHubUrl(projectRoot),
+      authToken: token,
+    })
+    setTimeout(() => bridge!.start(), 1000)
+  }
+
+  const child = spawn("ralph-tui", finalArgs, {
     stdio: "inherit",
     shell: true,
   })
@@ -54,6 +88,7 @@ export async function ralphCommand(args: string[]): Promise<void> {
   })
 
   child.on("exit", (code) => {
+    if (bridge) bridge.stop()
     process.exit(code || 0)
   })
 }
@@ -67,6 +102,11 @@ export function showRalphHelp(): void {
   console.log("    jfl ralph create-prd --chat           Create PRD with AI")
   console.log("    jfl ralph setup                       Initialize in project")
   console.log("    jfl ralph status                      Show session status")
+
+  console.log(chalk.cyan("\n  Peter Parker (model routing):"))
+  console.log("    jfl peter setup [--cost|--balanced|--quality]")
+  console.log("    jfl peter run [--task <task>]")
+  console.log("    jfl peter status")
 
   console.log(chalk.cyan("\n  Shortcuts:"))
   console.log("    jfl ralph run                         Same as: ralph-tui run")

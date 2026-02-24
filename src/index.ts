@@ -45,9 +45,9 @@ import {
   searchSkillsCommand,
 } from "./commands/skills.js"
 import { ralphCommand, showRalphHelp } from "./commands/ralph.js"
+import { peterCommand } from "./commands/peter.js"
 import { clawdbotSetupCommand, clawdbotStatusCommand } from "./commands/clawdbot.js"
 import {
-  ensureDayPass,
   showDayPassStatus,
   requiresPayment,
   hasWallet,
@@ -65,7 +65,7 @@ const program = new Command()
 program
   .name("jfl")
   .description("Just Fucking Launch - AI gateway for GTM")
-  .version("0.1.1")
+  .version("0.2.2")
   .option("--no-update", "Skip automatic update check")
   .action(async (options) => {
     // Always update on session start (unless --no-update flag)
@@ -660,6 +660,18 @@ program
     await ralphCommand(args)
   })
 
+program
+  .command("peter")
+  .description("Peter Parker - model-routed agent orchestrator")
+  .argument("[action]", "setup, run, or status")
+  .option("--cost", "Cost-optimized model routing (haiku-heavy)")
+  .option("--balanced", "Balanced model routing (default)")
+  .option("--quality", "Quality-first model routing (opus-heavy)")
+  .option("-t, --task <task>", "Task to run (for run action)")
+  .action(async (action, options) => {
+    await peterCommand(action, options)
+  })
+
 // ============================================================================
 // TEST MODE (for development)
 // ============================================================================
@@ -863,7 +875,8 @@ program
     console.log("    jfl content           Content creator")
     console.log("    jfl voice             Voice input commands")
     console.log("    jfl ralph             AI agent loop (ralph-tui)")
-    console.log("    jfl context-hub       Context Hub (unified AI context)")
+    console.log("    jfl peter             Peter Parker orchestrator (model routing)")
+    console.log("    jfl context-hub       Context Hub (unified AI context + MAP event bus)")
     console.log("    jfl openclaw          OpenClaw agent protocol")
     console.log("    jfl test              Test onboarding (isolated)")
 

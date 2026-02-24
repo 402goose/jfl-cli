@@ -24,6 +24,10 @@ import {
 import { searchMemories } from "../lib/memory-search.js"
 import { indexJournalEntries, startPeriodicIndexing } from "../lib/memory-indexer.js"
 import { getProjectPort } from "../utils/context-hub-port.js"
+import { MAPEventBus } from "../lib/map-event-bus.js"
+import { WebSocketServer } from "ws"
+import type { MAPEventType } from "../types/map.js"
+
 const PID_FILE = ".jfl/context-hub.pid"
 const LOG_FILE = ".jfl/logs/context-hub.log"
 const TOKEN_FILE = ".jfl/context-hub.token"
@@ -531,7 +535,7 @@ function getUnifiedContext(projectRoot: string, query?: string, taskType?: strin
 // HTTP Server
 // ============================================================================
 
-function createServer(projectRoot: string, port: number): http.Server {
+function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus): http.Server {
   const server = http.createServer((req, res) => {
     // CORS - include Authorization header
     res.setHeader("Access-Control-Allow-Origin", "*")
@@ -732,10 +736,137 @@ function createServer(projectRoot: string, port: number): http.Server {
       return
     }
 
+    // Publish event
+    if (url.pathname === "/api/events" && req.method === "POST") {
+      if (!eventBus) {
+        res.writeHead(503, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ error: "Event bus not initialized" }))
+        return
+      }
+      let body = ""
+      req.on("data", chunk => body += chunk)
+      req.on("end", () => {
+        try {
+          const { type, source, target, session, data, ttl } = JSON.parse(body || "{}")
+          if (!type || !source) {
+            res.writeHead(400, { "Content-Type": "application/json" })
+            res.end(JSON.stringify({ error: "type and source required" }))
+            return
+          }
+          const event = eventBus.emit({
+            type: type as MAPEventType,
+            source,
+            target,
+            session,
+            data: data || {},
+            ttl,
+          })
+          res.writeHead(201, { "Content-Type": "application/json" })
+          res.end(JSON.stringify(event))
+        } catch (err: any) {
+          res.writeHead(400, { "Content-Type": "application/json" })
+          res.end(JSON.stringify({ error: err.message }))
+        }
+      })
+      return
+    }
+
+    // Get recent events
+    if (url.pathname === "/api/events" && req.method === "GET") {
+      if (!eventBus) {
+        res.writeHead(503, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ error: "Event bus not initialized" }))
+        return
+      }
+      const since = url.searchParams.get("since") || undefined
+      const pattern = url.searchParams.get("pattern") || undefined
+      const limit = url.searchParams.get("limit") ? parseInt(url.searchParams.get("limit")!, 10) : 50
+
+      const events = eventBus.getEvents({ since, pattern, limit })
+      res.writeHead(200, { "Content-Type": "application/json" })
+      res.end(JSON.stringify({ events, count: events.length }))
+      return
+    }
+
+    // SSE event stream
+    if (url.pathname === "/api/events/stream" && req.method === "GET") {
+      if (!eventBus) {
+        res.writeHead(503, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ error: "Event bus not initialized" }))
+        return
+      }
+      const patterns = (url.searchParams.get("patterns") || "*").split(",")
+
+      res.writeHead(200, {
+        "Content-Type": "text/event-stream",
+        "Cache-Control": "no-cache",
+        Connection: "keep-alive",
+        "Access-Control-Allow-Origin": "*",
+      })
+      res.write("retry: 3000\n\n")
+
+      const sub = eventBus.subscribe({
+        clientId: `sse-${Date.now()}`,
+        patterns,
+        transport: "sse",
+        callback: (event) => {
+          res.write(`id: ${event.id}\nevent: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
+        },
+      })
+
+      req.on("close", () => {
+        eventBus.unsubscribe(sub.id)
+      })
+      return
+    }
+
     // 404
     res.writeHead(404, { "Content-Type": "application/json" })
     res.end(JSON.stringify({ error: "Not found" }))
   })
+
+  // WebSocket upgrade for event streaming
+  if (eventBus) {
+    const wss = new WebSocketServer({ noServer: true })
+
+    server.on("upgrade", (request, socket, head) => {
+      const reqUrl = new URL(request.url || "/", `http://localhost:${port}`)
+
+      if (reqUrl.pathname !== "/ws/events") {
+        socket.destroy()
+        return
+      }
+
+      if (!validateAuth(request, projectRoot)) {
+        socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n")
+        socket.destroy()
+        return
+      }
+
+      wss.handleUpgrade(request, socket, head, (ws) => {
+        const patterns = (reqUrl.searchParams.get("patterns") || "*").split(",")
+
+        const sub = eventBus.subscribe({
+          clientId: `ws-${Date.now()}`,
+          patterns,
+          transport: "websocket",
+          callback: (event) => {
+            if (ws.readyState === ws.OPEN) {
+              ws.send(JSON.stringify(event))
+            }
+          },
+        })
+
+        ws.on("close", () => {
+          eventBus.unsubscribe(sub.id)
+        })
+
+        ws.on("error", () => {
+          eventBus.unsubscribe(sub.id)
+        })
+      })
+    })
+  }
 
   return server
 }
@@ -1034,7 +1165,16 @@ export async function contextHubCommand(
 
     case "serve": {
       // Run server in foreground (used by daemon)
-      const server = createServer(projectRoot, port)
+      const serviceEventsPath = path.join(projectRoot, ".jfl", "service-events.jsonl")
+      const mapPersistPath = path.join(projectRoot, ".jfl", "map-events.jsonl")
+
+      const eventBus = new MAPEventBus({
+        maxSize: 1000,
+        persistPath: mapPersistPath,
+        serviceEventsPath: fs.existsSync(serviceEventsPath) ? serviceEventsPath : null,
+      })
+
+      const server = createServer(projectRoot, port, eventBus)
       let isListening = false
 
       // When spawned as daemon, ignore SIGTERM during startup grace period.
@@ -1095,6 +1235,7 @@ export async function contextHubCommand(
           // Don't exit - memory is optional
         }
 
+        console.log(`[${timestamp}] MAP event bus initialized (buffer: 1000, subscribers: ${eventBus.getSubscriberCount()})`)
         console.log(`[${timestamp}] Ready to serve requests`)
       })
 
@@ -1119,6 +1260,7 @@ export async function contextHubCommand(
         console.log(`[${timestamp}] PID: ${process.pid}, Parent PID: ${process.ppid}`)
         console.log(`[${timestamp}] Shutting down...`)
         server.close(() => {
+          eventBus.destroy()
           console.log(`[${new Date().toISOString()}] Server closed`)
           process.exit(0)
         })
