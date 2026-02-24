@@ -804,12 +804,13 @@ async function startDaemon(projectRoot: string, port: number): Promise<{ success
     jflCmd = process.argv[1]
   }
 
-  // Start as detached process
+  // Start as detached process with CONTEXT_HUB_DAEMON=1 so the serve
+  // action knows to ignore SIGTERM during its startup grace period
   const child = spawn(jflCmd, ["context-hub", "serve", "--port", String(port)], {
     cwd: projectRoot,
     detached: true,
     stdio: ["ignore", fs.openSync(logFile, "a"), fs.openSync(logFile, "a")],
-    env: { ...process.env, NODE_ENV: "production" }
+    env: { ...process.env, NODE_ENV: "production", CONTEXT_HUB_DAEMON: "1" }
   })
 
   child.unref()
@@ -1036,6 +1037,18 @@ export async function contextHubCommand(
       const server = createServer(projectRoot, port)
       let isListening = false
 
+      // When spawned as daemon, ignore SIGTERM during startup grace period.
+      // The parent process (hook runner) may exit and send SIGTERM to the
+      // process group before we're fully detached. After grace period,
+      // re-enable normal shutdown handling.
+      const isDaemon = process.env.CONTEXT_HUB_DAEMON === "1"
+      let startupGrace = isDaemon
+      if (isDaemon) {
+        setTimeout(() => {
+          startupGrace = false
+        }, 5000)
+      }
+
       // Error handling - keep process alive
       process.on("uncaughtException", (err) => {
         console.error(`Uncaught exception: ${err.message}`)
@@ -1087,6 +1100,14 @@ export async function contextHubCommand(
 
       // Handle shutdown gracefully
       const shutdown = (signal: string) => {
+        // During startup grace period (daemon mode), ignore SIGTERM from
+        // parent process cleanup. This prevents the hook runner from
+        // killing the hub before it's fully detached.
+        if (startupGrace && signal === "SIGTERM") {
+          const ts = new Date().toISOString()
+          console.log(`[${ts}] Ignoring ${signal} during startup grace period (PID: ${process.pid}, Parent: ${process.ppid})`)
+          return
+        }
         if (!isListening) {
           // Server never started, just exit
           process.exit(0)
