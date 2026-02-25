@@ -24,6 +24,8 @@ import {
 import { searchMemories } from "../lib/memory-search.js"
 import { indexJournalEntries, startPeriodicIndexing } from "../lib/memory-indexer.js"
 import { getProjectPort } from "../utils/context-hub-port.js"
+import { getConfigValue, setConfig } from "../utils/jfl-config.js"
+import Conf from "conf"
 import { MAPEventBus } from "../lib/map-event-bus.js"
 import { WebSocketServer } from "ws"
 import type { MAPEventType } from "../types/map.js"
@@ -907,6 +909,111 @@ export function isRunning(projectRoot: string): { running: boolean; pid?: number
   }
 }
 
+// ============================================================================
+// Cross-Project Helpers
+// ============================================================================
+
+function getTrackedProjects(): Array<{ path: string; port: number }> {
+  // Read from both config sources (Conf library + XDG config)
+  const confStore = new Conf({ projectName: "jfl" })
+  const confProjects = (confStore.get("projects") as string[]) || []
+  const xdgProjects = (getConfigValue("projects") as string[]) || []
+
+  // Deduplicate
+  const allPaths = [...new Set([...confProjects, ...xdgProjects])]
+
+  return allPaths
+    .filter(p => fs.existsSync(path.join(p, ".jfl")))
+    .map(p => ({ path: p, port: getProjectPort(p) }))
+}
+
+async function ensureForProject(
+  projectRoot: string,
+  port: number,
+  quiet = false
+): Promise<{ status: "running" | "started" | "failed"; message: string }> {
+  const status = isRunning(projectRoot)
+  if (status.running) {
+    try {
+      const response = await fetch(`http://localhost:${port}/health`, {
+        signal: AbortSignal.timeout(2000)
+      })
+      if (response.ok) {
+        return { status: "running", message: `Already running (PID: ${status.pid})` }
+      }
+    } catch {
+      // Process exists but not responding, fall through
+    }
+  }
+
+  const portInUse = await isPortInUse(port)
+  if (portInUse) {
+    try {
+      const response = await fetch(`http://localhost:${port}/health`, {
+        signal: AbortSignal.timeout(2000)
+      })
+      if (response.ok) {
+        return { status: "running", message: "Running (PID file missing but healthy)" }
+      }
+    } catch {
+      // Not responding
+    }
+
+    try {
+      const lsofOutput = execSync(`lsof -ti :${port}`, { encoding: 'utf-8' }).trim()
+      if (lsofOutput) {
+        const orphanedPid = parseInt(lsofOutput.split('\n')[0], 10)
+        if (!status.pid || orphanedPid !== status.pid) {
+          process.kill(orphanedPid, 'SIGTERM')
+          await new Promise(resolve => setTimeout(resolve, 500))
+        }
+      }
+    } catch {
+      // lsof failed or process already gone
+    }
+  }
+
+  const result = await startDaemon(projectRoot, port)
+  if (result.success) {
+    return { status: "started", message: result.message }
+  }
+  return { status: "failed", message: result.message }
+}
+
+type DoctorStatus = "OK" | "ZOMBIE" | "DOWN" | "STALE"
+
+interface DoctorResult {
+  path: string
+  port: number
+  status: DoctorStatus
+  pid?: number
+  message?: string
+}
+
+async function diagnoseProject(projectPath: string, port: number): Promise<DoctorResult> {
+  if (!fs.existsSync(projectPath)) {
+    return { path: projectPath, port, status: "STALE", message: "Directory does not exist" }
+  }
+
+  const pidStatus = isRunning(projectPath)
+  if (!pidStatus.running) {
+    return { path: projectPath, port, status: "DOWN", pid: undefined }
+  }
+
+  try {
+    const response = await fetch(`http://localhost:${port}/health`, {
+      signal: AbortSignal.timeout(2000)
+    })
+    if (response.ok) {
+      return { path: projectPath, port, status: "OK", pid: pidStatus.pid }
+    }
+  } catch {
+    // Not responding
+  }
+
+  return { path: projectPath, port, status: "ZOMBIE", pid: pidStatus.pid, message: "PID exists but not responding" }
+}
+
 async function startDaemon(projectRoot: string, port: number): Promise<{ success: boolean; message: string }> {
   const status = isRunning(projectRoot)
   if (status.running) {
@@ -977,7 +1084,6 @@ async function stopDaemon(projectRoot: string): Promise<{ success: boolean; mess
   }
 
   const pidFile = getPidFile(projectRoot)
-  const tokenFile = getTokenFile(projectRoot)
 
   try {
     // Send SIGTERM first (graceful)
@@ -1005,12 +1111,9 @@ async function stopDaemon(projectRoot: string): Promise<{ success: boolean; mess
       // Process is gone, that's fine
     }
 
-    // Clean up PID and token files
+    // Clean up PID file (preserve token for seamless restart)
     if (fs.existsSync(pidFile)) {
       fs.unlinkSync(pidFile)
-    }
-    if (fs.existsSync(tokenFile)) {
-      fs.unlinkSync(tokenFile)
     }
 
     return { success: true, message: "Context Hub stopped" }
@@ -1025,7 +1128,7 @@ async function stopDaemon(projectRoot: string): Promise<{ success: boolean; mess
 
 export async function contextHubCommand(
   action?: string,
-  options: { port?: number; global?: boolean } = {}
+  options: { port?: number; global?: boolean; quiet?: boolean } = {}
 ) {
   const isGlobal = options.global || false
   const projectRoot = isGlobal ? homedir() : process.cwd()
@@ -1108,58 +1211,215 @@ export async function contextHubCommand(
     }
 
     case "ensure": {
-      const status = isRunning(projectRoot)
-      if (status.running) {
-        // Already running, verify it's healthy
-        try {
-          const response = await fetch(`http://localhost:${port}/health`, {
-            signal: AbortSignal.timeout(2000)
-          })
-          if (response.ok) {
-            // Healthy and running, nothing to do
-            return
-          }
-        } catch {
-          // Process exists but not responding, fall through to cleanup
+      await ensureForProject(projectRoot, port, true)
+      break
+    }
+
+    case "ensure-all": {
+      const tracked = getTrackedProjects()
+      if (tracked.length === 0) {
+        if (!options.quiet) {
+          console.log(chalk.yellow("\n  No tracked projects found.\n"))
+        }
+        break
+      }
+
+      const results: Array<{ name: string; result: Awaited<ReturnType<typeof ensureForProject>> }> = []
+
+      for (const project of tracked) {
+        const name = path.basename(project.path)
+        const result = await ensureForProject(project.path, project.port, true)
+        results.push({ name, result })
+      }
+
+      if (!options.quiet) {
+        console.log(chalk.bold("\n  Context Hub - ensure-all\n"))
+        for (const { name, result } of results) {
+          const icon = result.status === "failed" ? chalk.red("✗") : chalk.green("✓")
+          const label = result.status === "started" ? chalk.cyan("started") :
+                        result.status === "running" ? chalk.green("running") :
+                        chalk.red("failed")
+          console.log(`  ${icon} ${chalk.bold(name)} — ${label}`)
+        }
+        const ok = results.filter(r => r.result.status !== "failed").length
+        const fail = results.filter(r => r.result.status === "failed").length
+        console.log(chalk.gray(`\n  ${ok} running, ${fail} failed\n`))
+      }
+      break
+    }
+
+    case "doctor": {
+      const confStoreDoctor = new Conf({ projectName: "jfl" })
+      const confProjectsDoctor = (confStoreDoctor.get("projects") as string[]) || []
+      const xdgProjectsDoctor = (getConfigValue("projects") as string[]) || []
+      const allProjects = [...new Set([...confProjectsDoctor, ...xdgProjectsDoctor])]
+
+      if (allProjects.length === 0) {
+        console.log(chalk.yellow("\n  No tracked projects found.\n"))
+        break
+      }
+
+      const cleanMode = process.argv.includes("--clean")
+
+      if (cleanMode) {
+        const before = allProjects.length
+        const valid = allProjects.filter(p => fs.existsSync(p))
+        // Write cleaned list back to both stores
+        confStoreDoctor.set("projects", valid.filter(p => confProjectsDoctor.includes(p)))
+        setConfig("projects", valid.filter(p => xdgProjectsDoctor.includes(p)))
+        const removed = before - valid.length
+        if (removed > 0) {
+          console.log(chalk.green(`\n  Removed ${removed} stale project${removed > 1 ? "s" : ""} from tracker.\n`))
+        } else {
+          console.log(chalk.green("\n  No stale projects found.\n"))
+        }
+        break
+      }
+
+      console.log(chalk.bold("\n  Context Hub - doctor\n"))
+
+      let staleCount = 0
+      let downCount = 0
+      let zombieCount = 0
+      let okCount = 0
+
+      for (const projectPath of allProjects) {
+        const projectPort = getProjectPort(projectPath)
+        const result = await diagnoseProject(projectPath, projectPort)
+        const name = path.basename(result.path)
+
+        switch (result.status) {
+          case "OK":
+            console.log(`  ${chalk.green("OK")}     ${chalk.bold(name)} — PID ${result.pid}, port ${result.port}`)
+            okCount++
+            break
+          case "ZOMBIE":
+            console.log(`  ${chalk.red("ZOMBIE")} ${chalk.bold(name)} — PID ${result.pid} not responding on port ${result.port}`)
+            zombieCount++
+            break
+          case "DOWN":
+            console.log(`  ${chalk.red("DOWN")}   ${chalk.bold(name)} — not running (port ${result.port})`)
+            downCount++
+            break
+          case "STALE":
+            console.log(`  ${chalk.yellow("STALE")}  ${chalk.gray(result.path)} — directory missing`)
+            staleCount++
+            break
         }
       }
 
-      // Check if port is blocked by orphaned process
-      const portInUse = await isPortInUse(port)
-      if (portInUse) {
-        // Port is in use - check if it's actually Context Hub
-        try {
-          const response = await fetch(`http://localhost:${port}/health`, {
-            signal: AbortSignal.timeout(2000)
-          })
-          if (response.ok) {
-            // It's a healthy Context Hub but PID file is missing/wrong
-            // Don't kill it - just return
-            return
-          }
-        } catch {
-          // Process on port is not responding to health check
-          // Only kill if we're confident it's not a Context Hub
-        }
+      console.log()
+      if (downCount > 0 || zombieCount > 0) {
+        console.log(chalk.gray(`  Hint: run ${chalk.cyan("jfl context-hub ensure-all")} to start all hubs`))
+      }
+      if (staleCount > 0) {
+        console.log(chalk.gray(`  Hint: run ${chalk.cyan("jfl context-hub doctor --clean")} to remove stale entries`))
+      }
+      if (okCount === allProjects.length) {
+        console.log(chalk.green("  All projects healthy."))
+      }
+      console.log()
+      break
+    }
 
-        // Port in use but not responding - try to clean up
-        try {
-          const lsofOutput = execSync(`lsof -ti :${port}`, { encoding: 'utf-8' }).trim()
-          if (lsofOutput) {
-            const orphanedPid = parseInt(lsofOutput.split('\n')[0], 10)
-            // Only kill if it's different from our tracked PID
-            if (!status.pid || orphanedPid !== status.pid) {
-              process.kill(orphanedPid, 'SIGTERM')
-              await new Promise(resolve => setTimeout(resolve, 500)) // Wait for cleanup
-            }
-          }
-        } catch {
-          // lsof failed or process already gone
-        }
+    case "install-daemon": {
+      const plistLabel = "com.jfl.context-hub"
+      const plistDir = path.join(homedir(), "Library", "LaunchAgents")
+      const plistPath = path.join(plistDir, `${plistLabel}.plist`)
+      const logPath = path.join(homedir(), ".config", "jfl", "context-hub-agent.log")
+
+      // Resolve jfl binary
+      let jflPath = ""
+      try {
+        jflPath = execSync("which jfl", { encoding: "utf-8" }).trim()
+      } catch {
+        jflPath = process.argv[1] || "jfl"
       }
 
-      // Start silently
-      await startDaemon(projectRoot, port)
+      // Ensure log directory exists
+      const logDir = path.dirname(logPath)
+      if (!fs.existsSync(logDir)) {
+        fs.mkdirSync(logDir, { recursive: true })
+      }
+
+      const plistContent = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${plistLabel}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${jflPath}</string>
+        <string>context-hub</string>
+        <string>ensure-all</string>
+        <string>--quiet</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StartInterval</key>
+    <integer>300</integer>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>LowPriorityIO</key>
+    <true/>
+    <key>Nice</key>
+    <integer>10</integer>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>${logPath}</string>
+    <key>StandardErrorPath</key>
+    <string>${logPath}</string>
+</dict>
+</plist>
+`
+
+      if (!fs.existsSync(plistDir)) {
+        fs.mkdirSync(plistDir, { recursive: true })
+      }
+
+      // Unload if already loaded
+      try {
+        execSync(`launchctl unload "${plistPath}" 2>/dev/null`, { stdio: "ignore" })
+      } catch {
+        // Not loaded, that's fine
+      }
+
+      fs.writeFileSync(plistPath, plistContent)
+
+      try {
+        execSync(`launchctl load "${plistPath}"`)
+        console.log(chalk.green(`\n  Daemon installed and loaded.`))
+        console.log(chalk.gray(`  Plist: ${plistPath}`))
+        console.log(chalk.gray(`  Log:   ${logPath}`))
+        console.log(chalk.gray(`  Runs ensure-all every 5 minutes + on login.\n`))
+      } catch (err: any) {
+        console.log(chalk.red(`\n  Failed to load daemon: ${err.message}\n`))
+      }
+      break
+    }
+
+    case "uninstall-daemon": {
+      const plistLabel = "com.jfl.context-hub"
+      const plistPath = path.join(homedir(), "Library", "LaunchAgents", `${plistLabel}.plist`)
+
+      if (!fs.existsSync(plistPath)) {
+        console.log(chalk.yellow("\n  Daemon not installed.\n"))
+        break
+      }
+
+      try {
+        execSync(`launchctl unload "${plistPath}"`, { stdio: "ignore" })
+      } catch {
+        // Already unloaded
+      }
+
+      fs.unlinkSync(plistPath)
+      console.log(chalk.green("\n  Daemon uninstalled.\n"))
       break
     }
 
@@ -1355,17 +1615,23 @@ export async function contextHubCommand(
     default: {
       console.log(chalk.bold("\n  Context Hub - Unified context for AI agents\n"))
       console.log(chalk.gray("  Commands:"))
-      console.log("    jfl context-hub start       Start the daemon")
-      console.log("    jfl context-hub stop        Stop the daemon")
-      console.log("    jfl context-hub restart     Restart the daemon")
-      console.log("    jfl context-hub status      Check if running")
-      console.log("    jfl context-hub logs        Show real-time logs (TUI)")
-      console.log("    jfl context-hub clear-logs  Clear log file")
-      console.log("    jfl context-hub ensure      Start if not running (for hooks)")
-      console.log("    jfl context-hub query       Quick context query")
+      console.log("    jfl context-hub start            Start the daemon")
+      console.log("    jfl context-hub stop             Stop the daemon")
+      console.log("    jfl context-hub restart          Restart the daemon")
+      console.log("    jfl context-hub status           Check if running")
+      console.log("    jfl context-hub ensure           Start if not running (for hooks)")
+      console.log("    jfl context-hub ensure-all       Ensure all tracked projects are running")
+      console.log("    jfl context-hub doctor           Diagnose all tracked projects")
+      console.log("    jfl context-hub doctor --clean   Remove stale project entries")
+      console.log("    jfl context-hub install-daemon   Install macOS launchd keepalive")
+      console.log("    jfl context-hub uninstall-daemon Remove macOS launchd keepalive")
+      console.log("    jfl context-hub logs             Show real-time logs (TUI)")
+      console.log("    jfl context-hub clear-logs       Clear log file")
+      console.log("    jfl context-hub query            Quick context query")
       console.log()
       console.log(chalk.gray("  Options:"))
       console.log("    --port <port>   Port to run on (default: per-project)")
+      console.log("    --quiet         Suppress output (for daemon use)")
       console.log()
     }
   }

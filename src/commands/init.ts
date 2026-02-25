@@ -390,6 +390,14 @@ export async function initCommand(options?: { name?: string }) {
     // Assign deterministic port and write to config + .mcp.json
     const hubPort = persistProjectPort(projectPath)
 
+    // Start Context Hub for the new project
+    try {
+      const { contextHubCommand: chCmd } = await import("./context-hub.js")
+      await chCmd("ensure", { port: hubPort })
+    } catch {
+      // Non-blocking — hub can be started manually later
+    }
+
     // Generate or update CLAUDE.md
     const claudePath = join(projectPath, "CLAUDE.md")
     const profile = getProfile()

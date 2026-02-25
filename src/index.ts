@@ -112,13 +112,18 @@ program
 program
   .command("context-hub")
   .description("Manage Context Hub daemon (unified context for AI agents)")
-  .argument("[action]", "start, stop, restart, status, ensure, query, serve")
+  .argument("[action]", "start, stop, restart, status, ensure, ensure-all, doctor, install-daemon, uninstall-daemon, query, serve")
   .option("-p, --port <port>", "Port to run on (default: per-project)")
   .option("-g, --global", "Run in global mode (serve all GTM projects)")
+  .option("-q, --quiet", "Suppress output (for daemon use)")
+  .option("--clean", "Remove stale entries (for doctor)")
+  .option("--purge", "Also delete token file (for stop)")
+  .allowUnknownOption()
   .action(async (action, options) => {
     await contextHubCommand(action, {
       port: options.port ? parseInt(options.port, 10) : undefined,
       global: options.global || false,
+      quiet: options.quiet || false,
     })
   })
 
@@ -661,6 +666,15 @@ program
   })
 
 program
+  .command("events")
+  .description("Live MAP event bus dashboard")
+  .option("-p, --pattern <pattern>", "Filter pattern (default: *)")
+  .action(async (options) => {
+    const { startEventDashboard } = await import("./ui/event-dashboard.js")
+    await startEventDashboard({ pattern: options.pattern })
+  })
+
+program
   .command("peter")
   .description("Peter Parker - model-routed agent orchestrator")
   .argument("[action]", "setup, run, or status")
@@ -876,6 +890,7 @@ program
     console.log("    jfl voice             Voice input commands")
     console.log("    jfl ralph             AI agent loop (ralph-tui)")
     console.log("    jfl peter             Peter Parker orchestrator (model routing)")
+    console.log("    jfl events            Live event bus dashboard")
     console.log("    jfl context-hub       Context Hub (unified AI context + MAP event bus)")
     console.log("    jfl openclaw          OpenClaw agent protocol")
     console.log("    jfl test              Test onboarding (isolated)")

@@ -18,6 +18,9 @@ import { getProjectHubUrl } from "../utils/context-hub-port.js"
 const CONTEXT_HUB_URL = process.env.CONTEXT_HUB_URL || getProjectHubUrl()
 const TOKEN_FILE = ".jfl/context-hub.token"
 
+let lastAutoRecoveryTime = 0
+const AUTO_RECOVERY_COOLDOWN_MS = 30_000
+
 // ============================================================================
 // Auth
 // ============================================================================
@@ -242,39 +245,65 @@ const TOOLS = [
   }
 ]
 
+async function doFetch(endpoint: string, body?: any): Promise<any> {
+  const url = `${CONTEXT_HUB_URL}${endpoint}`
+  const token = getAuthToken()
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json"
+  }
+
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`
+  }
+
+  const response = await fetch(url, {
+    method: body ? "POST" : "GET",
+    headers,
+    body: body ? JSON.stringify(body) : undefined
+  })
+
+  if (response.status === 401) {
+    throw new Error("Unauthorized. Token file may be missing or invalid. Restart Context Hub: jfl context-hub restart")
+  }
+
+  if (!response.ok) {
+    throw new Error(`Context Hub returned ${response.status}`)
+  }
+
+  return await response.json()
+}
+
+function isRecoverableError(error: any): boolean {
+  if (error.code === "ECONNREFUSED") return true
+  if (error.cause?.code === "ECONNREFUSED") return true
+  const msg = String(error.message || "").toLowerCase()
+  return msg.includes("fetch failed") || msg.includes("econnrefused")
+}
+
 async function callContextHub(endpoint: string, body?: any): Promise<any> {
   try {
-    const url = `${CONTEXT_HUB_URL}${endpoint}`
-    const token = getAuthToken()
-
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json"
-    }
-
-    if (token) {
-      headers["Authorization"] = `Bearer ${token}`
-    }
-
-    const response = await fetch(url, {
-      method: body ? "POST" : "GET",
-      headers,
-      body: body ? JSON.stringify(body) : undefined
-    })
-
-    if (response.status === 401) {
-      throw new Error("Unauthorized. Token file may be missing or invalid. Restart Context Hub: jfl context-hub restart")
-    }
-
-    if (!response.ok) {
-      throw new Error(`Context Hub returned ${response.status}`)
-    }
-
-    return await response.json()
+    return await doFetch(endpoint, body)
   } catch (error: any) {
-    if (error.code === "ECONNREFUSED") {
+    if (!isRecoverableError(error)) throw error
+
+    const now = Date.now()
+    if (now - lastAutoRecoveryTime < AUTO_RECOVERY_COOLDOWN_MS) {
       throw new Error("Context Hub is not running. Start it with: jfl context-hub start")
     }
-    throw error
+
+    lastAutoRecoveryTime = now
+    try {
+      execSync("jfl context-hub ensure", {
+        stdio: "ignore",
+        timeout: 10_000
+      })
+    } catch {
+      throw new Error("Context Hub is not running and auto-recovery failed. Start it with: jfl context-hub start")
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 1000))
+    return await doFetch(endpoint, body)
   }
 }
 
