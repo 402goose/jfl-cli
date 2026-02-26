@@ -4,7 +4,7 @@ import inquirer from "inquirer"
 import * as p from "@clack/prompts"
 import { execSync, spawn } from "child_process"
 import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "fs"
-import { join } from "path"
+import { join, basename } from "path"
 import { tmpdir, homedir } from "os"
 import { isAuthenticated, getUser, getAuthMethod, getX402Address } from "./login.js"
 import { extractServiceMetadata } from "../lib/service-detector.js"
@@ -14,6 +14,7 @@ import { getProfile } from "./profile.js"
 import { generateClaudeMdFromProfile } from "../utils/claude-md-generator.js"
 import { validateSettings, fixSettings } from "../utils/settings-validator.js"
 import { persistProjectPort } from "../utils/context-hub-port.js"
+import { ensureDaemonInstalled } from "./context-hub.js"
 
 const TEMPLATE_REPO = "https://github.com/402goose/jfl-template.git"
 
@@ -70,12 +71,19 @@ export async function initCommand(options?: { name?: string }) {
     projectName = name as string
   }
 
-  const projectPath = join(process.cwd(), projectName!)
+  // If cwd already matches the project name, initialize in place
+  const cwdBasename = basename(process.cwd())
+  const initInPlace = cwdBasename === projectName
+  const projectPath = initInPlace ? process.cwd() : join(process.cwd(), projectName!)
 
-  // Check if directory exists
-  if (existsSync(projectPath)) {
-    console.log(chalk.red(`\nDirectory ${projectName} already exists.`))
-    return
+  if (!initInPlace) {
+    // Check if directory exists (only when creating a new subdirectory)
+    if (existsSync(projectPath)) {
+      console.log(chalk.red(`\nDirectory ${projectName} already exists.`))
+      return
+    }
+  } else {
+    p.log.info(`Initializing in current directory (matches project name: ${projectName})`)
   }
 
   // Pre-flight check: is git installed?
@@ -137,14 +145,24 @@ export async function initCommand(options?: { name?: string }) {
     // Clean up temp directory
     rmSync(tempDir, { recursive: true, force: true })
 
-    // Remove template's .git if it was copied (we want a fresh repo)
+    // Remove template's .git if it was copied (we want a fresh repo or to keep existing)
     const templateGit = join(projectPath, ".git")
-    if (existsSync(templateGit)) {
-      rmSync(templateGit, { recursive: true, force: true })
+    if (initInPlace) {
+      // In-place init: template .git would overwrite existing — but cp -r shouldn't
+      // copy .git over an existing .git. Just ensure we don't have a stale one.
+    } else {
+      if (existsSync(templateGit)) {
+        rmSync(templateGit, { recursive: true, force: true })
+      }
     }
 
-    // Initialize new git repo
-    execSync(`git init`, { cwd: projectPath, stdio: "pipe" })
+    // Initialize git repo if not already one
+    try {
+      execSync(`git rev-parse --git-dir`, { cwd: projectPath, stdio: "pipe" })
+      // Already a git repo — skip init
+    } catch {
+      execSync(`git init`, { cwd: projectPath, stdio: "pipe" })
+    }
 
     spinner.succeed("GTM workspace created!")
 
@@ -397,6 +415,9 @@ export async function initCommand(options?: { name?: string }) {
     } catch {
       // Non-blocking — hub can be started manually later
     }
+
+    // Auto-install daemon (fire-and-forget, silent)
+    ensureDaemonInstalled({ quiet: true }).catch(() => {})
 
     // Generate or update CLAUDE.md
     const claudePath = join(projectPath, "CLAUDE.md")
