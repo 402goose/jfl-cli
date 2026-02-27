@@ -60,7 +60,7 @@ function getOrCreateToken(projectRoot: string): string {
   return token
 }
 
-function validateAuth(req: http.IncomingMessage, projectRoot: string): boolean {
+function validateAuth(req: http.IncomingMessage, projectRoot: string, url?: URL): boolean {
   const tokenFile = getTokenFile(projectRoot)
 
   // If no token file exists, allow access (backwards compatibility during migration)
@@ -69,18 +69,23 @@ function validateAuth(req: http.IncomingMessage, projectRoot: string): boolean {
   }
 
   const expectedToken = fs.readFileSync(tokenFile, 'utf-8').trim()
-  const authHeader = req.headers['authorization']
 
-  if (!authHeader) {
-    return false
+  // Check Authorization header first
+  const authHeader = req.headers['authorization']
+  if (authHeader) {
+    const providedToken = authHeader.startsWith('Bearer ')
+      ? authHeader.slice(7)
+      : authHeader
+    if (providedToken === expectedToken) return true
   }
 
-  // Support "Bearer <token>" format
-  const providedToken = authHeader.startsWith('Bearer ')
-    ? authHeader.slice(7)
-    : authHeader
+  // Fall back to ?token= query param (needed for SSE/EventSource which can't set headers)
+  if (url) {
+    const queryToken = url.searchParams.get('token')
+    if (queryToken && queryToken === expectedToken) return true
+  }
 
-  return providedToken === expectedToken
+  return false
 }
 
 function isPortInUse(port: number): Promise<boolean> {
@@ -144,7 +149,7 @@ interface JournalEntry {
 // Journal Reader
 // ============================================================================
 
-function readJournalEntries(projectRoot: string, limit = 20): ContextItem[] {
+function readJournalEntries(projectRoot: string, limit = 50): ContextItem[] {
   const journalDir = path.join(projectRoot, ".jfl", "journal")
   const items: ContextItem[] = []
 
@@ -152,24 +157,28 @@ function readJournalEntries(projectRoot: string, limit = 20): ContextItem[] {
     return items
   }
 
+  // Sort by modification time (newest first) so recent entries aren't buried
   const files = fs.readdirSync(journalDir)
     .filter(f => f.endsWith(".jsonl"))
-    .sort()
-    .reverse()
+    .map(f => ({
+      name: f,
+      mtime: fs.statSync(path.join(journalDir, f)).mtimeMs
+    }))
+    .sort((a, b) => b.mtime - a.mtime)
+    .map(f => f.name)
+
+  // Read all entries from all files, then sort globally by timestamp
+  const allEntries: ContextItem[] = []
 
   for (const file of files) {
-    if (items.length >= limit) break
-
     const filePath = path.join(journalDir, file)
     const content = fs.readFileSync(filePath, "utf-8")
     const lines = content.trim().split("\n").filter(l => l.trim())
 
-    for (const line of lines.reverse()) {
-      if (items.length >= limit) break
-
+    for (const line of lines) {
       try {
         const entry: JournalEntry = JSON.parse(line)
-        items.push({
+        allEntries.push({
           source: "journal",
           type: entry.type || "entry",
           title: entry.title || "Untitled",
@@ -183,7 +192,14 @@ function readJournalEntries(projectRoot: string, limit = 20): ContextItem[] {
     }
   }
 
-  return items
+  // Sort all entries by timestamp descending, then take the limit
+  allEntries.sort((a, b) => {
+    const ta = a.timestamp || ""
+    const tb = b.timestamp || ""
+    return tb.localeCompare(ta)
+  })
+
+  return allEntries.slice(0, limit)
 }
 
 // ============================================================================
@@ -559,8 +575,22 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus)
       return
     }
 
+    // Dashboard - served without API auth (has its own token flow in JS)
+    if (url.pathname.startsWith("/dashboard")) {
+      import("../dashboard/index.js").then(({ handleDashboardRoutes }) => {
+        if (!handleDashboardRoutes(req, res, projectRoot, port)) {
+          res.writeHead(404, { "Content-Type": "application/json" })
+          res.end(JSON.stringify({ error: "Not found" }))
+        }
+      }).catch(() => {
+        res.writeHead(500, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ error: "Dashboard module failed to load" }))
+      })
+      return
+    }
+
     // All other endpoints require auth
-    if (!validateAuth(req, projectRoot)) {
+    if (!validateAuth(req, projectRoot, url)) {
       res.writeHead(401, { "Content-Type": "application/json" })
       res.end(JSON.stringify({
         error: "Unauthorized",
@@ -738,6 +768,44 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus)
       return
     }
 
+    // Cross-project health
+    if (url.pathname === "/api/projects" && req.method === "GET") {
+      const tracked = getTrackedProjects()
+      Promise.all(
+        tracked.map(async (p) => {
+          // Self-check: if this is our own port, we know we're OK
+          if (p.port === port) {
+            return {
+              name: p.path.split("/").pop() || p.path,
+              path: p.path,
+              port: p.port,
+              status: "OK" as DoctorStatus,
+              pid: process.pid,
+              message: "This instance",
+            }
+          }
+          const result = await diagnoseProject(p.path, p.port)
+          return {
+            name: p.path.split("/").pop() || p.path,
+            path: p.path,
+            port: p.port,
+            status: result.status,
+            pid: result.pid,
+            message: result.message,
+          }
+        })
+      )
+        .then((results) => {
+          res.writeHead(200, { "Content-Type": "application/json" })
+          res.end(JSON.stringify(results))
+        })
+        .catch((err: any) => {
+          res.writeHead(500, { "Content-Type": "application/json" })
+          res.end(JSON.stringify({ error: err.message }))
+        })
+      return
+    }
+
     // Publish event
     if (url.pathname === "/api/events" && req.method === "POST") {
       if (!eventBus) {
@@ -839,7 +907,7 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus)
         return
       }
 
-      if (!validateAuth(request, projectRoot)) {
+      if (!validateAuth(request, projectRoot, reqUrl)) {
         socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n")
         socket.destroy()
         return
@@ -1123,6 +1191,125 @@ async function stopDaemon(projectRoot: string): Promise<{ success: boolean; mess
 }
 
 // ============================================================================
+// Auto-Install Daemon
+// ============================================================================
+
+export async function ensureDaemonInstalled(opts?: { quiet?: boolean }): Promise<boolean> {
+  const quiet = opts?.quiet ?? false
+
+  if (process.platform !== "darwin") {
+    return false
+  }
+
+  const plistLabel = "com.jfl.context-hub"
+  const plistDir = path.join(homedir(), "Library", "LaunchAgents")
+  const plistPath = path.join(plistDir, `${plistLabel}.plist`)
+  const logPath = path.join(homedir(), ".config", "jfl", "context-hub-agent.log")
+
+  // If plist exists, check if loaded
+  if (fs.existsSync(plistPath)) {
+    try {
+      const output = execSync("launchctl list", { encoding: "utf-8" })
+      if (output.includes(plistLabel)) {
+        return true
+      }
+    } catch {
+      // launchctl failed, try to reload
+    }
+
+    // Exists but not loaded — reload it
+    try {
+      execSync(`launchctl load "${plistPath}"`, { stdio: "ignore" })
+      if (!quiet) {
+        console.log(chalk.green(`\n  Daemon reloaded.`))
+        console.log(chalk.gray(`  Plist: ${plistPath}\n`))
+      }
+      return true
+    } catch {
+      // Fall through to full install
+    }
+  }
+
+  // Full install
+  let jflPath = ""
+  try {
+    jflPath = execSync("which jfl", { encoding: "utf-8" }).trim()
+  } catch {
+    jflPath = process.argv[1] || "jfl"
+  }
+
+  const logDir = path.dirname(logPath)
+  if (!fs.existsSync(logDir)) {
+    fs.mkdirSync(logDir, { recursive: true })
+  }
+
+  const plistContent = `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>${plistLabel}</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>${jflPath}</string>
+        <string>context-hub</string>
+        <string>ensure-all</string>
+        <string>--quiet</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StartInterval</key>
+    <integer>300</integer>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>LowPriorityIO</key>
+    <true/>
+    <key>Nice</key>
+    <integer>10</integer>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+    <key>StandardOutPath</key>
+    <string>${logPath}</string>
+    <key>StandardErrorPath</key>
+    <string>${logPath}</string>
+</dict>
+</plist>
+`
+
+  if (!fs.existsSync(plistDir)) {
+    fs.mkdirSync(plistDir, { recursive: true })
+  }
+
+  // Unload if partially loaded
+  try {
+    execSync(`launchctl unload "${plistPath}" 2>/dev/null`, { stdio: "ignore" })
+  } catch {
+    // Not loaded, fine
+  }
+
+  fs.writeFileSync(plistPath, plistContent)
+
+  try {
+    execSync(`launchctl load "${plistPath}"`)
+    if (!quiet) {
+      console.log(chalk.green(`\n  Daemon installed and loaded.`))
+      console.log(chalk.gray(`  Plist: ${plistPath}`))
+      console.log(chalk.gray(`  Log:   ${logPath}`))
+      console.log(chalk.gray(`  Runs ensure-all every 5 minutes + on login.\n`))
+    }
+    return true
+  } catch {
+    if (!quiet) {
+      console.log(chalk.red(`\n  Failed to load daemon.\n`))
+    }
+    return false
+  }
+}
+
+// ============================================================================
 // CLI Command
 // ============================================================================
 
@@ -1323,82 +1510,9 @@ export async function contextHubCommand(
     }
 
     case "install-daemon": {
-      const plistLabel = "com.jfl.context-hub"
-      const plistDir = path.join(homedir(), "Library", "LaunchAgents")
-      const plistPath = path.join(plistDir, `${plistLabel}.plist`)
-      const logPath = path.join(homedir(), ".config", "jfl", "context-hub-agent.log")
-
-      // Resolve jfl binary
-      let jflPath = ""
-      try {
-        jflPath = execSync("which jfl", { encoding: "utf-8" }).trim()
-      } catch {
-        jflPath = process.argv[1] || "jfl"
-      }
-
-      // Ensure log directory exists
-      const logDir = path.dirname(logPath)
-      if (!fs.existsSync(logDir)) {
-        fs.mkdirSync(logDir, { recursive: true })
-      }
-
-      const plistContent = `<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>Label</key>
-    <string>${plistLabel}</string>
-    <key>ProgramArguments</key>
-    <array>
-        <string>${jflPath}</string>
-        <string>context-hub</string>
-        <string>ensure-all</string>
-        <string>--quiet</string>
-    </array>
-    <key>RunAtLoad</key>
-    <true/>
-    <key>StartInterval</key>
-    <integer>300</integer>
-    <key>ProcessType</key>
-    <string>Background</string>
-    <key>LowPriorityIO</key>
-    <true/>
-    <key>Nice</key>
-    <integer>10</integer>
-    <key>EnvironmentVariables</key>
-    <dict>
-        <key>PATH</key>
-        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
-    </dict>
-    <key>StandardOutPath</key>
-    <string>${logPath}</string>
-    <key>StandardErrorPath</key>
-    <string>${logPath}</string>
-</dict>
-</plist>
-`
-
-      if (!fs.existsSync(plistDir)) {
-        fs.mkdirSync(plistDir, { recursive: true })
-      }
-
-      // Unload if already loaded
-      try {
-        execSync(`launchctl unload "${plistPath}" 2>/dev/null`, { stdio: "ignore" })
-      } catch {
-        // Not loaded, that's fine
-      }
-
-      fs.writeFileSync(plistPath, plistContent)
-
-      try {
-        execSync(`launchctl load "${plistPath}"`)
-        console.log(chalk.green(`\n  Daemon installed and loaded.`))
-        console.log(chalk.gray(`  Plist: ${plistPath}`))
-        console.log(chalk.gray(`  Log:   ${logPath}`))
-        console.log(chalk.gray(`  Runs ensure-all every 5 minutes + on login.\n`))
-      } catch (err: any) {
-        console.log(chalk.red(`\n  Failed to load daemon: ${err.message}\n`))
+      const result = await ensureDaemonInstalled({ quiet: false })
+      if (!result) {
+        console.log(chalk.yellow("\n  Daemon install skipped (non-macOS or failed).\n"))
       }
       break
     }
@@ -1427,11 +1541,13 @@ export async function contextHubCommand(
       // Run server in foreground (used by daemon)
       const serviceEventsPath = path.join(projectRoot, ".jfl", "service-events.jsonl")
       const mapPersistPath = path.join(projectRoot, ".jfl", "map-events.jsonl")
+      const journalDir = path.join(projectRoot, ".jfl", "journal")
 
       const eventBus = new MAPEventBus({
         maxSize: 1000,
         persistPath: mapPersistPath,
-        serviceEventsPath: fs.existsSync(serviceEventsPath) ? serviceEventsPath : null,
+        serviceEventsPath,
+        journalDir: fs.existsSync(journalDir) ? journalDir : null,
       })
 
       const server = createServer(projectRoot, port, eventBus)
@@ -1584,6 +1700,18 @@ export async function contextHubCommand(
       break
     }
 
+    case "dashboard": {
+      const token = getOrCreateToken(projectRoot)
+      const dashUrl = `http://localhost:${port}/dashboard?token=${token}`
+      try {
+        execSync(`open "${dashUrl}"`)
+      } catch {
+        // open not available — print URL instead
+      }
+      console.log(chalk.gray(`  Opening ${dashUrl}`))
+      break
+    }
+
     case "clear-logs": {
       // Clear both global and local log files
       const { JFL_FILES } = await import("../utils/jfl-paths.js")
@@ -1623,6 +1751,7 @@ export async function contextHubCommand(
       console.log("    jfl context-hub ensure-all       Ensure all tracked projects are running")
       console.log("    jfl context-hub doctor           Diagnose all tracked projects")
       console.log("    jfl context-hub doctor --clean   Remove stale project entries")
+      console.log("    jfl context-hub dashboard        Open web dashboard in browser")
       console.log("    jfl context-hub install-daemon   Install macOS launchd keepalive")
       console.log("    jfl context-hub uninstall-daemon Remove macOS launchd keepalive")
       console.log("    jfl context-hub logs             Show real-time logs (TUI)")

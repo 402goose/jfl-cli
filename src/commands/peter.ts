@@ -57,8 +57,34 @@ async function run(projectRoot: string, task?: string) {
   }
 
   const args = ["run", "--listen"]
+  let prdPath: string | null = null
+
   if (task) {
-    args.push("--task", task)
+    const ralphDir = path.join(projectRoot, ".ralph-tui")
+    if (!fs.existsSync(ralphDir)) {
+      fs.mkdirSync(ralphDir, { recursive: true })
+    }
+
+    prdPath = path.join(ralphDir, "peter-task.json")
+    const titleLine = task.split("\n")[0].slice(0, 80)
+    const prd = {
+      name: "Peter Parker Task",
+      branchName: `ralph/peter-task-${Date.now()}`,
+      description: task,
+      userStories: [{
+        id: "US-001",
+        title: titleLine,
+        description: task,
+        acceptanceCriteria: ["Task completed as described"],
+        priority: 1,
+        passes: false,
+        notes: "",
+        dependsOn: [],
+      }],
+      metadata: { updatedAt: new Date().toISOString() },
+    }
+    fs.writeFileSync(prdPath, JSON.stringify(prd, null, 2))
+    args.push("--prd", prdPath, "--headless")
   }
 
   console.log(chalk.cyan("\n  Starting Peter Parker orchestrator..."))
@@ -78,21 +104,33 @@ async function run(projectRoot: string, task?: string) {
     })
   }
 
+  const env = { ...process.env }
+  delete env.CLAUDECODE
+  delete env.CLAUDE_CODE
+
   const child = spawn("ralph-tui", args, {
     cwd: projectRoot,
     stdio: "inherit",
-    shell: true,
+    env,
   })
 
   if (bridge) {
     setTimeout(() => bridge!.start(), 1000)
   }
 
+  function cleanup() {
+    if (prdPath && fs.existsSync(prdPath)) {
+      try { fs.unlinkSync(prdPath) } catch {}
+    }
+  }
+
   child.on("error", (error) => {
+    cleanup()
     console.error(chalk.red(`Failed to start ralph-tui: ${error.message}`))
   })
 
   child.on("exit", (code) => {
+    cleanup()
     if (bridge) bridge.stop()
     process.exit(code || 0)
   })
@@ -163,12 +201,19 @@ export async function peterCommand(
       break
     }
 
+    case "dashboard": {
+      const { startEventDashboard } = await import("../ui/event-dashboard.js")
+      await startEventDashboard()
+      break
+    }
+
     default: {
       console.log(chalk.bold("\n  Peter Parker - Model-Routed Agent Orchestrator\n"))
       console.log(chalk.gray("  Commands:"))
       console.log("    jfl peter setup [--cost|--balanced|--quality]  Generate agent config")
       console.log("    jfl peter run [--task <task>]                  Run orchestrator")
       console.log("    jfl peter status                               Show status + recent events")
+      console.log("    jfl peter dashboard                            Live event stream dashboard")
       console.log()
     }
   }

@@ -7,7 +7,7 @@ import { join } from "path"
 import { homedir } from "os"
 import Conf from "conf"
 import { ensureContextHub, getContextHubConfig } from "../utils/ensure-context-hub.js"
-import { isRunning as getContextHubStatus } from "./context-hub.js"
+import { isRunning as getContextHubStatus, ensureDaemonInstalled } from "./context-hub.js"
 import { initCommand } from "./init.js"
 import {
   authenticateWithGitHub,
@@ -59,6 +59,9 @@ export async function sessionCommand(options: SessionOptions = {}) {
     projects.push(cwd)
     config.set("projects", projects)
   }
+
+  // Auto-install daemon (fire-and-forget, silent)
+  ensureDaemonInstalled({ quiet: true }).catch(() => {})
 
   // Check for saved CLI preference
   let preferredCLI = config.get("aiCLI") as string | undefined

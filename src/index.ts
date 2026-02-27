@@ -112,7 +112,7 @@ program
 program
   .command("context-hub")
   .description("Manage Context Hub daemon (unified context for AI agents)")
-  .argument("[action]", "start, stop, restart, status, ensure, ensure-all, doctor, install-daemon, uninstall-daemon, query, serve")
+  .argument("[action]", "start, stop, restart, status, ensure, ensure-all, doctor, dashboard, install-daemon, uninstall-daemon, query, serve")
   .option("-p, --port <port>", "Port to run on (default: per-project)")
   .option("-g, --global", "Run in global mode (serve all GTM projects)")
   .option("-q, --quiet", "Suppress output (for daemon use)")

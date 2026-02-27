@@ -42,11 +42,15 @@ export class MAPEventBus {
   private watchAbort: AbortController | null = null
   private serviceEventsWatcher: fs.FSWatcher | null = null
   private serviceEventsOffset: number = 0
+  private journalWatcher: fs.FSWatcher | null = null
+  private journalOffsets: Map<string, number> = new Map()
+  private dirWatcher: fs.FSWatcher | null = null
 
   constructor(options: {
     maxSize?: number
     persistPath?: string | null
     serviceEventsPath?: string | null
+    journalDir?: string | null
   } = {}) {
     this.maxSize = options.maxSize ?? 1000
     this.persistPath = options.persistPath ?? null
@@ -57,6 +61,10 @@ export class MAPEventBus {
 
     if (options.serviceEventsPath) {
       this.bridgeServiceEvents(options.serviceEventsPath)
+    }
+
+    if (options.journalDir) {
+      this.bridgeJournalEntries(options.journalDir)
     }
   }
 
@@ -149,6 +157,14 @@ export class MAPEventBus {
       this.serviceEventsWatcher.close()
       this.serviceEventsWatcher = null
     }
+    if (this.journalWatcher) {
+      this.journalWatcher.close()
+      this.journalWatcher = null
+    }
+    if (this.dirWatcher) {
+      this.dirWatcher.close()
+      this.dirWatcher = null
+    }
     this.subscribers.clear()
   }
 
@@ -207,7 +223,15 @@ export class MAPEventBus {
   }
 
   private bridgeServiceEvents(filePath: string): void {
-    if (!fs.existsSync(filePath)) return
+    if (!fs.existsSync(filePath)) {
+      // File doesn't exist yet — watch the parent directory for its creation
+      const dir = path.dirname(filePath)
+      if (!fs.existsSync(dir)) {
+        try { fs.mkdirSync(dir, { recursive: true }) } catch { /* non-fatal */ }
+      }
+      // Create empty file so fs.watch works
+      try { fs.writeFileSync(filePath, "") } catch { /* non-fatal */ }
+    }
 
     // Read existing events
     try {
@@ -262,6 +286,74 @@ export class MAPEventBus {
       })
     } catch {
       // Non-fatal — file watching not critical
+    }
+  }
+
+  private bridgeJournalEntries(journalDir: string): void {
+    if (!fs.existsSync(journalDir)) {
+      try { fs.mkdirSync(journalDir, { recursive: true }) } catch { return }
+    }
+
+    // Initialize offsets for existing files
+    try {
+      const files = fs.readdirSync(journalDir).filter(f => f.endsWith(".jsonl"))
+      for (const file of files) {
+        const filePath = path.join(journalDir, file)
+        try {
+          const content = fs.readFileSync(filePath, "utf-8")
+          this.journalOffsets.set(filePath, content.length)
+        } catch {
+          // skip
+        }
+      }
+    } catch {
+      // non-fatal
+    }
+
+    // Watch journal directory for changes
+    try {
+      this.journalWatcher = fs.watch(journalDir, (_eventType, filename) => {
+        if (!filename || !filename.endsWith(".jsonl")) return
+
+        const filePath = path.join(journalDir, filename)
+        if (!fs.existsSync(filePath)) return
+
+        try {
+          const content = fs.readFileSync(filePath, "utf-8")
+          const previousOffset = this.journalOffsets.get(filePath) ?? 0
+
+          if (content.length <= previousOffset) return
+
+          const newContent = content.slice(previousOffset)
+          this.journalOffsets.set(filePath, content.length)
+
+          const lines = newContent.trim().split("\n").filter(l => l.trim())
+          for (const line of lines) {
+            try {
+              const entry = JSON.parse(line)
+              this.emit({
+                type: "journal:entry" as MAPEventType,
+                source: `journal:${entry.session || filename.replace(".jsonl", "")}`,
+                session: entry.session,
+                data: {
+                  title: entry.title,
+                  type: entry.type,
+                  summary: entry.summary,
+                  status: entry.status,
+                  files: entry.files,
+                  ts: entry.ts,
+                },
+              })
+            } catch {
+              // Skip malformed
+            }
+          }
+        } catch {
+          // Non-fatal
+        }
+      })
+    } catch {
+      // Non-fatal
     }
   }
 }
