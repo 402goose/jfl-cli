@@ -38,6 +38,13 @@ const SYNC_PATHS = [
   "scripts/"
 ]
 
+// Files that should NOT be overwritten if they already exist and have been customized.
+// These contain project-specific content that jfl update would destroy.
+const SKIP_IF_CUSTOMIZED = [
+  "CLAUDE.md",
+  ".mcp.json"
+]
+
 // Files/folders to NEVER overwrite (project-specific)
 const PRESERVE_PATHS = [
   "knowledge/",
@@ -310,13 +317,25 @@ export async function updateCommand(options: { dry?: boolean; autoUpdate?: boole
         copyDirRecursive(sourcePath, destPath)
         updated.push(syncPath)
       } else {
-        // For files, just copy
-        const destDir = path.dirname(destPath)
-        if (!fs.existsSync(destDir)) {
-          fs.mkdirSync(destDir, { recursive: true })
+        // For files, check if this is a project-customized file
+        if (SKIP_IF_CUSTOMIZED.includes(syncPath) && fs.existsSync(destPath)) {
+          // File exists and is project-owned — don't overwrite
+          // Save template version as .template for reference
+          const templateCopy = destPath + ".template"
+          const destDir = path.dirname(destPath)
+          if (!fs.existsSync(destDir)) {
+            fs.mkdirSync(destDir, { recursive: true })
+          }
+          fs.copyFileSync(sourcePath, templateCopy)
+          updated.push(`${syncPath} (template saved, existing preserved)`)
+        } else {
+          const destDir = path.dirname(destPath)
+          if (!fs.existsSync(destDir)) {
+            fs.mkdirSync(destDir, { recursive: true })
+          }
+          fs.copyFileSync(sourcePath, destPath)
+          updated.push(syncPath)
         }
-        fs.copyFileSync(sourcePath, destPath)
-        updated.push(syncPath)
       }
     }
 

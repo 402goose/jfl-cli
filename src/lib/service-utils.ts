@@ -408,27 +408,41 @@ export async function restartCoreServices(
     serviceManager: false
   }
 
-  console.log(chalk.cyan("\n📦 Restarting services...\n"))
+  console.log(chalk.cyan("\n📦 Checking services...\n"))
 
-  // Restart Context Hub
-  const contextHubResult = await restartService("context-hub", {
-    stopCommand: "jfl context-hub stop",
-    startCommand: "jfl context-hub ensure",
-    healthCheck: `http://localhost:${getProjectPort()}/health`,
-    timeout: 5000
-  })
+  // Context Hub: only restart if not healthy (avoid killing a working hub)
+  const hubPort = getProjectPort()
+  const hubHealthy = await waitForHealthy(`http://localhost:${hubPort}/health`, 2000)
 
-  results.contextHub = contextHubResult.success
+  if (hubHealthy) {
+    console.log(chalk.green(`  ✓ context-hub already healthy on port ${hubPort}`))
+    results.contextHub = true
+  } else {
+    console.log(chalk.yellow(`  → context-hub not responding, restarting...`))
+    const contextHubResult = await restartService("context-hub", {
+      stopCommand: "jfl context-hub stop",
+      startCommand: "jfl context-hub ensure",
+      healthCheck: `http://localhost:${hubPort}/health`,
+      timeout: 5000
+    })
+    results.contextHub = contextHubResult.success
+  }
 
-  // Restart Service Manager
-  const serviceManagerResult = await restartService("service-manager", {
-    stopCommand: "jfl service-manager stop",
-    startCommand: "jfl service-manager ensure",
-    healthCheck: "http://localhost:3402/health",
-    timeout: 5000
-  })
+  // Service Manager: only restart if not healthy
+  const smHealthy = await waitForHealthy("http://localhost:3402/health", 2000)
 
-  results.serviceManager = serviceManagerResult.success
+  if (smHealthy) {
+    console.log(chalk.green(`  ✓ service-manager already healthy`))
+    results.serviceManager = true
+  } else {
+    const serviceManagerResult = await restartService("service-manager", {
+      stopCommand: "jfl service-manager stop",
+      startCommand: "jfl service-manager ensure",
+      healthCheck: "http://localhost:3402/health",
+      timeout: 5000
+    })
+    results.serviceManager = serviceManagerResult.success
+  }
 
   return results
 }
