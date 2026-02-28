@@ -16,6 +16,7 @@ import {
   getAllMemories
 } from './memory-db.js'
 import { computeTFIDF, computeEmbedding } from './memory-search.js'
+import { telemetry } from './telemetry.js'
 
 export interface JournalEntry {
   v: number
@@ -114,13 +115,26 @@ async function indexEntry(entry: JournalEntry, allTexts: string[]): Promise<bool
   let embeddingModel: string | undefined
 
   try {
+    const embeddingStart = Date.now()
     const result = await computeEmbedding(content)
     if (result) {
       embedding = result.embedding
       embeddingModel = result.model
+      telemetry.track({
+        category: 'performance',
+        event: 'performance:memory_embedding',
+        success: true,
+        duration_ms: Date.now() - embeddingStart,
+        embedding_model: result.model,
+      })
     }
   } catch (error) {
-    // Embeddings are optional - continue without them
+    telemetry.track({
+      category: 'performance',
+      event: 'performance:memory_embedding',
+      success: false,
+      error_type: (error as Error).constructor.name,
+    })
   }
 
   // Prepare metadata
@@ -254,7 +268,17 @@ export function startPeriodicIndexing(intervalMs: number = 60000): void {
 
   indexingInterval = setInterval(async () => {
     try {
-      await indexJournalEntries()
+      const indexStart = Date.now()
+      const stats = await indexJournalEntries()
+      telemetry.track({
+        category: 'performance',
+        event: 'performance:memory_index',
+        entries_added: stats.added,
+        entries_skipped: stats.skipped,
+        entries_errors: stats.errors,
+        total_entries: stats.added + stats.skipped + stats.errors,
+        duration_ms: Date.now() - indexStart,
+      })
     } catch (error) {
       console.error('Periodic indexing failed:', error)
     }

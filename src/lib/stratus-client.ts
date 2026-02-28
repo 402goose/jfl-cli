@@ -105,9 +105,11 @@ export class StratusClient {
   async reason(prompt: string, options: {
     temperature?: number
     maxTokens?: number
+    featureContext?: string
   } = {}): Promise<StratusResponse> {
     const controller = new AbortController()
     const timeoutId = setTimeout(() => controller.abort(), this.timeout)
+    const startTime = Date.now()
 
     try {
       const request: StratusRequest = {
@@ -137,7 +139,38 @@ export class StratusClient {
         throw new Error(`Stratus API error (${response.status}): ${errorText}`)
       }
 
-      return await response.json()
+      const result: StratusResponse = await response.json()
+
+      try {
+        const { telemetry } = await import('./telemetry.js')
+        const { estimateCost } = await import('./model-pricing.js')
+        const durationMs = Date.now() - startTime
+        const modelName = result.stratus?.execution_llm || result.model || this.model
+
+        telemetry.track({
+          category: 'performance',
+          event: 'stratus:api_call',
+          duration_ms: durationMs,
+          success: true,
+          model_name: modelName,
+          stratus_model: result.stratus?.model,
+          execution_llm: result.stratus?.execution_llm,
+          prompt_tokens: result.usage?.prompt_tokens,
+          completion_tokens: result.usage?.completion_tokens,
+          total_tokens: result.usage?.total_tokens,
+          estimated_cost_usd: result.usage
+            ? estimateCost(modelName, result.usage.prompt_tokens, result.usage.completion_tokens)
+            : undefined,
+          stratus_confidence: result.stratus?.confidence,
+          planning_time_ms: result.stratus?.planning_time_ms,
+          execution_time_ms: result.stratus?.execution_time_ms,
+          feature_context: options.featureContext,
+        })
+      } catch {
+        // telemetry is fire-and-forget
+      }
+
+      return result
     } catch (error: any) {
       if (error.name === "AbortError") {
         throw new Error(`Stratus request timed out after ${this.timeout}ms`)
@@ -196,7 +229,8 @@ Be concise but specific. Cite entry timestamps when referencing specific work.`
     const startTime = Date.now()
     const response = await this.reason(prompt, {
       temperature: 0.7,
-      maxTokens: 2000
+      maxTokens: 2000,
+      featureContext: 'synthesis',
     })
     const executionTime = Date.now() - startTime
 

@@ -29,6 +29,7 @@ import Conf from "conf"
 import { MAPEventBus } from "../lib/map-event-bus.js"
 import { WebSocketServer } from "ws"
 import type { MAPEventType } from "../types/map.js"
+import { telemetry } from "../lib/telemetry.js"
 
 const PID_FILE = ".jfl/context-hub.pid"
 const LOG_FILE = ".jfl/logs/context-hub.log"
@@ -555,6 +556,35 @@ function getUnifiedContext(projectRoot: string, query?: string, taskType?: strin
 
 function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus): http.Server {
   const server = http.createServer((req, res) => {
+    const requestStart = Date.now()
+    const pathname = new URL(req.url || "/", `http://localhost:${port}`).pathname
+
+    // Intercept writeHead to capture status code for telemetry
+    let capturedStatus = 200
+    const originalWriteHead = res.writeHead.bind(res)
+    res.writeHead = function(statusCode: number, ...args: any[]) {
+      capturedStatus = statusCode
+      return originalWriteHead(statusCode, ...args)
+    } as any
+
+    // Track request on response finish (skip health/OPTIONS/dashboard)
+    const shouldTrack = req.method !== "OPTIONS"
+      && pathname !== "/health"
+      && !pathname.startsWith("/dashboard")
+    if (shouldTrack) {
+      res.on('finish', () => {
+        telemetry.track({
+          category: 'context_hub',
+          event: 'context_hub:request',
+          endpoint: pathname,
+          method: req.method,
+          status_code: capturedStatus,
+          duration_ms: Date.now() - requestStart,
+          hub_port: port,
+        })
+      })
+    }
+
     // CORS - include Authorization header
     res.setHeader("Access-Control-Allow-Origin", "*")
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -591,6 +621,11 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus)
 
     // All other endpoints require auth
     if (!validateAuth(req, projectRoot, url)) {
+      telemetry.track({
+        category: 'context_hub',
+        event: 'context_hub:auth_failed',
+        endpoint: pathname,
+      })
       res.writeHead(401, { "Content-Type": "application/json" })
       res.end(JSON.stringify({
         error: "Unauthorized",
@@ -626,6 +661,16 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus)
             context.items = context.items.slice(0, maxItems)
           }
 
+          telemetry.track({
+            category: 'context_hub',
+            event: 'context_hub:context_loaded',
+            item_count: context.items.length,
+            journal_count: context.items.filter(i => i.source === 'journal').length,
+            knowledge_count: context.items.filter(i => i.source === 'knowledge').length,
+            code_count: context.items.filter(i => i.source === 'code').length,
+            query_length: query ? query.length : 0,
+          })
+
           res.writeHead(200, { "Content-Type": "application/json" })
           res.end(JSON.stringify(context))
         } catch (err: any) {
@@ -649,10 +694,20 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus)
             return
           }
 
+          const searchStart = Date.now()
           const context = getUnifiedContext(projectRoot, query)
           context.items = context.items
             .filter(item => item.relevance && item.relevance > 0)
             .slice(0, maxItems)
+
+          telemetry.track({
+            category: 'context_hub',
+            event: 'context_hub:search',
+            result_count: context.items.length,
+            duration_ms: Date.now() - searchStart,
+            has_query: true,
+            query_length: query.length,
+          })
 
           res.writeHead(200, { "Content-Type": "application/json" })
           res.end(JSON.stringify(context))
@@ -1569,7 +1624,14 @@ export async function contextHubCommand(
       process.on("uncaughtException", (err) => {
         console.error(`Uncaught exception: ${err.message}`)
         console.error(err.stack)
-        // Don't exit - log and continue
+        telemetry.track({
+          category: 'error',
+          event: 'error:hub_crash',
+          error_type: err.constructor.name,
+          error_code: (err as any).code || undefined,
+          hub_port: port,
+          hub_uptime_s: isListening ? Math.floor((Date.now() - hubStartTime) / 1000) : 0,
+        })
       })
 
       process.on("unhandledRejection", (reason, promise) => {
@@ -1579,18 +1641,33 @@ export async function contextHubCommand(
 
       server.on("error", (err: any) => {
         console.error(`Server error: ${err.message}`)
+        telemetry.track({
+          category: 'error',
+          event: 'error:hub_server',
+          error_type: err.constructor.name,
+          error_code: err.code || undefined,
+          hub_port: port,
+        })
         if (err.code === "EADDRINUSE") {
           console.error(`Port ${port} is already in use. Exiting.`)
           process.exit(1)
         }
-        // For other errors, don't exit
       })
+
+      const hubStartTime = Date.now()
 
       server.listen(port, async () => {
         isListening = true
         const timestamp = new Date().toISOString()
         console.log(`[${timestamp}] Context Hub listening on port ${port}`)
         console.log(`[${timestamp}] PID: ${process.pid}`)
+
+        telemetry.track({
+          category: 'context_hub',
+          event: 'context_hub:started',
+          hub_port: port,
+          duration_ms: Date.now() - hubStartTime,
+        })
 
         // Initialize memory system
         try {
@@ -1635,6 +1712,12 @@ export async function contextHubCommand(
         console.log(`[${timestamp}] Received ${signal}`)
         console.log(`[${timestamp}] PID: ${process.pid}, Parent PID: ${process.ppid}`)
         console.log(`[${timestamp}] Shutting down...`)
+        telemetry.track({
+          category: 'context_hub',
+          event: 'context_hub:stopped',
+          hub_port: port,
+          hub_uptime_s: Math.floor((Date.now() - hubStartTime) / 1000),
+        })
         server.close(() => {
           eventBus.destroy()
           console.log(`[${new Date().toISOString()}] Server closed`)

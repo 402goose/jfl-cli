@@ -17,6 +17,7 @@ import {
 } from "../utils/github-auth.js"
 import { renderBanner, showHowItWorksNotice, theme } from "../ui/index.js"
 import axios from "axios"
+import { telemetry } from "../lib/telemetry.js"
 
 const config = new Conf({ projectName: "jfl" })
 
@@ -323,6 +324,15 @@ async function launchCLI(cli: DetectedCLI, cwd: string) {
   console.log(theme.dimmer("─".repeat(50)))
   console.log()
 
+  const sessionStart = Date.now()
+
+  telemetry.track({
+    category: 'session',
+    event: 'session:started',
+    session_event: 'start',
+    ai_cli: cli.provider,
+  })
+
   const child = spawn(cli.command, args, {
     cwd,
     stdio: "inherit",
@@ -334,9 +344,24 @@ async function launchCLI(cli: DetectedCLI, cwd: string) {
 
   child.on("error", (err) => {
     console.error(chalk.red(`\nFailed to launch ${cli.name}:`), err.message)
+    telemetry.track({
+      category: 'session',
+      event: 'session:crash',
+      session_event: 'crash',
+      ai_cli: cli.provider,
+      error_type: err.constructor.name,
+    })
   })
 
   child.on("exit", (code) => {
+    telemetry.track({
+      category: 'session',
+      event: 'session:ended',
+      session_event: 'end',
+      ai_cli: cli.provider,
+      session_duration_s: Math.floor((Date.now() - sessionStart) / 1000),
+      success: code === 0 || code === null,
+    })
     if (code !== 0 && code !== null) {
       console.log(chalk.yellow(`\n${cli.name} exited with code ${code}`))
     }

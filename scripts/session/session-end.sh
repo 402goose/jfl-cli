@@ -20,6 +20,8 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
+END_START_TIME=$(date +%s)
+
 FORCE=false
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -187,6 +189,14 @@ else
 
     # Clean up session file
     rm -f "$SESSION_FILE"
+
+    # Track session end telemetry (fire-and-forget)
+    END_DURATION=$(( $(date +%s) - END_START_TIME ))
+    jfl telemetry track \
+      --category session \
+      --event "hook:session_end" \
+      --duration "${END_DURATION}000" \
+      --success true 2>/dev/null &
 
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

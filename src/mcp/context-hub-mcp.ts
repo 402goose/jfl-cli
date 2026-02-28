@@ -14,6 +14,7 @@ import * as path from "path"
 import { execSync } from "child_process"
 
 import { getProjectHubUrl } from "../utils/context-hub-port.js"
+import { telemetry } from "../lib/telemetry.js"
 
 const CONTEXT_HUB_URL = process.env.CONTEXT_HUB_URL || getProjectHubUrl()
 const TOKEN_FILE = ".jfl/context-hub.token"
@@ -816,8 +817,16 @@ function handleRequest(request: MCPRequest): MCPResponse {
 async function handleAsyncRequest(request: MCPRequest): Promise<MCPResponse> {
   if (request.method === "tools/call") {
     const { name, arguments: args } = request.params || {}
+    const start = Date.now()
     try {
       const result = await handleToolCall(name, args || {})
+      telemetry.track({
+        category: 'context_hub',
+        event: 'context_hub:mcp_call',
+        mcp_tool: name,
+        mcp_duration_ms: Date.now() - start,
+        success: true,
+      })
       return {
         jsonrpc: "2.0",
         id: request.id,
@@ -826,6 +835,14 @@ async function handleAsyncRequest(request: MCPRequest): Promise<MCPResponse> {
         }
       }
     } catch (error: any) {
+      telemetry.track({
+        category: 'context_hub',
+        event: 'context_hub:mcp_call',
+        mcp_tool: name,
+        mcp_duration_ms: Date.now() - start,
+        success: false,
+        error_type: error.constructor.name,
+      })
       return {
         jsonrpc: "2.0",
         id: request.id,

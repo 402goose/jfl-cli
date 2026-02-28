@@ -56,16 +56,33 @@ import {
 import { getDayPassTimeRemaining } from "./utils/x402-client.js"
 import { checkAndMigrate } from "./utils/jfl-migration.js"
 import { JFL_PATHS } from "./utils/jfl-paths.js"
+import { telemetry } from "./lib/telemetry.js"
 
 // Auto-migrate from ~/.jfl/ to XDG directories if needed
 await checkAndMigrate({ silent: true })
 
 const program = new Command()
 
+// Telemetry hooks — auto-track all commands
+program.hook('preAction', (_thisCommand, actionCommand) => {
+  ;(actionCommand as any).__telemetryStart = Date.now()
+})
+
+program.hook('postAction', (_thisCommand, actionCommand) => {
+  const start = (actionCommand as any).__telemetryStart
+  telemetry.track({
+    category: 'command',
+    event: `command:${actionCommand.name()}`,
+    command: actionCommand.name(),
+    duration_ms: start ? Date.now() - start : undefined,
+    success: true,
+  })
+})
+
 program
   .name("jfl")
   .description("Just Fucking Launch - AI gateway for GTM")
-  .version("0.2.2")
+  .version("0.2.3")
   .option("--no-update", "Skip automatic update check")
   .action(async (options) => {
     // Always update on session start (unless --no-update flag)
@@ -351,6 +368,8 @@ program
   .command("preferences")
   .description("Manage JFL preferences")
   .option("--clear-ai", "Clear saved AI CLI preference")
+  .option("--no-telemetry", "Disable anonymous telemetry")
+  .option("--telemetry", "Enable anonymous telemetry")
   .option("--show", "Show current preferences")
   .action(async (options) => {
     const { getConfigValue, deleteConfigKey, getConfig } = await import("./utils/jfl-config.js")
@@ -362,12 +381,28 @@ program
       return
     }
 
-    if (options.show || !options.clearAi) {
-      console.log(chalk.bold("\n⚙️  JFL Preferences\n"))
-      console.log(chalk.gray("AI CLI:") + " " + (getConfigValue("aiCLI") || chalk.gray("none")))
-      console.log(chalk.gray("Projects tracked:") + " " + ((getConfigValue("projects") as string[] || []).length))
+    if (options.telemetry === false) {
+      telemetry.disable()
+      console.log(chalk.green("\n✓ Telemetry disabled"))
+      console.log(chalk.gray("  No data will be collected\n"))
+      return
+    }
+
+    if (options.telemetry === true) {
+      telemetry.enable()
+      console.log(chalk.green("\n✓ Telemetry enabled"))
+      console.log(chalk.gray("  Anonymous usage data helps improve JFL\n"))
+      return
+    }
+
+    if (options.show || (!options.clearAi && options.telemetry === undefined)) {
+      console.log(chalk.bold("\n  JFL Preferences\n"))
+      console.log(chalk.gray("  AI CLI:") + " " + (getConfigValue("aiCLI") || chalk.gray("none")))
+      console.log(chalk.gray("  Projects tracked:") + " " + ((getConfigValue("projects") as string[] || []).length))
+      console.log(chalk.gray("  Telemetry:") + " " + (telemetry.isEnabled() ? chalk.green("enabled") : chalk.red("disabled")))
       console.log()
-      console.log(chalk.gray("To clear AI preference: jfl preferences --clear-ai"))
+      console.log(chalk.gray("  To clear AI preference:   jfl preferences --clear-ai"))
+      console.log(chalk.gray("  To disable telemetry:     jfl preferences --no-telemetry"))
       console.log()
     }
   })
@@ -850,6 +885,117 @@ openclaw
   })
 
 // ============================================================================
+// TELEMETRY
+// ============================================================================
+
+const telemetryCmd = program.command("telemetry").description("Manage anonymous usage telemetry")
+
+import { registerDigestCommand } from "./commands/digest.js"
+registerDigestCommand(telemetryCmd)
+
+telemetryCmd
+  .command("status")
+  .description("Show telemetry status")
+  .action(async () => {
+    const enabled = telemetry.isEnabled()
+    const installId = telemetry.getInstallId()
+    const queueSize = telemetry.getQueueSize()
+    const spillover = telemetry.getSpilloverEvents()
+
+    console.log(chalk.bold("\n  Telemetry Status\n"))
+    console.log(chalk.gray("  Enabled:    ") + (enabled ? chalk.green("yes") : chalk.red("no")))
+    if (enabled) {
+      console.log(chalk.gray("  Install ID: ") + chalk.cyan(installId))
+      console.log(chalk.gray("  Queue:      ") + `${queueSize} events pending`)
+      console.log(chalk.gray("  Spillover:  ") + `${spillover.length} events on disk`)
+    }
+    console.log(chalk.gray("\n  Disable: jfl preferences --no-telemetry"))
+    console.log(chalk.gray("  Or set:  JFL_TELEMETRY=0\n"))
+  })
+
+telemetryCmd
+  .command("show")
+  .description("Show recent telemetry events from spillover queue")
+  .action(async () => {
+    const spillover = telemetry.getSpilloverEvents()
+    if (spillover.length === 0) {
+      console.log(chalk.gray("\n  No events in spillover queue.\n"))
+      return
+    }
+    console.log(chalk.bold(`\n  Last ${Math.min(spillover.length, 20)} events:\n`))
+    for (const event of spillover.slice(-20)) {
+      const time = event.ts.replace('T', ' ').slice(0, 19)
+      console.log(chalk.gray(`  [${time}]`) + ` ${chalk.cyan(event.event)}` + (event.duration_ms ? chalk.gray(` ${event.duration_ms}ms`) : ''))
+    }
+    console.log()
+  })
+
+telemetryCmd
+  .command("reset")
+  .description("Reset install ID (generates new anonymous ID)")
+  .action(async () => {
+    telemetry.resetInstallId()
+    console.log(chalk.green("\n  Install ID reset. New ID: ") + chalk.cyan(telemetry.getInstallId()) + "\n")
+  })
+
+telemetryCmd
+  .command("track")
+  .description("Emit a telemetry event (for shell scripts/hooks)")
+  .requiredOption("--category <category>", "Event category (command, error, context_hub, session, performance)")
+  .requiredOption("--event <event>", "Event name (e.g., hook:session_init)")
+  .option("--duration <ms>", "Duration in milliseconds")
+  .option("--success <bool>", "Whether the operation succeeded")
+  .option("--endpoint <endpoint>", "HTTP endpoint")
+  .option("--error-type <type>", "Error type")
+  .option("--error-code <code>", "Error code")
+  .allowUnknownOption()
+  .action(async (options) => {
+    telemetry.track({
+      category: options.category as any,
+      event: options.event,
+      duration_ms: options.duration ? parseInt(options.duration, 10) : undefined,
+      success: options.success !== undefined ? options.success === 'true' : undefined,
+      endpoint: options.endpoint,
+      error_type: options.errorType,
+      error_code: options.errorCode,
+    })
+    await telemetry.flush()
+  })
+
+// Default telemetry action
+telemetryCmd.action(async () => {
+  // Show status by default
+  const enabled = telemetry.isEnabled()
+  const installId = telemetry.getInstallId()
+  console.log(chalk.bold("\n  Telemetry Status\n"))
+  console.log(chalk.gray("  Enabled:    ") + (enabled ? chalk.green("yes") : chalk.red("no")))
+  if (enabled) {
+    console.log(chalk.gray("  Install ID: ") + chalk.cyan(installId))
+  }
+  console.log(chalk.gray("\n  Commands:"))
+  console.log("    jfl telemetry status   Show detailed status")
+  console.log("    jfl telemetry show     Show queued events")
+  console.log("    jfl telemetry digest   Cost and health analysis")
+  console.log("    jfl telemetry reset    Reset install ID")
+  console.log()
+})
+
+// ============================================================================
+// IMPROVE
+// ============================================================================
+
+program
+  .command("improve")
+  .description("Analyze telemetry and suggest improvements")
+  .option("--dry-run", "Preview suggestions without creating issues")
+  .option("--auto", "Create GitHub issues for actionable suggestions")
+  .option("--hours <hours>", "Analysis period in hours", "24")
+  .action(async (options) => {
+    const { improveCommand } = await import("./commands/improve.js")
+    await improveCommand(options)
+  })
+
+// ============================================================================
 // HELP
 // ============================================================================
 // GTM COMMANDS
@@ -894,6 +1040,9 @@ program
     console.log("    jfl context-hub       Context Hub (unified AI context + MAP event bus)")
     console.log("    jfl openclaw          OpenClaw agent protocol")
     console.log("    jfl test              Test onboarding (isolated)")
+    console.log("    jfl telemetry         Manage usage telemetry")
+    console.log("    jfl telemetry digest  Cost and health analysis")
+    console.log("    jfl improve           Self-improvement suggestions")
 
     console.log(chalk.cyan("\n  Platform (requires login):"))
     console.log("    jfl login             Login to platform")

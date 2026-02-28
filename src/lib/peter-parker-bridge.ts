@@ -89,6 +89,7 @@ export class PeterParkerBridge {
         }
 
         this.publishToContextHub(mapType, eventData)
+        this.trackAgentCost(raw)
 
         if (this.options.onEvent) {
           this.options.onEvent({ type: mapType, data: eventData })
@@ -120,6 +121,35 @@ export class PeterParkerBridge {
       this.reconnectDelay * 2,
       this.maxReconnectDelay
     )
+  }
+
+  private trackAgentCost(raw: Record<string, any>): void {
+    const usage = raw.usage || raw.token_usage
+    if (!usage) return
+
+    try {
+      import('./telemetry.js').then(({ telemetry }) => {
+        import('./model-pricing.js').then(({ estimateCost }) => {
+          const model = raw.model || raw.execution_llm || 'unknown'
+          const promptTokens = usage.prompt_tokens || usage.input_tokens || 0
+          const completionTokens = usage.completion_tokens || usage.output_tokens || 0
+
+          telemetry.track({
+            category: 'performance',
+            event: 'peter:agent_cost',
+            model_name: model,
+            agent_role: raw.agent_role || raw.role,
+            cost_profile: raw.cost_profile,
+            prompt_tokens: promptTokens,
+            completion_tokens: completionTokens,
+            total_tokens: promptTokens + completionTokens,
+            estimated_cost_usd: estimateCost(model, promptTokens, completionTokens),
+          })
+        }).catch(() => {})
+      }).catch(() => {})
+    } catch {
+      // fire-and-forget
+    }
   }
 
   private async publishToContextHub(
