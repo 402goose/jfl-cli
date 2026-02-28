@@ -48,6 +48,18 @@ export interface TelemetryDigest {
     crashed: number
     avgDurationS: number
   }
+  hooks: {
+    received: number
+    byEvent: Record<string, number>
+    byTool: Record<string, number>
+    fileHotspots: Array<{ file: string; edits: number }>
+  }
+  flows: {
+    triggered: number
+    completed: number
+    failed: number
+    byFlow: Record<string, number>
+  }
 }
 
 export type SuggestionSeverity = 'high' | 'medium' | 'low'

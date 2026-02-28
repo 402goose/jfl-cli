@@ -27,9 +27,12 @@ import { getProjectPort } from "../utils/context-hub-port.js"
 import { getConfigValue, setConfig } from "../utils/jfl-config.js"
 import Conf from "conf"
 import { MAPEventBus } from "../lib/map-event-bus.js"
+import { FlowEngine } from "../lib/flow-engine.js"
 import { WebSocketServer } from "ws"
 import type { MAPEventType } from "../types/map.js"
 import { telemetry } from "../lib/telemetry.js"
+import { transformHookPayload } from "../lib/hook-transformer.js"
+import type { HookPayload } from "../types/map.js"
 
 const PID_FILE = ".jfl/context-hub.pid"
 const LOG_FILE = ".jfl/logs/context-hub.log"
@@ -615,6 +618,55 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus)
       }).catch(() => {
         res.writeHead(500, { "Content-Type": "application/json" })
         res.end(JSON.stringify({ error: "Dashboard module failed to load" }))
+      })
+      return
+    }
+
+    // Hook ingestion (Claude Code HTTP hooks)
+    // No auth required — localhost-only. Always returns 200.
+    if (url.pathname === "/api/hooks" && req.method === "POST") {
+      const remoteAddr = req.socket.remoteAddress || ""
+      const isLocalhost = remoteAddr === "127.0.0.1" || remoteAddr === "::1" || remoteAddr === "::ffff:127.0.0.1"
+      if (!isLocalhost) {
+        res.writeHead(403, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ error: "localhost only" }))
+        return
+      }
+
+      let body = ""
+      let bodySize = 0
+      const MAX_BODY = 64 * 1024
+
+      req.on("data", (chunk: Buffer | string) => {
+        bodySize += typeof chunk === "string" ? chunk.length : chunk.byteLength
+        if (bodySize <= MAX_BODY) {
+          body += chunk
+        }
+      })
+
+      req.on("end", () => {
+        try {
+          if (bodySize > MAX_BODY) {
+            console.warn(`[hooks] Dropped oversized payload: ${bodySize} bytes`)
+            res.writeHead(200, { "Content-Type": "application/json" })
+            res.end(JSON.stringify({ ok: true, dropped: true }))
+            return
+          }
+
+          const payload: HookPayload = JSON.parse(body)
+          const partial = transformHookPayload(payload)
+
+          if (eventBus) {
+            eventBus.emit(partial)
+          }
+
+          res.writeHead(200, { "Content-Type": "application/json" })
+          res.end(JSON.stringify({ ok: true }))
+        } catch (err: any) {
+          console.warn(`[hooks] Parse error: ${err.message}`)
+          res.writeHead(200, { "Content-Type": "application/json" })
+          res.end(JSON.stringify({ ok: true, parse_error: true }))
+        }
       })
       return
     }
@@ -1686,6 +1738,17 @@ export async function contextHubCommand(
         } catch (err: any) {
           console.error(`[${timestamp}] Failed to initialize memory system:`, err.message)
           // Don't exit - memory is optional
+        }
+
+        // Start flow engine
+        try {
+          const flowEngine = new FlowEngine(eventBus, projectRoot)
+          const flowCount = await flowEngine.start()
+          if (flowCount > 0) {
+            console.log(`[${timestamp}] Flow engine started with ${flowCount} active flow(s)`)
+          }
+        } catch (err: any) {
+          console.error(`[${timestamp}] Failed to start flow engine:`, err.message)
         }
 
         console.log(`[${timestamp}] MAP event bus initialized (buffer: 1000, subscribers: ${eventBus.getSubscriberCount()})`)

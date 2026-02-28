@@ -15,7 +15,23 @@ export type MAPEventType =
   | "openclaw:tag"
   | "journal:entry" | "decision:made"
   | "build:completed" | "deploy:completed"
+  | "hook:session-start" | "hook:session-end"
+  | "hook:tool-use" | "hook:tool-result"
+  | "hook:stop" | "hook:pre-compact"
+  | "hook:task-completed"
+  | "hook:subagent-start" | "hook:subagent-stop"
+  | "flow:triggered" | "flow:completed"
   | "custom"
+
+export interface HookPayload {
+  hook_event_name: string
+  session_id?: string
+  tool_name?: string
+  tool_input?: Record<string, unknown>
+  tool_output?: string
+  file_paths?: string[]
+  [key: string]: unknown
+}
 
 export interface MAPEvent {
   id: string

@@ -57,6 +57,15 @@ export async function improveCommand(options: ImproveOptions): Promise<void> {
     console.log()
   }
 
+  const hookSuggestions = suggestions.filter(s => s.type === 'usage')
+  if (hookSuggestions.length > 0) {
+    console.log(chalk.bold(`\n  Hook Insights`))
+    for (const s of hookSuggestions) {
+      console.log(chalk.cyan(`    ${s.title}`))
+      console.log(chalk.gray(`    ${s.description}\n`))
+    }
+  }
+
   if (options.dryRun) {
     console.log(chalk.gray(`  --dry-run: Would create ${actionable.length} GitHub issues.\n`))
     return

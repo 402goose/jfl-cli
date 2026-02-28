@@ -8,7 +8,7 @@ export interface TelemetryEvent {
   session_id: string
   install_id: string
 
-  category: 'command' | 'error' | 'context_hub' | 'session' | 'performance'
+  category: 'command' | 'error' | 'context_hub' | 'session' | 'performance' | 'hooks'
   event: string
 
   jfl_version: string
@@ -64,6 +64,12 @@ export interface TelemetryEvent {
   feature_context?: string
   agent_role?: string
   cost_profile?: string
+
+  hook_event_name?: string
+  tool_name?: string
+  has_file_paths?: boolean
+  flow_name?: string
+  actions_failed?: number
 }
 
 export interface TelemetryConfig {

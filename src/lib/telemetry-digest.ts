@@ -39,6 +39,8 @@ export function analyzeEvents(events: TelemetryEvent[], periodHours: number): Te
   const hub = { starts: 0, crashes: 0, mcpCalls: 0, totalMcpLatency: 0 }
   const memory = { indexRuns: 0, entriesIndexed: 0, errors: 0, totalDuration: 0 }
   const sessions = { started: 0, ended: 0, crashed: 0, totalDuration: 0, durationCount: 0 }
+  const hooks = { received: 0, byEvent: {} as Record<string, number>, byTool: {} as Record<string, number>, fileEdits: {} as Record<string, number> }
+  const flows = { triggered: 0, completed: 0, failed: 0, byFlow: {} as Record<string, number> }
 
   for (const e of filtered) {
     if (e.event === 'stratus:api_call' || e.event === 'peter:agent_cost') {
@@ -101,6 +103,26 @@ export function analyzeEvents(events: TelemetryEvent[], periodHours: number): Te
       }
       if (e.session_event === 'crash') sessions.crashed++
     }
+
+    if (e.category === 'hooks' && e.event === 'hook:received') {
+      hooks.received++
+      const hookEvent = (e as any).hook_event_name || 'unknown'
+      hooks.byEvent[hookEvent] = (hooks.byEvent[hookEvent] || 0) + 1
+      const toolName = (e as any).tool_name
+      if (toolName) {
+        hooks.byTool[toolName] = (hooks.byTool[toolName] || 0) + 1
+      }
+    }
+
+    if (e.event === 'flow:triggered' || e.event === 'flow:completed') {
+      if (e.event === 'flow:triggered') flows.triggered++
+      if (e.event === 'flow:completed') {
+        flows.completed++
+        if ((e as any).actions_failed > 0) flows.failed++
+      }
+      const flowName = (e as any).flow_name || 'unknown'
+      flows.byFlow[flowName] = (flows.byFlow[flowName] || 0) + 1
+    }
   }
 
   const costs = Array.from(costMap.values()).sort((a, b) => b.estimatedCostUsd - a.estimatedCostUsd)
@@ -140,6 +162,21 @@ export function analyzeEvents(events: TelemetryEvent[], periodHours: number): Te
       ended: sessions.ended,
       crashed: sessions.crashed,
       avgDurationS: sessions.durationCount > 0 ? Math.round(sessions.totalDuration / sessions.durationCount) : 0,
+    },
+    hooks: {
+      received: hooks.received,
+      byEvent: hooks.byEvent,
+      byTool: hooks.byTool,
+      fileHotspots: Object.entries(hooks.fileEdits)
+        .map(([file, edits]) => ({ file, edits }))
+        .sort((a, b) => b.edits - a.edits)
+        .slice(0, 10),
+    },
+    flows: {
+      triggered: flows.triggered,
+      completed: flows.completed,
+      failed: flows.failed,
+      byFlow: flows.byFlow,
     },
   }
 }
@@ -216,6 +253,48 @@ export function generateSuggestions(digest: TelemetryDigest): ImprovementSuggest
     })
   }
 
+  if (digest.hooks && digest.hooks.received > 50) {
+    const topTools = Object.entries(digest.hooks.byTool)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 3)
+    if (topTools.length > 0) {
+      const toolList = topTools.map(([t, c]) => `${t} (${c})`).join(', ')
+      suggestions.push({
+        type: 'usage',
+        severity: 'low',
+        title: 'Tool usage breakdown available',
+        description: `${digest.hooks.received} hook events captured. Top tools: ${toolList}.`,
+        suggestedFix: 'Review tool usage patterns. High Edit/Write ratios may indicate files needing refactoring.',
+      })
+    }
+  }
+
+  if (digest.hooks?.fileHotspots?.length > 0) {
+    const hotspot = digest.hooks.fileHotspots[0]
+    if (hotspot.edits > 10) {
+      suggestions.push({
+        type: 'usage',
+        severity: 'medium',
+        title: `File hotspot: ${hotspot.file}`,
+        description: `${hotspot.file} edited ${hotspot.edits} times — consider refactoring.`,
+        suggestedFix: 'Files edited frequently across sessions may benefit from decomposition or clearer interfaces.',
+      })
+    }
+  }
+
+  if (digest.flows && digest.flows.triggered > 0 && digest.flows.failed > 0) {
+    const failRate = digest.flows.failed / digest.flows.triggered
+    if (failRate > 0.2) {
+      suggestions.push({
+        type: 'reliability',
+        severity: 'medium',
+        title: 'Flow failure rate exceeds 20%',
+        description: `${digest.flows.failed} of ${digest.flows.triggered} flow triggers had action failures.`,
+        suggestedFix: 'Check flow definitions in .jfl/flows.yaml. Run `jfl flows test <name>` to debug.',
+      })
+    }
+  }
+
   return suggestions
 }
 
@@ -260,6 +339,34 @@ export function formatDigest(digest: TelemetryDigest, format: 'text' | 'json'): 
         String(c.avgDurationMs).padEnd(12) +
         `${(c.successRate * 100).toFixed(0)}%`
       )
+    }
+    lines.push('')
+  }
+
+  if (digest.hooks && digest.hooks.received > 0) {
+    lines.push('  Hook Events')
+    lines.push('  ' + '-'.repeat(56))
+    lines.push(`  Total received: ${digest.hooks.received}`)
+    const topTools = Object.entries(digest.hooks.byTool).sort((a, b) => b[1] - a[1]).slice(0, 5)
+    if (topTools.length > 0) {
+      lines.push('  Top tools: ' + topTools.map(([t, c]) => `${t} (${c})`).join(', '))
+    }
+    if (digest.hooks.fileHotspots?.length > 0) {
+      lines.push('  File hotspots:')
+      for (const h of digest.hooks.fileHotspots.slice(0, 5)) {
+        lines.push(`    ${h.file} — ${h.edits} edits`)
+      }
+    }
+    lines.push('')
+  }
+
+  if (digest.flows && digest.flows.triggered > 0) {
+    lines.push('  Flows')
+    lines.push('  ' + '-'.repeat(56))
+    lines.push(`  Triggered: ${digest.flows.triggered}, Completed: ${digest.flows.completed}, Failed: ${digest.flows.failed}`)
+    const topFlows = Object.entries(digest.flows.byFlow).sort((a, b) => b[1] - a[1]).slice(0, 5)
+    if (topFlows.length > 0) {
+      lines.push('  Top flows: ' + topFlows.map(([f, c]) => `${f} (${c})`).join(', '))
     }
     lines.push('')
   }

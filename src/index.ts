@@ -26,6 +26,8 @@ import { sessionCommand } from "./commands/session.js"
 import { feedbackCommand } from "./commands/feedback.js"
 import { updateCommand } from "./commands/update.js"
 import { contextHubCommand } from "./commands/context-hub.js"
+import { hooksCommand } from "./commands/hooks.js"
+import { flowsCommand } from "./commands/flows.js"
 import { voiceCommand } from "./commands/voice.js"
 import { synopsisCommand } from "./commands/synopsis.js"
 import { onboardCommand } from "./commands/onboard.js"
@@ -142,6 +144,23 @@ program
       global: options.global || false,
       quiet: options.quiet || false,
     })
+  })
+
+program
+  .command("hooks")
+  .description("Manage Claude Code HTTP hooks for Context Hub")
+  .argument("[action]", "init, status, remove")
+  .action(async (action) => {
+    await hooksCommand(action)
+  })
+
+program
+  .command("flows")
+  .description("Manage declarative event flows")
+  .argument("[action]", "list, add, test, enable, disable")
+  .argument("[name]", "Flow name (for test/enable/disable)")
+  .action(async (action, name) => {
+    await flowsCommand(action, name)
   })
 
 program
