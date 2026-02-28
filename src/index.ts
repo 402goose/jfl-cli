@@ -28,6 +28,7 @@ import { updateCommand } from "./commands/update.js"
 import { contextHubCommand } from "./commands/context-hub.js"
 import { hooksCommand } from "./commands/hooks.js"
 import { flowsCommand } from "./commands/flows.js"
+import { scopeCommand } from "./commands/scope.js"
 import { voiceCommand } from "./commands/voice.js"
 import { synopsisCommand } from "./commands/synopsis.js"
 import { onboardCommand } from "./commands/onboard.js"
@@ -161,6 +162,15 @@ program
   .argument("[name]", "Flow name (for test/enable/disable)")
   .action(async (action, name) => {
     await flowsCommand(action, name)
+  })
+
+program
+  .command("scope")
+  .description("View and manage service context scopes")
+  .argument("[action]", "list, set, test")
+  .argument("[args...]", "Arguments for the action")
+  .action(async (action, args) => {
+    await scopeCommand(action, ...args)
   })
 
 program

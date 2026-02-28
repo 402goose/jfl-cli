@@ -68,6 +68,13 @@ async function listFlows(): Promise<void> {
     const actionCount = chalk.gray(`${flow.actions.length} action${flow.actions.length !== 1 ? "s" : ""}`)
     console.log(`  ${status}  ${chalk.bold(flow.name)}`)
     console.log(chalk.gray(`           trigger: ${trigger}  ${actionCount}`))
+    if (flow.gate) {
+      const gateParts: string[] = []
+      if (flow.gate.after) gateParts.push(`after ${flow.gate.after}`)
+      if (flow.gate.before) gateParts.push(`before ${flow.gate.before}`)
+      if (flow.gate.requires_approval) gateParts.push("requires approval")
+      console.log(chalk.yellow(`           gate: ${gateParts.join(", ")}`))
+    }
     if (flow.description) {
       console.log(chalk.gray(`           ${flow.description}`))
     }
@@ -213,7 +220,13 @@ async function testFlow(name: string): Promise<void> {
   const flowExec = executions.find((e) => e.flow === name)
 
   if (flowExec) {
-    console.log(chalk.green(`\n  Flow triggered successfully`))
+    if (flowExec.gated) {
+      console.log(chalk.yellow(`\n  Flow triggered but gated: ${flowExec.gated}`))
+      if (flowExec.gated === "time") console.log(chalk.gray(`  Time gate not yet open — check gate.after/before`))
+      if (flowExec.gated === "approval") console.log(chalk.gray(`  Requires human approval before actions execute`))
+    } else {
+      console.log(chalk.green(`\n  Flow triggered successfully`))
+    }
     console.log(chalk.gray(`  Actions executed: ${flowExec.actions_executed}`))
     console.log(chalk.gray(`  Actions failed: ${flowExec.actions_failed}`))
     if (flowExec.error) {

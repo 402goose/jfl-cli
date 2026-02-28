@@ -12,7 +12,7 @@ import * as path from "path"
 import { parse as parseYaml } from "yaml"
 import type { MAPEvent, MAPEventType } from "../types/map.js"
 import type { MAPEventBus } from "./map-event-bus.js"
-import type { FlowDefinition, FlowsConfig, FlowAction, FlowExecution } from "../types/flows.js"
+import type { FlowDefinition, FlowsConfig, FlowAction, FlowExecution, FlowGate } from "../types/flows.js"
 
 export class FlowEngine {
   private flows: FlowDefinition[] = []
@@ -85,9 +85,20 @@ export class FlowEngine {
       return []
     }
 
-    return config.flows.filter(f =>
+    const valid = config.flows.filter(f =>
       f.name && f.trigger?.pattern && Array.isArray(f.actions)
     )
+
+    for (const flow of valid) {
+      if (flow.trigger.condition) {
+        const check = FlowEngine.validateCondition(flow.trigger.condition)
+        if (!check.valid) {
+          console.warn(`[FlowEngine] Flow "${flow.name}": ${check.error}`)
+        }
+      }
+    }
+
+    return valid
   }
 
   private async handleEvent(flow: FlowDefinition, event: MAPEvent): Promise<void> {
@@ -96,6 +107,35 @@ export class FlowEngine {
     if (flow.trigger.source && event.source !== flow.trigger.source) return
 
     if (flow.trigger.condition && !this.evaluateCondition(flow.trigger.condition, event)) return
+
+    const gateResult = this.evaluateGate(flow.gate)
+    if (gateResult) {
+      const gatedExecution: FlowExecution = {
+        flow: flow.name,
+        trigger_event_id: event.id,
+        trigger_event_type: event.type,
+        started_at: new Date().toISOString(),
+        completed_at: new Date().toISOString(),
+        actions_executed: 0,
+        actions_failed: 0,
+        gated: gateResult,
+      }
+      this.executions.push(gatedExecution)
+      if (this.executions.length > this.maxExecutions) {
+        this.executions = this.executions.slice(-this.maxExecutions)
+      }
+      this.eventBus.emit({
+        type: "flow:triggered" as MAPEventType,
+        source: `flow:${flow.name}`,
+        session: event.session,
+        data: {
+          flow_name: flow.name,
+          trigger_event_id: event.id,
+          gated: gateResult,
+        },
+      })
+      return
+    }
 
     const execution: FlowExecution = {
       flow: flow.name,
@@ -233,10 +273,30 @@ export class FlowEngine {
     })
   }
 
+  private evaluateGate(gate?: FlowGate): "time" | "approval" | null {
+    if (!gate) return null
+
+    const now = new Date()
+
+    if (gate.after) {
+      const afterDate = new Date(gate.after)
+      if (now < afterDate) return "time"
+    }
+
+    if (gate.before) {
+      const beforeDate = new Date(gate.before)
+      if (now > beforeDate) return "time"
+    }
+
+    if (gate.requires_approval) return "approval"
+
+    return null
+  }
+
   private evaluateCondition(condition: string, event: MAPEvent): boolean {
     try {
       const match = condition.match(/^(\w+(?:\.\w+)*)\s*(==|!=|contains)\s*"([^"]*)"$/)
-      if (!match) return true
+      if (!match) return false
 
       const [, fieldPath, operator, expected] = match
       const parts = fieldPath.split(".")
@@ -255,7 +315,15 @@ export class FlowEngine {
         default: return true
       }
     } catch {
-      return true
+      return false
     }
+  }
+
+  static validateCondition(condition: string): { valid: boolean; error?: string } {
+    const match = condition.match(/^(\w+(?:\.\w+)*)\s*(==|!=|contains)\s*"([^"]*)"$/)
+    if (!match) {
+      return { valid: false, error: `Invalid condition format: "${condition}". Expected: field operator "value" (operators: ==, !=, contains)` }
+    }
+    return { valid: true }
   }
 }

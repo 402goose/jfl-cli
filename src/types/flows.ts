@@ -13,6 +13,12 @@ export interface FlowTrigger {
   condition?: string
 }
 
+export interface FlowGate {
+  after?: string
+  before?: string
+  requires_approval?: boolean
+}
+
 export type FlowAction =
   | { type: "log"; message: string }
   | { type: "emit"; event_type: string; data: Record<string, unknown> }
@@ -26,6 +32,7 @@ export interface FlowDefinition {
   enabled: boolean
   trigger: FlowTrigger
   actions: FlowAction[]
+  gate?: FlowGate
 }
 
 export interface FlowsConfig {
@@ -41,4 +48,5 @@ export interface FlowExecution {
   actions_executed: number
   actions_failed: number
   error?: string
+  gated?: "time" | "approval"
 }

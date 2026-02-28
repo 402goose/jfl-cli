@@ -11,6 +11,7 @@ import * as fs from "fs"
 import * as path from "path"
 import * as crypto from "crypto"
 import type { MAPEvent, MAPEventType, MAPSubscription } from "../types/map.js"
+import type { ContextScope } from "./service-gtm.js"
 
 function generateId(): string {
   return crypto.randomUUID()
@@ -30,8 +31,44 @@ function matchPattern(pattern: string, type: string): boolean {
 
 export type EventCallback = (event: MAPEvent) => void
 
+function matchScopePattern(pattern: string, value: string): boolean {
+  if (pattern === "*") return true
+  if (pattern === value) return true
+  if (pattern.includes("*")) {
+    const regex = new RegExp("^" + pattern.replace(/\*/g, ".*") + "$")
+    return regex.test(value)
+  }
+  return false
+}
+
+function isEventDenied(event: MAPEvent, scope: ContextScope): boolean {
+  if (!scope.denied || scope.denied.length === 0) return false
+  const eventSource = event.source || ""
+  const eventType = event.type || ""
+  for (const pattern of scope.denied) {
+    if (matchScopePattern(pattern, eventType) || matchScopePattern(pattern, eventSource)) {
+      return true
+    }
+  }
+  return false
+}
+
+function isEventAllowed(event: MAPEvent, scope: ContextScope): boolean {
+  if (isEventDenied(event, scope)) return false
+  if (!scope.consumes || scope.consumes.length === 0) return true
+  const eventSource = event.source || ""
+  const eventType = event.type || ""
+  for (const pattern of scope.consumes) {
+    if (matchScopePattern(pattern, eventType) || matchScopePattern(pattern, eventSource)) {
+      return true
+    }
+  }
+  return false
+}
+
 interface InternalSubscription extends MAPSubscription {
   callback?: EventCallback
+  scope?: ContextScope
 }
 
 export class MAPEventBus {
@@ -99,6 +136,7 @@ export class MAPEventBus {
     patterns: string[]
     transport: "sse" | "websocket" | "poll"
     callback?: EventCallback
+    scope?: ContextScope
   }): MAPSubscription {
     const subscription: InternalSubscription = {
       id: generateId(),
@@ -107,6 +145,7 @@ export class MAPEventBus {
       transport: sub.transport,
       createdAt: new Date().toISOString(),
       callback: sub.callback,
+      scope: sub.scope,
     }
 
     this.subscribers.set(subscription.id, subscription)
@@ -171,16 +210,18 @@ export class MAPEventBus {
   private fanOut(event: MAPEvent): void {
     for (const [, sub] of this.subscribers) {
       const matches = sub.patterns.some(p => matchPattern(p, event.type))
-      if (matches && sub.callback) {
+      if (!matches) continue
+
+      if (sub.scope && !isEventAllowed(event, sub.scope)) continue
+
+      if (sub.callback) {
         try {
           sub.callback(event)
         } catch {
           // Don't let subscriber errors crash the bus
         }
       }
-      if (matches) {
-        sub.lastEventId = event.id
-      }
+      sub.lastEventId = event.id
     }
   }
 

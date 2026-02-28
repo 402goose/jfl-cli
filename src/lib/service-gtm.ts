@@ -20,6 +20,7 @@ export interface ServiceConfig {
   description: string;
   gtm_parent?: string;
   working_branch?: string;
+  context_scope?: ContextScope;
   sync_to_parent?: {
     journal: boolean;
     knowledge: boolean;
@@ -41,6 +42,12 @@ export interface ServiceConfig {
   };
 }
 
+export interface ContextScope {
+  produces?: string[];
+  consumes?: string[];
+  denied?: string[];
+}
+
 export interface ServiceRegistration {
   name: string;
   path: string;
@@ -48,6 +55,7 @@ export interface ServiceRegistration {
   registered_at: string;
   last_sync?: string;
   status: "active" | "inactive";
+  context_scope?: ContextScope;
 }
 
 export interface GTMConfig extends ServiceConfig {
