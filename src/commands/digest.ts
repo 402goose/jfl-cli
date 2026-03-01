@@ -6,6 +6,54 @@ import type { Command } from 'commander'
 import chalk from 'chalk'
 import { telemetry } from '../lib/telemetry.js'
 import { loadLocalEvents, analyzeEvents, generateSuggestions, formatDigest } from '../lib/telemetry-digest.js'
+import { renderBars, sparkline, isKuvaInstalled } from '../lib/kuva.js'
+import type { TelemetryDigest } from '../types/telemetry-digest.js'
+
+function renderDigestPlots(digest: TelemetryDigest): string {
+  const sections: string[] = []
+  const kuva = isKuvaInstalled()
+  const engine = kuva ? 'kuva' : 'ascii'
+  sections.push(chalk.bold(`\n  Charts (${engine})\n`))
+
+  if (digest.costs.length > 0) {
+    const costBars = digest.costs.map(c => ({
+      label: c.model.length > 20 ? c.model.slice(0, 17) + '...' : c.model,
+      value: parseFloat((c.estimatedCostUsd * 100).toFixed(1)),
+    }))
+    sections.push(renderBars(costBars, `Cost by Model (cents)`))
+    sections.push('')
+  }
+
+  if (digest.commands.length > 0) {
+    const cmdBars = digest.commands.slice(0, 8).map(c => ({
+      label: c.command,
+      value: c.count,
+    }))
+    sections.push(renderBars(cmdBars, 'Command Usage'))
+    sections.push('')
+  }
+
+  const toolEntries = Object.entries(digest.hooks?.byTool || {})
+  if (toolEntries.length > 0) {
+    const toolBars = toolEntries
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 8)
+      .map(([tool, count]) => ({ label: tool, value: count }))
+    sections.push(renderBars(toolBars, 'Tool Frequency'))
+    sections.push('')
+  }
+
+  const flowEntries = Object.entries(digest.flows?.byFlow || {})
+  if (flowEntries.length > 0) {
+    const flowBars = flowEntries
+      .sort((a, b) => b[1] - a[1])
+      .map(([flow, count]) => ({ label: flow, value: count }))
+    sections.push(renderBars(flowBars, 'Flow Activity'))
+    sections.push('')
+  }
+
+  return sections.join('\n')
+}
 
 export function registerDigestCommand(telemetryCmd: Command): void {
   telemetryCmd
@@ -13,6 +61,7 @@ export function registerDigestCommand(telemetryCmd: Command): void {
     .description('Analyze telemetry events: costs, stats, and suggestions')
     .option('--hours <hours>', 'Analysis period in hours', '24')
     .option('--format <format>', 'Output format: text or json', 'text')
+    .option('--plots', 'Render terminal charts for key metrics')
     .option('--platform', 'Include platform-side data (requires network)')
     .action(async (options) => {
       const hours = parseInt(options.hours, 10) || 24
@@ -72,6 +121,10 @@ export function registerDigestCommand(telemetryCmd: Command): void {
       console.log(formatDigest(digest, format))
 
       if (format === 'text') {
+        if (options.plots) {
+          console.log(renderDigestPlots(digest))
+        }
+
         const suggestions = generateSuggestions(digest)
         if (suggestions.length > 0) {
           console.log(chalk.bold('  Suggestions'))

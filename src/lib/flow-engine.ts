@@ -278,6 +278,29 @@ export class FlowEngine {
         })
         break
       }
+
+      case "spawn": {
+        const { spawn: nodeSpawn } = await import("child_process")
+        const cmd = this.interpolate(action.command, event)
+        const args = (action.args || []).map(a => this.interpolate(a, event))
+        const cwd = action.cwd ? this.interpolate(action.cwd, event) : this.projectRoot
+        const env: Record<string, string> = { ...process.env as Record<string, string> }
+        delete env.CLAUDECODE
+        delete env.CLAUDE_CODE
+        if (action.env) {
+          for (const [k, v] of Object.entries(action.env)) {
+            env[k] = this.interpolate(v, event)
+          }
+        }
+        const child = nodeSpawn(cmd, args, {
+          cwd,
+          env,
+          stdio: "ignore",
+          detached: action.detach ?? true,
+        })
+        if (action.detach !== false) child.unref()
+        break
+      }
     }
   }
 

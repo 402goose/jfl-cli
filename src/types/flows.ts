@@ -25,6 +25,7 @@ export type FlowAction =
   | { type: "journal"; entry_type: string; title: string; summary: string }
   | { type: "webhook"; url: string; body?: Record<string, unknown> }
   | { type: "command"; command: string; args?: string[] }
+  | { type: "spawn"; command: string; args?: string[]; cwd?: string; env?: Record<string, string>; detach?: boolean }
 
 export interface FlowDefinition {
   name: string
