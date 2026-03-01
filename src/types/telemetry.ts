@@ -68,6 +68,7 @@ export interface TelemetryEvent {
   hook_event_name?: string
   tool_name?: string
   has_file_paths?: boolean
+  file_paths?: string[]
   flow_name?: string
   actions_failed?: number
 }

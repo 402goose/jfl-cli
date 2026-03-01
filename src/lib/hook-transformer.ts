@@ -71,6 +71,7 @@ export function transformHookPayload(payload: HookPayload): Omit<MAPEvent, "id" 
     hook_event_name: hookName,
     tool_name: payload.tool_name || undefined,
     has_file_paths: !!(payload.file_paths?.length),
+    file_paths: payload.file_paths?.slice(0, 5),
   })
 
   return {

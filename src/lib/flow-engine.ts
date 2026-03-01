@@ -13,6 +13,7 @@ import { parse as parseYaml } from "yaml"
 import type { MAPEvent, MAPEventType } from "../types/map.js"
 import type { MAPEventBus } from "./map-event-bus.js"
 import type { FlowDefinition, FlowsConfig, FlowAction, FlowExecution, FlowGate } from "../types/flows.js"
+import { telemetry } from "./telemetry.js"
 
 export class FlowEngine {
   private flows: FlowDefinition[] = []
@@ -134,6 +135,13 @@ export class FlowEngine {
           gated: gateResult,
         },
       })
+      telemetry.track({
+        category: 'hooks',
+        event: 'flow:triggered',
+        flow_name: flow.name,
+        hook_event_name: event.type,
+        actions_failed: 0,
+      })
       return
     }
 
@@ -155,6 +163,12 @@ export class FlowEngine {
         trigger_event_id: event.id,
         trigger_event_type: event.type,
       },
+    })
+    telemetry.track({
+      category: 'hooks',
+      event: 'flow:triggered',
+      flow_name: flow.name,
+      hook_event_name: event.type,
     })
 
     for (const action of flow.actions) {
@@ -186,6 +200,14 @@ export class FlowEngine {
         actions_failed: execution.actions_failed,
         duration_ms: new Date(execution.completed_at).getTime() - new Date(execution.started_at).getTime(),
       },
+    })
+    telemetry.track({
+      category: 'hooks',
+      event: 'flow:completed',
+      flow_name: flow.name,
+      hook_event_name: event.type,
+      actions_failed: execution.actions_failed,
+      duration_ms: new Date(execution.completed_at!).getTime() - new Date(execution.started_at).getTime(),
     })
   }
 

@@ -112,6 +112,14 @@ export function analyzeEvents(events: TelemetryEvent[], periodHours: number): Te
       if (toolName) {
         hooks.byTool[toolName] = (hooks.byTool[toolName] || 0) + 1
       }
+      const filePaths = (e as any).file_paths as string[] | undefined
+      if (filePaths && Array.isArray(filePaths)) {
+        for (const fp of filePaths) {
+          if (typeof fp === 'string') {
+            hooks.fileEdits[fp] = (hooks.fileEdits[fp] || 0) + 1
+          }
+        }
+      }
     }
 
     if (e.event === 'flow:triggered' || e.event === 'flow:completed') {

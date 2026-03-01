@@ -1,3 +1,7 @@
+jest.mock("../lib/telemetry.js", () => ({
+  telemetry: { track: jest.fn() }
+}))
+
 import * as fs from "fs"
 import * as path from "path"
 import * as os from "os"
