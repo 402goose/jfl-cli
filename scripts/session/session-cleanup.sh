@@ -92,10 +92,13 @@ if ! git diff --quiet || ! git diff --cached --quiet; then
     echo "Last commit already is 'session: end', skipping duplicate commit"
   else
     git add -A
-    # Unstage session metadata files that should never be committed
+    # Unstage files that should never be committed
     git reset HEAD .jfl/current-session-branch.txt 2>/dev/null || true
     git reset HEAD .jfl/current-worktree.txt 2>/dev/null || true
     git reset HEAD .jfl/worktree-path.txt 2>/dev/null || true
+    git reset HEAD .jfl/logs/ 2>/dev/null || true
+    git reset HEAD .jfl/auto-commit.log 2>/dev/null || true
+    git reset HEAD .jfl/memory.db 2>/dev/null || true
     git commit -m "session: end $(date +%Y-%m-%d\ %H:%M)" || true
   fi
 fi

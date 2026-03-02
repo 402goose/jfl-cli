@@ -197,6 +197,11 @@ async function checkNpmPackageUpdate(autoUpdate: boolean): Promise<void> {
 export async function updateCommand(options: { dry?: boolean; autoUpdate?: boolean } = {}) {
   const isAutoUpdate = options.autoUpdate || false
 
+  // In auto mode, skip everything if checked recently (24h cache)
+  if (isAutoUpdate && !shouldCheckForUpdates()) {
+    return
+  }
+
   // Check npm package updates first
   await checkNpmPackageUpdate(isAutoUpdate)
   const cwd = process.cwd()
@@ -420,6 +425,9 @@ export async function updateCommand(options: { dry?: boolean; autoUpdate?: boole
     }
 
     console.log(chalk.cyan("\n✨ Update complete! Restart Claude Code to pick up changes.\n"))
+
+    // Mark update as checked so auto mode skips for next 24h
+    markUpdateChecked()
 
   } catch (err: any) {
     spinner.fail("Update failed")

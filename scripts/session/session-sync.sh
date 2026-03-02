@@ -154,6 +154,16 @@ echo "--- Syncing submodules ---"
 cd "$GTM_ROOT"
 git submodule update --init --recursive 2>/dev/null || true
 
+# Ensure jfl CLI and template files are up to date (at most once per 24h)
+echo ""
+echo "--- Checking jfl version ---"
+cd "$GTM_ROOT"
+if command -v jfl &>/dev/null; then
+    jfl update --auto 2>/dev/null && echo -e "${GREEN}jfl is up to date${NC}" || echo -e "${YELLOW}WARNING: jfl update check failed (offline?)${NC}"
+else
+    echo -e "${YELLOW}WARNING: jfl not found in PATH${NC}"
+fi
+
 # Final status
 echo ""
 echo "========================================"

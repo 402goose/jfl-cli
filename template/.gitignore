@@ -19,20 +19,18 @@ dist/
 .DS_Store
 Thumbs.db
 
-# Logs
-*.log
-npm-debug.log*
-
-# Test coverage
-coverage/
-
 # JFL runtime — never commit these
 .jfl/logs/
 .jfl/*.log
 .jfl/*.pid
-.jfl/memory.db
+.jfl/auto-commit.pid
+.jfl/context-hub.pid
+.jfl/.auto-merge.pid
 
-# JFL session metadata (ephemeral)
+# JFL session metadata (ephemeral, managed by session hooks)
 .jfl/current-session-branch.txt
 .jfl/current-worktree.txt
 .jfl/worktree-path.txt
+
+# JFL memory DB (binary, rebuilt from journal)
+.jfl/memory.db

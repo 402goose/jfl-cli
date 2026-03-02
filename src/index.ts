@@ -486,7 +486,8 @@ program
   .command("update")
   .description("Pull latest JFL product updates")
   .option("--dry", "Show what would be updated without making changes")
-  .action(updateCommand)
+  .option("--auto", "Auto mode: check once per 24h, skip if recently updated")
+  .action((options) => updateCommand({ dry: options.dry, autoUpdate: options.auto }))
 
 // ============================================================================
 // SKILL MANAGEMENT (work offline)
