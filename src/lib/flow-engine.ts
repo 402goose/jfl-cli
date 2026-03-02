@@ -82,13 +82,37 @@ export class FlowEngine {
       }
     }
 
-    if (!config?.flows || !Array.isArray(config.flows)) {
+    const allFlows: FlowDefinition[] = []
+
+    if (config?.flows && Array.isArray(config.flows)) {
+      const valid = config.flows.filter(f =>
+        f.name && f.trigger?.pattern && Array.isArray(f.actions)
+      )
+      allFlows.push(...valid)
+    }
+
+    const flowsDir = path.join(this.projectRoot, ".jfl", "flows")
+    if (fs.existsSync(flowsDir)) {
+      const yamlFiles = fs.readdirSync(flowsDir).filter(f => f.endsWith(".yaml") || f.endsWith(".yml"))
+      for (const file of yamlFiles) {
+        try {
+          const content = fs.readFileSync(path.join(flowsDir, file), "utf-8")
+          const extra = parseYaml(content) as FlowsConfig
+          if (extra?.flows && Array.isArray(extra.flows)) {
+            const valid = extra.flows.filter(f => f.name && f.trigger?.pattern && Array.isArray(f.actions))
+            allFlows.push(...valid)
+          }
+        } catch (err: any) {
+          console.error(`[FlowEngine] Failed to parse ${file}: ${err.message}`)
+        }
+      }
+    }
+
+    if (allFlows.length === 0) {
       return []
     }
 
-    const valid = config.flows.filter(f =>
-      f.name && f.trigger?.pattern && Array.isArray(f.actions)
-    )
+    const valid = allFlows
 
     for (const flow of valid) {
       if (flow.trigger.condition) {

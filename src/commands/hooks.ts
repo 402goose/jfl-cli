@@ -345,6 +345,8 @@ async function deployHooks(all: boolean): Promise<void> {
   console.log(chalk.bold(`\n  Done: ${success} configured, ${skipped} already set, ${failed} failed\n`))
 }
 
+export { initHooks }
+
 export async function hooksCommand(action?: string): Promise<void> {
   switch (action) {
     case "init":

@@ -14,6 +14,8 @@ import { homedir } from "os"
 import { join } from "path"
 import * as path from "path"
 import { fileURLToPath } from "url"
+import { doctorCommand } from "./commands/doctor.js"
+import { agentCommand } from "./commands/agent.js"
 import { initCommand } from "./commands/init.js"
 import { repairCommand } from "./commands/repair.js"
 import { validateSettingsCommand } from "./commands/validate-settings.js"
@@ -80,6 +82,52 @@ program.hook('postAction', (_thisCommand, actionCommand) => {
     duration_ms: start ? Date.now() - start : undefined,
     success: true,
   })
+})
+
+const HELP_GROUPS: Record<string, string[]> = {
+  "Getting Started": ["init", "status", "hud", "doctor"],
+  "Daily Use": ["synopsis", "ask", "improve", "events", "voice"],
+  "Management": ["services", "flows", "hooks", "scope", "memory", "telemetry", "context-hub", "skills"],
+  "Platform": ["login", "deploy", "wallet", "preferences"],
+  "Advanced": ["peter", "orchestrate", "openclaw", "ralph", "agent"],
+}
+
+const HIDDEN_COMMANDS = new Set([
+  "repair", "validate-settings", "test", "brand", "content", "feedback",
+  "migrate-services", "onboard", "service-agent", "dashboard", "profile",
+  "gtm", "clawdbot", "update", "service-manager", "logout", "agents", "help",
+])
+
+program.configureHelp({
+  formatHelp(cmd, helper) {
+    const lines: string[] = []
+    lines.push("")
+    lines.push(chalk.bold("  JFL - Just Fucking Launch"))
+    lines.push("")
+    lines.push(chalk.gray("  Your context layer. Any project. Any AI."))
+    lines.push("")
+
+    const allCommands = cmd.commands
+    const commandMap = new Map<string, string>()
+    for (const sub of allCommands) {
+      commandMap.set(sub.name(), sub.description())
+    }
+
+    for (const [group, names] of Object.entries(HELP_GROUPS)) {
+      lines.push(chalk.cyan(`  ${group}`))
+      for (const name of names) {
+        const desc = commandMap.get(name)
+        if (desc) {
+          lines.push(`    ${name.padEnd(18)}${desc}`)
+        }
+      }
+      lines.push("")
+    }
+
+    lines.push(chalk.gray("  Run jfl <command> --help for details"))
+    lines.push("")
+    return lines.join("\n")
+  },
 })
 
 program
@@ -1026,7 +1074,49 @@ program
   })
 
 // ============================================================================
-// HELP
+// DOCTOR (unified health check)
+// ============================================================================
+
+program
+  .command("doctor")
+  .description("Check project health and auto-repair")
+  .option("--fix", "Auto-repair fixable issues")
+  .action(async (options) => {
+    await doctorCommand({ fix: options.fix })
+  })
+
+// ============================================================================
+// AGENT (narrowly-scoped agent scaffolding)
+// ============================================================================
+
+const agent = program.command("agent").description("Manage narrowly-scoped agents")
+
+agent
+  .command("init <name>")
+  .description("Scaffold a new agent (manifest + policy + flows)")
+  .option("-d, --description <desc>", "Agent description")
+  .action(async (name, options) => {
+    await agentCommand("init", name, { description: options.description })
+  })
+
+agent
+  .command("list")
+  .description("List registered agents")
+  .action(async () => {
+    await agentCommand("list")
+  })
+
+agent
+  .command("status <name>")
+  .description("Show agent health and config")
+  .action(async (name) => {
+    await agentCommand("status", name)
+  })
+
+agent.action(async () => {
+  await agentCommand()
+})
+
 // ============================================================================
 // GTM COMMANDS
 // ============================================================================
@@ -1042,52 +1132,6 @@ gtm
   })
 
 // ============================================================================
-
-program
-  .command("help")
-  .description("Show help")
-  .action(() => {
-    console.log(chalk.bold("\n  JFL - Just Fucking Launch\n"))
-    console.log(chalk.gray("  Your team's context layer. Any AI. Any task.\n"))
-
-    console.log(chalk.cyan("  Free Tier (works offline):"))
-    console.log("    jfl init              Initialize project")
-    console.log("    jfl repair            Repair missing .jfl directory")
-    console.log("    jfl validate-settings Validate .claude/settings.json")
-    console.log("    jfl update            Pull latest JFL updates")
-    console.log("    jfl profile           Manage your profile")
-    console.log("    jfl profile generate  Generate CLAUDE.md w/ AI")
-    console.log("    jfl hud               Project dashboard")
-    console.log("    jfl status            Project status")
-    console.log("    jfl onboard           Onboard service as agent")
-    console.log("    jfl services          Manage services")
-    console.log("    jfl brand             Brand architect")
-    console.log("    jfl content           Content creator")
-    console.log("    jfl voice             Voice input commands")
-    console.log("    jfl ralph             AI agent loop (ralph-tui)")
-    console.log("    jfl peter             Peter Parker orchestrator (model routing)")
-    console.log("    jfl events            Live event bus dashboard")
-    console.log("    jfl context-hub       Context Hub (unified AI context + MAP event bus)")
-    console.log("    jfl openclaw          OpenClaw agent protocol")
-    console.log("    jfl test              Test onboarding (isolated)")
-    console.log("    jfl telemetry         Manage usage telemetry")
-    console.log("    jfl telemetry digest  Cost and health analysis")
-    console.log("    jfl improve           Self-improvement suggestions")
-
-    console.log(chalk.cyan("\n  Platform (requires login):"))
-    console.log("    jfl login             Login to platform")
-    console.log("    jfl deploy            Deploy to platform")
-    console.log("    jfl agents            Parallel agents (Pro)")
-
-    console.log(chalk.gray("\n  Pricing (pay when you get value):"))
-    console.log("    Trial   $0      Free until foundation + brand done")
-    console.log("    x402    $5/day  Per person, pay as you go")
-    console.log("    Solo    $49/mo  Just you, fixed monthly")
-    console.log("    Pro     $199/mo Team (up to 5, +$25/seat)")
-
-    console.log(chalk.gray("\n  Learn more: https://jfl.run"))
-    console.log()
-  })
 
 // Parse and run
 program.parse()
