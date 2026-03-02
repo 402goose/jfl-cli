@@ -63,6 +63,8 @@ my-project/                    <- GTM workspace (strategy, context, orchestratio
 │   ├── config.json           <- Project config (team, services, ports)
 │   ├── journal/              <- Session journals (JSONL, one file per session)
 │   ├── memory.db             <- Indexed memory (TF-IDF + embeddings)
+│   ├── agents/              <- Narrowly-scoped agent manifests + policies
+│   ├── flows/               <- Per-agent flow definitions (auto-loaded)
 │   ├── service-events.jsonl  <- Event bus file-drop
 │   └── services.json         <- Registered services
 ├── knowledge/                <- Strategy docs (VISION, ROADMAP, THESIS, etc.)
@@ -233,6 +235,7 @@ jfl services                  # Interactive TUI (no args)
 | `jfl init -n <name>` | Create new GTM workspace |
 | `jfl status` | Project status and auth |
 | `jfl hud [-c\|--compact]` | Campaign dashboard (ship date, phases, pipeline) |
+| `jfl doctor [--fix]` | Check project health, auto-repair fixable issues |
 | `jfl update [--dry]` | Pull latest skills, scripts, templates (preserves CLAUDE.md, .mcp.json) |
 | `jfl synopsis [hours] [author]` | Work summary (journal + commits + file headers) |
 | `jfl repair` | Fix corrupted .jfl/config.json |
@@ -290,6 +293,9 @@ jfl services                  # Interactive TUI (no args)
 
 | Command | Description |
 |---------|-------------|
+| `jfl agent init <name> [-d desc]` | Scaffold agent (manifest + policy + lifecycle flows) |
+| `jfl agent list` | List registered agents |
+| `jfl agent status <name>` | Show agent health and config |
 | `jfl ralph [args]` | Ralph-tui agent loop orchestrator |
 | `jfl peter [action]` | Peter Parker model-routed orchestrator (setup, run, status) |
 | `jfl orchestrate [name] [--list] [--create <n>]` | Multi-service orchestration workflows |
@@ -523,6 +529,16 @@ jfl wallet                    # Wallet and day pass status
 ---
 
 ## What's New
+
+**0.2.5**
+- Feat: Docker-style grouped `jfl --help` — 5 groups (Getting Started, Daily Use, Management, Platform, Advanced), ~30 lines down from 52
+- Feat: `jfl doctor [--fix]` — unified project health checker (9 checks: .jfl dir, config, Context Hub, hooks, memory, journal, agents, flows, git). Auto-repairs hooks, config, and journal with `--fix`
+- Feat: `jfl agent init|list|status` — scaffold narrowly-scoped agents with manifest, policy, and lifecycle flows
+- Feat: Flow engine scans `.jfl/flows/*.yaml` for per-agent flow definitions
+- Feat: Kuva terminal plots + spawn action type in flow engine
+- Fix: Stop committing JFL runtime files (.jfl/logs/, memory.db, *.pid) — gitignore + untrack ([@hathbanger](https://github.com/hathbanger) [#5](https://github.com/402goose/jfl-cli/pull/5))
+- Fix: Enforce `jfl update --auto` on session start with 24h cache ([@hathbanger](https://github.com/hathbanger) [#5](https://github.com/402goose/jfl-cli/pull/5))
+- Test: 31 new tests (agent-manifest, doctor, agent command, flow-engine directory scan)
 
 **0.2.4**
 - Feat: `jfl telemetry digest` — per-model cost tables, command stats, health analysis, improvement suggestions
