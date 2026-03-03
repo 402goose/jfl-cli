@@ -22,6 +22,8 @@ export type MAPEventType =
   | "hook:subagent-start" | "hook:subagent-stop"
   | "flow:triggered" | "flow:completed"
   | "agent:started" | "agent:stopped" | "agent:error" | "agent:health"
+  | "agent:iteration-start" | "agent:iteration-complete" | "agent:analysis"
+  | "eval:submitted" | "eval:scored" | "eval:baseline"
   | "custom"
 
 export interface HookPayload {

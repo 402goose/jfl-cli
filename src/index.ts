@@ -215,7 +215,7 @@ program
 program
   .command("scope")
   .description("View and manage service context scopes")
-  .argument("[action]", "list, set, test")
+  .argument("[action]", "list, set, test, viz")
   .argument("[args...]", "Arguments for the action")
   .action(async (action, args) => {
     await scopeCommand(action, ...args)

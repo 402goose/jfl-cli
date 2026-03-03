@@ -214,7 +214,7 @@ async function testScope(serviceName: string, eventType: string, eventSource: st
   console.log(chalk.green(`${serviceName}: event "${eventType}" from "${eventSource}" — ALLOWED`))
 }
 
-function matchScopePattern(pattern: string, value: string): boolean {
+export function matchScopePattern(pattern: string, value: string): boolean {
   if (pattern === "*") return true
   if (pattern === value) return true
   if (pattern.includes("*")) {
@@ -224,11 +224,231 @@ function matchScopePattern(pattern: string, value: string): boolean {
   return false
 }
 
+interface ScopeNode {
+  name: string
+  type: string
+  scope: ContextScope | undefined
+}
+
+function collectNodes(config: GTMConfig): ScopeNode[] {
+  const nodes: ScopeNode[] = [{
+    name: config.name || "workspace",
+    type: config.type || "gtm",
+    scope: config.context_scope,
+  }]
+
+  for (const svc of config.registered_services || []) {
+    let scope = svc.context_scope
+    if (!scope) {
+      const svcConfigPath = path.join(svc.path, ".jfl", "config.json")
+      if (fs.existsSync(svcConfigPath)) {
+        try {
+          const svcConfig = JSON.parse(fs.readFileSync(svcConfigPath, "utf-8"))
+          scope = svcConfig.context_scope
+        } catch { /* skip */ }
+      }
+    }
+    nodes.push({ name: svc.name, type: svc.type || "service", scope })
+  }
+
+  return nodes
+}
+
+function allPatterns(nodes: ScopeNode[]): string[] {
+  const set = new Set<string>()
+  for (const n of nodes) {
+    for (const p of n.scope?.produces || []) set.add(p)
+    for (const c of n.scope?.consumes || []) set.add(c)
+    for (const d of n.scope?.denied || []) set.add(d)
+  }
+  return [...set].sort()
+}
+
+interface ScopeEdge {
+  from: string
+  to: string
+  pattern: string
+  type: "flow" | "denied"
+}
+
+interface ScopeWarning {
+  service: string
+  message: string
+}
+
+function buildEdges(nodes: ScopeNode[]): { edges: ScopeEdge[], warnings: ScopeWarning[] } {
+  const edges: ScopeEdge[] = []
+  const warnings: ScopeWarning[] = []
+
+  for (const consumer of nodes) {
+    const consumes = consumer.scope?.consumes || []
+    const denied = consumer.scope?.denied || []
+
+    for (const pattern of consumes) {
+      // Find producers that match this consume pattern
+      let hasProducer = false
+      for (const producer of nodes) {
+        if (producer.name === consumer.name) continue
+        const produces = producer.scope?.produces || []
+        const matches = produces.some(p => matchScopePattern(pattern, p) || matchScopePattern(p, pattern))
+        if (matches) {
+          hasProducer = true
+          edges.push({ from: producer.name, to: consumer.name, pattern, type: "flow" })
+        }
+      }
+
+      // Check if consumed pattern is also denied
+      const selfDenied = denied.some(d => matchScopePattern(d, pattern) || matchScopePattern(pattern, d))
+      if (selfDenied) {
+        warnings.push({
+          service: consumer.name,
+          message: `consumes "${pattern}" but also denies a matching pattern`,
+        })
+      }
+
+      if (!hasProducer && pattern !== "*") {
+        warnings.push({
+          service: consumer.name,
+          message: `consumes "${pattern}" but no service produces it`,
+        })
+      }
+    }
+
+    // Denied edges
+    for (const pattern of denied) {
+      for (const producer of nodes) {
+        if (producer.name === consumer.name) continue
+        const produces = producer.scope?.produces || []
+        const matches = produces.some(p => matchScopePattern(pattern, p) || matchScopePattern(p, pattern))
+        if (matches) {
+          edges.push({ from: producer.name, to: consumer.name, pattern, type: "denied" })
+        }
+      }
+    }
+
+    // Unrestricted warning
+    if (!consumer.scope && consumer.type !== "gtm") {
+      warnings.push({
+        service: consumer.name,
+        message: "no scope declared — unrestricted access",
+      })
+    }
+  }
+
+  return { edges, warnings }
+}
+
+async function vizScopes(): Promise<void> {
+  const root = findProjectRoot()
+  if (!root) {
+    console.log(chalk.red("Not in a JFL project"))
+    return
+  }
+
+  const config = loadConfig(root)
+  if (!config) {
+    console.log(chalk.red("No .jfl/config.json found"))
+    return
+  }
+
+  const nodes = collectNodes(config)
+  if (nodes.length <= 1) {
+    console.log(chalk.dim("\nNo registered services to visualize"))
+    return
+  }
+
+  const { edges, warnings } = buildEdges(nodes)
+  const patterns = allPatterns(nodes)
+
+  // Header
+  console.log(chalk.bold("\nScope Graph"))
+  console.log(chalk.dim("─".repeat(60)))
+
+  // Node summary
+  console.log(chalk.bold("\nNodes"))
+  for (const n of nodes) {
+    const produces = n.scope?.produces || []
+    const consumes = n.scope?.consumes || []
+    const denied = n.scope?.denied || []
+    const tag = n.type === "gtm" ? chalk.blue("gtm") : chalk.dim("svc")
+    const scopeStatus = !n.scope
+      ? chalk.yellow("unrestricted")
+      : `${chalk.green(`+${produces.length}`)} ${chalk.cyan(`<${consumes.length}`)} ${chalk.red(`x${denied.length}`)}`
+    console.log(`  ${tag} ${chalk.bold(n.name)}  ${scopeStatus}`)
+  }
+
+  // Flow edges
+  const flowEdges = edges.filter(e => e.type === "flow")
+  const denyEdges = edges.filter(e => e.type === "denied")
+
+  if (flowEdges.length > 0) {
+    console.log(chalk.bold("\nFlows") + chalk.dim("  (producer -> consumer)"))
+    for (const e of flowEdges) {
+      console.log(`  ${chalk.green(e.from)} ${chalk.dim("──>")} ${chalk.cyan(e.to)}  ${chalk.dim(e.pattern)}`)
+    }
+  }
+
+  if (denyEdges.length > 0) {
+    console.log(chalk.bold("\nBlocked") + chalk.dim("  (producer -x- consumer)"))
+    for (const e of denyEdges) {
+      console.log(`  ${chalk.green(e.from)} ${chalk.red("─x─")} ${chalk.cyan(e.to)}  ${chalk.dim(e.pattern)}`)
+    }
+  }
+
+  // Isolation matrix
+  if (nodes.length > 1 && patterns.length > 0) {
+    console.log(chalk.bold("\nAccess Matrix"))
+    const nameWidth = Math.max(...nodes.map(n => n.name.length), 8)
+
+    // Header row
+    const patternLabels = patterns.map(p => {
+      const short = p.length > 12 ? p.slice(0, 11) + "~" : p
+      return short.padEnd(13)
+    })
+    console.log(`  ${"".padEnd(nameWidth)}  ${patternLabels.join("")}`)
+
+    for (const node of nodes) {
+      const cells: string[] = []
+      for (const p of patterns) {
+        const produces = (node.scope?.produces || []).some(pr => matchScopePattern(pr, p) || matchScopePattern(p, pr))
+        const consumes = (node.scope?.consumes || []).some(c => matchScopePattern(c, p) || matchScopePattern(p, c))
+        const denied = (node.scope?.denied || []).some(d => matchScopePattern(d, p) || matchScopePattern(p, d))
+
+        let cell: string
+        if (denied) cell = chalk.red("  DENY       ")
+        else if (produces && consumes) cell = chalk.yellow("  P+C        ")
+        else if (produces) cell = chalk.green("  PROD       ")
+        else if (consumes) cell = chalk.cyan("  READ       ")
+        else if (!node.scope) cell = chalk.yellow("  *          ")
+        else cell = chalk.dim("  -          ")
+        cells.push(cell)
+      }
+      console.log(`  ${node.name.padEnd(nameWidth)}  ${cells.join("")}`)
+    }
+  }
+
+  // Warnings
+  if (warnings.length > 0) {
+    console.log(chalk.bold("\nWarnings"))
+    for (const w of warnings) {
+      console.log(`  ${chalk.yellow("[!!]")} ${chalk.bold(w.service)}: ${w.message}`)
+    }
+  } else {
+    console.log(chalk.green("\nNo scope warnings"))
+  }
+
+  console.log()
+}
+
 export async function scopeCommand(action?: string, ...args: string[]): Promise<void> {
   switch (action) {
     case "list":
     case undefined:
       await listScopes()
+      break
+
+    case "viz":
+      await vizScopes()
       break
 
     case "set": {
@@ -254,6 +474,6 @@ export async function scopeCommand(action?: string, ...args: string[]): Promise<
     }
 
     default:
-      console.log(chalk.yellow("Unknown action. Usage: jfl scope [list|set|test]"))
+      console.log(chalk.yellow("Unknown action. Usage: jfl scope [list|set|test|viz]"))
   }
 }
