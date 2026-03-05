@@ -150,6 +150,43 @@ export function registerPortfolioCommand(program: Command): void {
     })
 
   portfolio
+    .command("unregister <name>")
+    .description("Remove a GTM workspace from this portfolio")
+    .action(async (name: string) => {
+      const root = findProjectRoot()
+      const config = requirePortfolio(root)
+
+      const children = config.registered_services ?? []
+      const idx = children.findIndex(s => s.name === name)
+      if (idx === -1) {
+        console.log(chalk.red(`"${name}" is not registered in this portfolio.`))
+        return
+      }
+
+      const child = children[idx]
+
+      // Remove portfolio_parent from child GTM config
+      if (fs.existsSync(child.path)) {
+        const childConfigPath = path.join(child.path, ".jfl", "config.json")
+        if (fs.existsSync(childConfigPath)) {
+          try {
+            const childConfig = JSON.parse(fs.readFileSync(childConfigPath, "utf-8"))
+            delete childConfig.portfolio_parent
+            fs.writeFileSync(childConfigPath, JSON.stringify(childConfig, null, 2))
+          } catch {}
+        }
+      }
+
+      children.splice(idx, 1)
+      config.registered_services = children
+
+      const portfolioConfigPath = path.join(root, ".jfl", "config.json")
+      fs.writeFileSync(portfolioConfigPath, JSON.stringify(config, null, 2))
+
+      console.log(chalk.green(`Unregistered: ${name}`))
+    })
+
+  portfolio
     .command("status")
     .description("Portfolio health and eval summary")
     .action(async () => {
@@ -204,5 +241,101 @@ export function registerPortfolioCommand(program: Command): void {
       }
 
       console.log()
+    })
+
+  portfolio
+    .command("phone-home")
+    .description("Report this GTM's health to its portfolio parent")
+    .action(async () => {
+      const root = findProjectRoot()
+      const config = loadConfig(root)
+      if (!config) {
+        console.log(chalk.red("No .jfl/config.json found."))
+        return
+      }
+
+      const portfolioPath = (config as any).portfolio_parent
+      if (!portfolioPath) {
+        console.log(chalk.yellow("No portfolio_parent configured. This GTM is not part of a portfolio."))
+        return
+      }
+
+      if (!fs.existsSync(portfolioPath)) {
+        console.log(chalk.red(`Portfolio parent path not found: ${portfolioPath}`))
+        return
+      }
+
+      // Build health report
+      const services = getRegisteredServices(root)
+      const evalPath = path.join(root, ".jfl", "eval.jsonl")
+      let evalCount = 0
+      let latestEval: string | null = null
+      if (fs.existsSync(evalPath)) {
+        const lines = fs.readFileSync(evalPath, "utf-8").split("\n").filter(l => l.trim())
+        evalCount = lines.length
+        if (lines.length > 0) {
+          try {
+            const last = JSON.parse(lines[lines.length - 1])
+            latestEval = last.ts
+          } catch {}
+        }
+      }
+
+      const report = {
+        name: config.name,
+        type: config.type,
+        services: services.length,
+        evals: evalCount,
+        latest_eval: latestEval,
+        reported_at: new Date().toISOString(),
+      }
+
+      // Write report to portfolio's journal
+      const portfolioJournalDir = path.join(portfolioPath, ".jfl", "journal")
+      if (!fs.existsSync(portfolioJournalDir)) {
+        fs.mkdirSync(portfolioJournalDir, { recursive: true })
+      }
+      const entry = {
+        v: 1,
+        ts: new Date().toISOString(),
+        session: "phone-home",
+        type: "discovery",
+        title: `Phone home: ${config.name}`,
+        summary: `${config.name} reports ${services.length} services, ${evalCount} evals. Latest eval: ${latestEval || "none"}.`,
+        status: "complete",
+      }
+      const journalFile = path.join(portfolioJournalDir, "phone-home.jsonl")
+      fs.appendFileSync(journalFile, JSON.stringify(entry) + "\n")
+
+      // Try to emit event to portfolio hub
+      const portfolioConfig = loadConfig(portfolioPath)
+      if (portfolioConfig) {
+        const tokenPath = path.join(portfolioPath, ".jfl", "context-hub.token")
+        if (fs.existsSync(tokenPath)) {
+          try {
+            const token = fs.readFileSync(tokenPath, "utf-8").trim()
+            const { getProjectPort } = await import("../utils/context-hub-port.js")
+            const port = getProjectPort(portfolioPath)
+            await fetch(`http://localhost:${port}/api/events`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${token}`,
+              },
+              body: JSON.stringify({
+                type: "portfolio:phone-home",
+                source: config.name,
+                data: report,
+              }),
+              signal: AbortSignal.timeout(5000),
+            })
+          } catch {}
+        }
+      }
+
+      console.log(chalk.green(`Reported to portfolio: ${path.basename(portfolioPath)}`))
+      console.log(chalk.dim(`  Services: ${services.length}`))
+      console.log(chalk.dim(`  Evals: ${evalCount}`))
+      console.log(chalk.dim(`  Latest eval: ${latestEval || "none"}`))
     })
 }
