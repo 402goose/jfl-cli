@@ -81,16 +81,40 @@ export function generateDashboardHTML(projectName: string, port: number): string
 
     // App
     function App() {
-      const [page, setPage] = useState('overview')
+      const { mode, config, children, loading: modeLoading } = useWorkspaceMode()
+      const defaultPage = mode === 'portfolio' ? 'portfolio' : mode === 'service' ? 'service' : 'overview'
+      const [page, setPage] = useState(defaultPage)
 
-      const pageComponent = {
+      // Update default page when mode loads
+      useEffect(() => {
+        if (!modeLoading) {
+          const dp = mode === 'portfolio' ? 'portfolio' : mode === 'service' ? 'service' : 'overview'
+          setPage(prev => {
+            // Only update if still on the initial 'overview' default
+            if (prev === 'overview' && dp !== 'overview') return dp
+            return prev
+          })
+        }
+      }, [mode, modeLoading])
+
+      const pageMap = {
         overview: OverviewPage,
         journal: JournalPage,
         agents: AgentsPage,
         events: EventsPage,
         sessions: SessionsPage,
         projects: ProjectsPage,
-      }[page] || OverviewPage
+        portfolio: PortfolioOverviewPage,
+        evals: EvalsPage,
+        scope: ScopePage,
+        service: ServiceOverviewPage,
+      }
+
+      const pageComponent = pageMap[page] || OverviewPage
+
+      if (modeLoading) {
+        return html\`<div class="loading" style="width: 100%; height: 100vh;">Loading dashboard</div>\`
+      }
 
       return html\`
         <\${Nav}
@@ -98,9 +122,10 @@ export function generateDashboardHTML(projectName: string, port: number): string
           setPage=\${setPage}
           projectName="${escapeHtml(projectName)}"
           port=\${${port}}
+          mode=\${mode}
         />
         <div class="main-content">
-          <\${pageComponent} />
+          <\${pageComponent} mode=\${mode} config=\${config} children=\${children} />
         </div>
       \`
     }

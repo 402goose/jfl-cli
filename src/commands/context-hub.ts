@@ -795,6 +795,33 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus)
       const context = getUnifiedContext(projectRoot)
       const children = getChildHubs(projectRoot)
 
+      // Read actual workspace type from config
+      let workspaceType: "portfolio" | "gtm" | "service" | "standalone" = "standalone"
+      let workspaceConfig: Record<string, unknown> = {}
+      const configPath = path.join(projectRoot, ".jfl", "config.json")
+      if (fs.existsSync(configPath)) {
+        try {
+          const cfg = JSON.parse(fs.readFileSync(configPath, "utf-8"))
+          if (cfg.type === "portfolio" || cfg.type === "gtm" || cfg.type === "service") {
+            workspaceType = cfg.type
+          }
+          workspaceConfig = {
+            name: cfg.name,
+            type: cfg.type,
+            description: cfg.description,
+            scope: cfg.context_scope || null,
+            registered_services: (cfg.registered_services || []).map((s: any) => ({
+              name: s.name,
+              type: s.type,
+              status: s.status,
+              context_scope: s.context_scope || null,
+            })),
+            gtm_parent: cfg.gtm_parent || null,
+            portfolio_parent: cfg.portfolio_parent || null,
+          }
+        } catch {}
+      }
+
       const childStatus = await Promise.all(
         children.map(async (child) => {
           try {
@@ -812,7 +839,8 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus)
       res.end(JSON.stringify({
         status: "running",
         port,
-        type: children.length > 0 ? "portfolio" : "standalone",
+        type: workspaceType,
+        config: workspaceConfig,
         sources: context.sources,
         itemCount: context.items.length,
         ...(children.length > 0 ? { children: childStatus } : {}),
@@ -988,6 +1016,59 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus)
           res.end(JSON.stringify({ error: err.message }))
         }
       })
+      return
+    }
+
+    // Eval trajectory
+    if (url.pathname === "/api/eval/trajectory" && req.method === "GET") {
+      try {
+        const { getTrajectory } = await import("../lib/eval-store.js")
+        const agent = url.searchParams.get("agent") || ""
+        const metric = url.searchParams.get("metric") || "composite"
+        if (!agent) {
+          res.writeHead(400, { "Content-Type": "application/json" })
+          res.end(JSON.stringify({ error: "agent query param required" }))
+          return
+        }
+        const points = getTrajectory(agent, metric, projectRoot)
+        res.writeHead(200, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ agent, metric, points }))
+      } catch (err: any) {
+        res.writeHead(500, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ error: err.message }))
+      }
+      return
+    }
+
+    // Eval leaderboard
+    if (url.pathname === "/api/eval/leaderboard" && req.method === "GET") {
+      try {
+        const { readEvals, listAgents, getLatestEval, getTrajectory } = await import("../lib/eval-store.js")
+        const agents = listAgents(projectRoot)
+        const leaderboard = agents.map(agent => {
+          const latest = getLatestEval(agent, projectRoot)
+          const trajectory = getTrajectory(agent, "composite", projectRoot)
+          const prevPoint = trajectory.length >= 2 ? trajectory[trajectory.length - 2] : null
+          const delta = latest?.composite != null && prevPoint
+            ? latest.composite - prevPoint.value
+            : null
+          return {
+            agent,
+            composite: latest?.composite ?? null,
+            metrics: latest?.metrics ?? {},
+            delta,
+            model_version: latest?.model_version ?? null,
+            lastTs: latest?.ts ?? null,
+            trajectory: trajectory.slice(-20).map(p => p.value),
+          }
+        }).sort((a, b) => (b.composite ?? 0) - (a.composite ?? 0))
+
+        res.writeHead(200, { "Content-Type": "application/json" })
+        res.end(JSON.stringify(leaderboard))
+      } catch (err: any) {
+        res.writeHead(500, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ error: err.message }))
+      }
       return
     }
 

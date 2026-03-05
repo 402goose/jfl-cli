@@ -1,11 +1,65 @@
 /**
  * Dashboard page components
  *
- * @purpose Command center pages: journal-first overview, events, agents, projects, sessions, journal
+ * @purpose Command center pages: mode-aware overview, evals, portfolio, scope, service, events, agents, projects, sessions, journal
  */
 
 export function getPagesJS(): string {
   return `
+    // ================================================================
+    // HOOKS
+    // ================================================================
+
+    // Workspace mode detection — fetches once at mount
+    function useWorkspaceMode() {
+      const [mode, setMode] = useState('gtm')
+      const [config, setConfig] = useState({})
+      const [children, setChildren] = useState([])
+      const [loading, setLoading] = useState(true)
+
+      useEffect(() => {
+        apiFetch('/api/context/status')
+          .then(data => {
+            const t = data.type || 'standalone'
+            setMode(t === 'standalone' ? 'gtm' : t)
+            setConfig(data.config || {})
+            setChildren(data.children || [])
+          })
+          .catch(() => {})
+          .finally(() => setLoading(false))
+      }, [])
+
+      return { mode, config, children, loading }
+    }
+
+    // Eval data hook — leaderboard + optional trajectory, refreshes every 60s
+    function useEvalData(selectedAgent) {
+      const [leaderboard, setLeaderboard] = useState([])
+      const [trajectory, setTrajectory] = useState([])
+      const [loading, setLoading] = useState(true)
+
+      useEffect(() => {
+        function load() {
+          apiFetch('/api/eval/leaderboard')
+            .then(data => setLeaderboard(data || []))
+            .catch(() => setLeaderboard([]))
+            .finally(() => setLoading(false))
+        }
+        load()
+        const interval = setInterval(load, 60000)
+        return () => clearInterval(interval)
+      }, [])
+
+      useEffect(() => {
+        if (!selectedAgent) { setTrajectory([]); return }
+        apiFetch('/api/eval/trajectory?agent=' + encodeURIComponent(selectedAgent) + '&metric=composite')
+          .then(data => setTrajectory(data.points || []))
+          .catch(() => setTrajectory([]))
+      }, [selectedAgent])
+
+      return { leaderboard, trajectory, loading }
+    }
+
     // Shared SSE hook — one connection, all pages can use it
     function useEventStream() {
       const [events, setEvents] = useState([])
@@ -120,12 +174,421 @@ export function getPagesJS(): string {
     }
 
     // ================================================================
-    // COMMAND CENTER (Overview) — Journal-first
+    // PORTFOLIO OVERVIEW (portfolio mode)
+    // ================================================================
+
+    function PortfolioOverviewPage({ children, config }) {
+      const { events, connected } = useEventStream()
+      const { leaderboard, loading: evalLoading } = useEvalData()
+      const [childHealth, setChildHealth] = useState(children || [])
+
+      // Enrich children with eval data
+      const enrichedChildren = (childHealth || []).map(child => {
+        const agentsForChild = leaderboard.filter(a => a.agent.toLowerCase().includes(child.name.toLowerCase()))
+        const bestAgent = agentsForChild[0]
+        return {
+          ...child,
+          composite: bestAgent?.composite ?? null,
+          delta: bestAgent?.delta ?? null,
+          sparkline: bestAgent?.trajectory ?? [],
+          activeSessions: null,
+        }
+      })
+
+      const totalProducts = enrichedChildren.length
+      const activeSessions = events.filter(e => (e.type || '').includes('session:started')).length
+      const eventRate = events.length > 0 ? Math.round(events.length / Math.max(1, (Date.now() - new Date(events[events.length - 1]?.timestamp || Date.now()).getTime()) / 3600000)) : 0
+      const avgComposite = leaderboard.length > 0 ? (leaderboard.reduce((sum, a) => sum + (a.composite || 0), 0) / leaderboard.length) : 0
+
+      return html\`
+        <div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+            <h2 class="page-title" style="margin-bottom: 0;">Portfolio Overview</h2>
+            <\${LiveIndicator} connected=\${connected} />
+          </div>
+
+          <div class="grid-4" style="margin-bottom: 1.5rem;">
+            <\${Card} title="Total Products">
+              <div class="card-value">\${totalProducts}</div>
+            <//>
+            <\${Card} title="Active Sessions">
+              <div class="card-value" style="color: var(--success);">\${activeSessions}</div>
+            <//>
+            <\${Card} title="Events/hr">
+              <div class="card-value" style="color: var(--info);">\${eventRate}</div>
+            <//>
+            <\${Card} title="Avg Composite">
+              <div class="card-value" style="color: var(--accent);">\${avgComposite > 0 ? avgComposite.toFixed(3) : '—'}</div>
+            <//>
+          </div>
+
+          \${enrichedChildren.length > 0 && html\`
+            <\${Card} title="Health Grid">
+              <div class="health-grid">
+                \${enrichedChildren.map(child => html\`
+                  <\${HealthCard} key=\${child.name} child=\${child} />
+                \`)}
+              </div>
+            <//>
+          \`}
+
+          \${leaderboard.length > 0 && html\`
+            <\${Card} title="Leaderboard">
+              <table>
+                <thead>
+                  <tr>
+                    <th style="width: 40px;">#</th>
+                    <th>Agent</th>
+                    <th style="width: 100px;">Composite</th>
+                    <th style="width: 80px;">Trend</th>
+                    <th style="width: 80px;">Delta</th>
+                    <th style="width: 120px;">Model</th>
+                    <th style="width: 100px;">Last Run</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  \${leaderboard.map((a, i) => html\`
+                    <tr key=\${a.agent}>
+                      <td style="font-weight: 700; color: \${i === 0 ? 'var(--accent)' : 'var(--text-soft)'};">\${i + 1}</td>
+                      <td style="font-weight: 600;">\${a.agent}</td>
+                      <td style="font-family: monospace; color: var(--accent);">\${a.composite != null ? a.composite.toFixed(4) : '—'}</td>
+                      <td><\${Sparkline} data=\${a.trajectory} width=\${60} height=\${20} /></td>
+                      <td>\${a.delta != null ? html\`<\${DeltaBadge} delta=\${a.delta} />\` : '—'}</td>
+                      <td style="font-size: 0.75rem; color: var(--text-soft);">\${a.model_version || '—'}</td>
+                      <td style="font-size: 0.75rem; color: var(--text-dim);">\${a.lastTs ? new Date(a.lastTs).toLocaleDateString() : '—'}</td>
+                    </tr>
+                  \`)}
+                </tbody>
+              </table>
+            <//>
+          \`}
+
+          \${events.length > 0 && html\`
+            <\${Card} title="Recent Events">
+              <div style="max-height: 200px; overflow-y: auto;">
+                <table>
+                  <thead>
+                    <tr>
+                      <th style="width: 80px;">Time</th>
+                      <th style="width: 160px;">Type</th>
+                      <th>Source</th>
+                      <th>Details</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    \${events.slice(0, 15).map(e => html\`<\${EventRow} key=\${e.id} event=\${e} />\`)}
+                  </tbody>
+                </table>
+              </div>
+            <//>
+          \`}
+        </div>
+      \`
+    }
+
+    // ================================================================
+    // EVALS PAGE (all modes)
+    // ================================================================
+
+    function EvalsPage() {
+      const [selectedAgent, setSelectedAgent] = useState('')
+      const { leaderboard, trajectory, loading } = useEvalData(selectedAgent)
+
+      // Auto-select first agent
+      useEffect(() => {
+        if (!selectedAgent && leaderboard.length > 0) {
+          setSelectedAgent(leaderboard[0].agent)
+        }
+      }, [leaderboard, selectedAgent])
+
+      // Extract unique metric keys from leaderboard
+      const metricKeys = leaderboard.length > 0
+        ? [...new Set(leaderboard.flatMap(a => Object.keys(a.metrics || {})))]
+        : []
+
+      return html\`
+        <div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+            <h2 class="page-title" style="margin-bottom: 0;">Evals</h2>
+            \${leaderboard.length > 0 && html\`
+              <select class="agent-select" value=\${selectedAgent} onChange=\${e => setSelectedAgent(e.target.value)}>
+                \${leaderboard.map(a => html\`<option key=\${a.agent} value=\${a.agent}>\${a.agent}</option>\`)}
+              </select>
+            \`}
+          </div>
+
+          \${loading ? html\`<div class="loading">Loading eval data</div>\` : leaderboard.length === 0 ? html\`
+            <div class="empty-state" style="padding: 3rem;">
+              <div style="font-size: 1.25rem; color: var(--text-dim); margin-bottom: 0.5rem;">No Eval Data</div>
+              <div style="color: var(--text-dim); font-size: 0.85rem;">
+                Run evals with <span style="color: var(--accent); font-family: monospace;">jfl eval run</span> to see results here.
+              </div>
+            </div>
+          \` : html\`
+            <\${Card} title=\${'Composite Trajectory — ' + selectedAgent}>
+              <\${EvalChart} data=\${trajectory} width=\${800} height=\${240} label="composite score over time" />
+            <//>
+
+            \${metricKeys.length > 0 && html\`
+              <div class="grid-3" style="margin-bottom: 1rem;">
+                \${metricKeys.map(key => {
+                  const agent = leaderboard.find(a => a.agent === selectedAgent)
+                  const val = agent?.metrics?.[key]
+                  return html\`
+                    <\${Card} key=\${key} title=\${key}>
+                      <div style="display: flex; align-items: center; gap: 0.75rem;">
+                        <span style="font-size: 1.5rem; font-weight: 700; color: var(--accent);">\${val != null ? val.toFixed(3) : '—'}</span>
+                      </div>
+                    <//>
+                  \`
+                })}
+              </div>
+            \`}
+
+            <\${Card} title="Leaderboard">
+              <table>
+                <thead>
+                  <tr>
+                    <th style="width: 40px;">#</th>
+                    <th>Agent</th>
+                    <th style="width: 100px;">Composite</th>
+                    <th style="width: 80px;">Trend</th>
+                    <th style="width: 80px;">Delta</th>
+                    <th style="width: 120px;">Model</th>
+                    <th style="width: 100px;">Last Run</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  \${leaderboard.map((a, i) => html\`
+                    <tr key=\${a.agent} style=\${a.agent === selectedAgent ? 'background: rgba(255,215,0,0.05);' : ''} onClick=\${() => setSelectedAgent(a.agent)}>
+                      <td style="font-weight: 700; color: \${i === 0 ? 'var(--accent)' : 'var(--text-soft)'}; cursor: pointer;">\${i + 1}</td>
+                      <td style="font-weight: 600; cursor: pointer;">\${a.agent}</td>
+                      <td style="font-family: monospace; color: var(--accent);">\${a.composite != null ? a.composite.toFixed(4) : '—'}</td>
+                      <td><\${Sparkline} data=\${a.trajectory} width=\${60} height=\${20} /></td>
+                      <td>\${a.delta != null ? html\`<\${DeltaBadge} delta=\${a.delta} />\` : '—'}</td>
+                      <td style="font-size: 0.75rem; color: var(--text-soft);">\${a.model_version || '—'}</td>
+                      <td style="font-size: 0.75rem; color: var(--text-dim);">\${a.lastTs ? new Date(a.lastTs).toLocaleDateString() : '—'}</td>
+                    </tr>
+                  \`)}
+                </tbody>
+              </table>
+            <//>
+          \`}
+        </div>
+      \`
+    }
+
+    // ================================================================
+    // SCOPE PAGE (GTM mode only)
+    // ================================================================
+
+    function ScopePage({ config }) {
+      const services = (config?.registered_services || [])
+      const selfName = config?.name || 'This Workspace'
+
+      if (services.length === 0) {
+        return html\`
+          <div>
+            <h2 class="page-title">Scope</h2>
+            <div class="empty-state" style="padding: 3rem;">
+              <div style="color: var(--text-dim);">No registered services.</div>
+              <div style="color: var(--text-dim); font-size: 0.8rem; margin-top: 0.5rem;">
+                Register services with <span style="color: var(--accent); font-family: monospace;">jfl services register</span>
+              </div>
+            </div>
+          </div>
+        \`
+      }
+
+      const nodeW = 160
+      const nodeH = 50
+      const svgW = Math.max(500, (services.length + 1) * (nodeW + 40))
+      const svgH = 280
+      const topX = svgW / 2 - nodeW / 2
+      const topY = 20
+      const childY = 160
+      const childStartX = (svgW - services.length * (nodeW + 30) + 30) / 2
+
+      return html\`
+        <div>
+          <h2 class="page-title">Scope</h2>
+          <\${Card}>
+            <div class="scope-graph" style="overflow-x: auto;">
+              <svg width=\${svgW} height=\${svgH} viewBox=\${'0 0 ' + svgW + ' ' + svgH}>
+                <!-- Top node: this workspace -->
+                <rect class="scope-node scope-node-self" x=\${topX} y=\${topY} width=\${nodeW} height=\${nodeH} />
+                <text class="scope-label" x=\${topX + nodeW / 2} y=\${topY + 22} fill="var(--accent)">\${selfName}</text>
+                <text x=\${topX + nodeW / 2} y=\${topY + 38} text-anchor="middle" fill="var(--text-dim)" font-size="10">\${config?.type || 'gtm'}</text>
+
+                \${services.map((svc, i) => {
+                  const cx = childStartX + i * (nodeW + 30)
+                  const cy = childY
+                  const scope = svc.context_scope || {}
+                  const produces = scope.produces || []
+                  const consumes = scope.consumes || []
+                  const denied = scope.denied || []
+
+                  // Connection line
+                  const lineX1 = topX + nodeW / 2
+                  const lineY1 = topY + nodeH
+                  const lineX2 = cx + nodeW / 2
+                  const lineY2 = cy
+
+                  // Scope badges below each service node
+                  const badgeY = cy + nodeH + 10
+                  const badges = []
+                  if (produces.length > 0) badges.push({ label: 'produces', cls: 'scope-badge-produces', items: produces })
+                  if (consumes.length > 0) badges.push({ label: 'consumes', cls: 'scope-badge-consumes', items: consumes })
+                  if (denied.length > 0) badges.push({ label: 'denied', cls: 'scope-badge-denied', items: denied })
+
+                  return html\`
+                    <g key=\${svc.name}>
+                      <line class="scope-line" x1=\${lineX1} y1=\${lineY1} x2=\${lineX2} y2=\${lineY2} />
+                      <rect class="scope-node" x=\${cx} y=\${cy} width=\${nodeW} height=\${nodeH} />
+                      <text class="scope-label" x=\${cx + nodeW / 2} y=\${cy + 22}>\${svc.name}</text>
+                      <text x=\${cx + nodeW / 2} y=\${cy + 38} text-anchor="middle" fill="var(--text-dim)" font-size="10">\${svc.type || 'service'}</text>
+                      \${badges.map((b, bi) => html\`
+                        <g key=\${b.label}>
+                          <rect class=\${b.cls} x=\${cx + bi * 55 + 2} y=\${badgeY} width=\${50} height=\${18} rx="4" stroke-width="1" />
+                          <text class="scope-badge-text" x=\${cx + bi * 55 + 27} y=\${badgeY + 13} fill="var(--text)">\${b.label}</text>
+                        </g>
+                      \`)}
+                    </g>
+                  \`
+                })}
+              </svg>
+            </div>
+          <//>
+
+          <\${Card} title="Service Details">
+            <table>
+              <thead>
+                <tr>
+                  <th>Service</th>
+                  <th>Type</th>
+                  <th>Status</th>
+                  <th>Produces</th>
+                  <th>Consumes</th>
+                  <th>Denied</th>
+                </tr>
+              </thead>
+              <tbody>
+                \${services.map(svc => {
+                  const scope = svc.context_scope || {}
+                  return html\`
+                    <tr key=\${svc.name}>
+                      <td style="font-weight: 600;">\${svc.name}</td>
+                      <td style="font-size: 0.8rem; color: var(--text-soft);">\${svc.type || '—'}</td>
+                      <td><\${StatusBadge} status=\${svc.status || 'unknown'} /></td>
+                      <td style="font-size: 0.75rem; color: var(--success);">\${(scope.produces || []).join(', ') || '—'}</td>
+                      <td style="font-size: 0.75rem; color: var(--info);">\${(scope.consumes || []).join(', ') || '—'}</td>
+                      <td style="font-size: 0.75rem; color: var(--error);">\${(scope.denied || []).join(', ') || '—'}</td>
+                    </tr>
+                  \`
+                })}
+              </tbody>
+            </table>
+          <//>
+        </div>
+      \`
+    }
+
+    // ================================================================
+    // SERVICE OVERVIEW (service mode)
+    // ================================================================
+
+    function ServiceOverviewPage({ config }) {
+      const { journal, loading: journalLoading } = useContextData()
+      const { events, connected } = useEventStream()
+      const { leaderboard } = useEvalData()
+
+      const serviceName = config?.name || 'Service'
+      const serviceType = config?.type || 'service'
+      const parentName = config?.gtm_parent ? config.gtm_parent.split('/').pop() : null
+
+      // Find eval for this service
+      const myEval = leaderboard.find(a => a.agent.toLowerCase().includes(serviceName.toLowerCase()))
+
+      // Filter events to this service
+      const myEvents = events.filter(e =>
+        (e.source || '').toLowerCase().includes(serviceName.toLowerCase())
+      )
+
+      return html\`
+        <div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+            <h2 class="page-title" style="margin-bottom: 0;">My Status</h2>
+            <\${LiveIndicator} connected=\${connected} />
+          </div>
+
+          <div class="grid-3" style="margin-bottom: 1.5rem;">
+            <\${Card} title="Service">
+              <div style="font-size: 1.25rem; font-weight: 700;">\${serviceName}</div>
+              <div style="font-size: 0.8rem; color: var(--text-dim); margin-top: 0.25rem;">\${serviceType}</div>
+              \${parentName && html\`<div style="font-size: 0.75rem; color: var(--text-soft); margin-top: 0.25rem;">Parent: \${parentName}</div>\`}
+            <//>
+            <\${Card} title="My Eval">
+              \${myEval ? html\`
+                <div style="display: flex; align-items: center; gap: 0.75rem;">
+                  <span style="font-size: 1.5rem; font-weight: 700; color: var(--accent);">\${myEval.composite != null ? myEval.composite.toFixed(4) : '—'}</span>
+                  \${myEval.delta != null && html\`<\${DeltaBadge} delta=\${myEval.delta} />\`}
+                </div>
+                <div style="margin-top: 0.375rem;">
+                  <\${Sparkline} data=\${myEval.trajectory} width=\${100} height=\${24} />
+                </div>
+              \` : html\`<div style="color: var(--text-dim); font-size: 0.85rem;">No eval data</div>\`}
+            <//>
+            <\${Card} title="Activity">
+              <div class="card-value">\${myEvents.length}</div>
+              <div style="font-size: 0.75rem; color: var(--text-dim);">events from this service</div>
+            <//>
+          </div>
+
+          \${myEvents.length > 0 && html\`
+            <\${Card} title="My Events">
+              <div style="max-height: 250px; overflow-y: auto;">
+                <table>
+                  <thead>
+                    <tr>
+                      <th style="width: 80px;">Time</th>
+                      <th style="width: 160px;">Type</th>
+                      <th>Source</th>
+                      <th>Details</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    \${myEvents.slice(0, 30).map(e => html\`<\${EventRow} key=\${e.id} event=\${e} />\`)}
+                  </tbody>
+                </table>
+              </div>
+            <//>
+          \`}
+
+          <\${Card} title="Scoped Journal">
+            \${journalLoading ? html\`<div class="loading">Loading</div>\` :
+              journal.length === 0 ? html\`
+                <div style="color: var(--text-dim); font-size: 0.8rem; padding: 0.5rem 0;">No journal entries</div>
+              \` : html\`
+                <div style="max-height: 300px; overflow-y: auto;">
+                  \${journal.slice(0, 20).map(entry => html\`
+                    <\${JournalEntryRow} key=\${entry.timestamp + entry.title} entry=\${entry} />
+                  \`)}
+                </div>
+              \`
+            }
+          <//>
+        </div>
+      \`
+    }
+
+    // ================================================================
+    // COMMAND CENTER (Overview) — Enhanced with eval velocity
     // ================================================================
 
     function OverviewPage() {
       const { events, connected } = useEventStream()
       const { journal, knowledge, loading } = useContextData()
+      const { leaderboard } = useEvalData()
       const [services, setServices] = useState({})
       const [projects, setProjects] = useState([])
       const [searchQuery, setSearchQuery] = useState('')
@@ -164,6 +627,10 @@ export function getPagesJS(): string {
       const totalProjects = (projects || []).length
       const decisionCount = journal.filter(e => e.type === 'decision').length
 
+      // Eval velocity: latest composite from top agent
+      const topAgent = leaderboard[0]
+      const evalCount = leaderboard.length
+
       return html\`
         <div>
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
@@ -182,8 +649,20 @@ export function getPagesJS(): string {
             <\${Card} title="Decisions">
               <div class="card-value" style="color: var(--accent);">\${decisionCount}</div>
             <//>
-            <\${Card} title="Services">
-              <div class="card-value">\${serviceEntries.length}</div>
+            <\${Card} title="Eval Velocity">
+              \${topAgent ? html\`
+                <div style="display: flex; align-items: center; gap: 0.5rem;">
+                  <span style="font-size: 1.5rem; font-weight: 700; color: var(--accent);">\${topAgent.composite != null ? topAgent.composite.toFixed(3) : '—'}</span>
+                  \${topAgent.delta != null && html\`<\${DeltaBadge} delta=\${topAgent.delta} />\`}
+                </div>
+                <div style="margin-top: 0.25rem;">
+                  <\${Sparkline} data=\${topAgent.trajectory} width=\${80} height=\${18} />
+                </div>
+                <div style="font-size: 0.65rem; color: var(--text-dim); margin-top: 0.125rem;">\${evalCount} agents evaluated</div>
+              \` : html\`
+                <div class="card-value" style="color: var(--text-dim);">—</div>
+                <div style="font-size: 0.65rem; color: var(--text-dim);">No evals yet</div>
+              \`}
             <//>
           </div>
 

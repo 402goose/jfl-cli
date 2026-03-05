@@ -484,14 +484,202 @@ export function getDashboardStyles(): string {
 
     .memory-result:last-child { border-bottom: none; }
 
+    /* Health grid */
+    .health-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+      gap: 1rem;
+    }
+
+    .health-card {
+      transition: border-color 0.15s;
+    }
+
+    .health-card:hover {
+      border-color: var(--accent-dim);
+    }
+
+    .health-dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      display: inline-block;
+      flex-shrink: 0;
+    }
+
+    .health-dot-ok {
+      background: var(--success);
+      box-shadow: 0 0 6px var(--success);
+    }
+
+    .health-dot-error {
+      background: var(--error);
+      box-shadow: 0 0 6px var(--error);
+    }
+
+    .health-dot-down {
+      background: var(--text-dim);
+    }
+
+    /* Delta badges */
+    .delta-up {
+      display: inline-block;
+      font-size: 0.75rem;
+      font-weight: 700;
+      color: var(--success);
+      background: rgba(0, 255, 136, 0.1);
+      padding: 0.1rem 0.375rem;
+      border-radius: 4px;
+    }
+
+    .delta-down {
+      display: inline-block;
+      font-size: 0.75rem;
+      font-weight: 700;
+      color: var(--error);
+      background: rgba(255, 68, 68, 0.1);
+      padding: 0.1rem 0.375rem;
+      border-radius: 4px;
+    }
+
+    .delta-neutral {
+      display: inline-block;
+      font-size: 0.75rem;
+      color: var(--text-dim);
+      padding: 0.1rem 0.375rem;
+    }
+
+    /* Eval chart */
+    .eval-chart-container {
+      width: 100%;
+      overflow: hidden;
+    }
+
+    .eval-chart-container svg {
+      width: 100%;
+      height: auto;
+    }
+
+    .eval-point circle {
+      transition: r 0.15s;
+    }
+
+    .eval-point:hover circle {
+      r: 5;
+    }
+
+    .sparkline {
+      display: inline-block;
+      vertical-align: middle;
+    }
+
+    /* Mode badge */
+    .mode-badge {
+      display: inline-block;
+      font-size: 0.65rem;
+      font-weight: 700;
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      letter-spacing: 0.08em;
+      margin-top: 0.375rem;
+    }
+
+    .mode-portfolio {
+      background: rgba(255, 215, 0, 0.15);
+      color: var(--accent);
+    }
+
+    .mode-gtm {
+      background: rgba(0, 255, 136, 0.15);
+      color: var(--success);
+    }
+
+    .mode-service {
+      background: rgba(79, 195, 247, 0.15);
+      color: var(--info);
+    }
+
+    .mode-standalone {
+      background: rgba(148, 163, 184, 0.15);
+      color: var(--text-soft);
+    }
+
+    /* Scope graph */
+    .scope-graph {
+      padding: 1.5rem;
+    }
+
+    .scope-node {
+      fill: var(--bg-card);
+      stroke: var(--border);
+      stroke-width: 1.5;
+      rx: 8;
+    }
+
+    .scope-node-self {
+      stroke: var(--accent);
+      stroke-width: 2;
+    }
+
+    .scope-line {
+      stroke: var(--border);
+      stroke-width: 1.5;
+    }
+
+    .scope-label {
+      fill: var(--text);
+      font-size: 12px;
+      font-weight: 600;
+      text-anchor: middle;
+    }
+
+    .scope-badge-produces {
+      fill: rgba(0, 255, 136, 0.2);
+      stroke: var(--success);
+    }
+
+    .scope-badge-consumes {
+      fill: rgba(79, 195, 247, 0.2);
+      stroke: var(--info);
+    }
+
+    .scope-badge-denied {
+      fill: rgba(255, 68, 68, 0.2);
+      stroke: var(--error);
+    }
+
+    .scope-badge-text {
+      font-size: 9px;
+      font-weight: 600;
+      text-anchor: middle;
+    }
+
+    /* Agent selector */
+    .agent-select {
+      padding: 0.5rem 0.75rem;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 0.5rem;
+      color: var(--text);
+      font-size: 0.875rem;
+      outline: none;
+      cursor: pointer;
+    }
+
+    .agent-select:focus {
+      border-color: var(--accent);
+    }
+
     @media (max-width: 768px) {
       .sidebar { width: 60px; padding: 1rem 0; }
       .sidebar-brand h1 { display: none; }
       .sidebar-brand .port-badge { display: none; }
+      .sidebar-brand .mode-badge { display: none; }
       .nav-item { padding: 0.625rem; text-align: center; font-size: 0; }
       .nav-item::before { font-size: 1rem; }
       .main-content { margin-left: 60px; padding: 1rem; }
       .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+      .health-grid { grid-template-columns: 1fr; }
     }
   `
 }
