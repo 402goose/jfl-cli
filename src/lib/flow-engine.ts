@@ -15,6 +15,13 @@ import type { MAPEventBus } from "./map-event-bus.js"
 import type { FlowDefinition, FlowsConfig, FlowAction, FlowExecution, FlowGate } from "../types/flows.js"
 import { telemetry } from "./telemetry.js"
 
+export interface ChildHubInfo {
+  name: string
+  path: string
+  port: number
+  token?: string
+}
+
 export class FlowEngine {
   private flows: FlowDefinition[] = []
   private eventBus: MAPEventBus
@@ -22,10 +29,16 @@ export class FlowEngine {
   private subscriptionIds: string[] = []
   private executions: FlowExecution[] = []
   private maxExecutions = 200
+  private children: ChildHubInfo[] = []
+  private childAbortControllers: AbortController[] = []
 
   constructor(eventBus: MAPEventBus, projectRoot: string) {
     this.eventBus = eventBus
     this.projectRoot = projectRoot
+  }
+
+  setChildren(children: ChildHubInfo[]): void {
+    this.children = children
   }
 
   async start(): Promise<number> {
@@ -42,6 +55,10 @@ export class FlowEngine {
       this.subscriptionIds.push(sub.id)
     }
 
+    if (this.children.length > 0) {
+      this.connectToChildren()
+    }
+
     return enabled.length
   }
 
@@ -50,6 +67,10 @@ export class FlowEngine {
       this.eventBus.unsubscribe(id)
     }
     this.subscriptionIds = []
+    for (const ac of this.childAbortControllers) {
+      ac.abort()
+    }
+    this.childAbortControllers = []
   }
 
   getFlows(): FlowDefinition[] {
@@ -58,6 +79,64 @@ export class FlowEngine {
 
   getExecutions(): FlowExecution[] {
     return [...this.executions]
+  }
+
+  private connectToChildren(): void {
+    for (const child of this.children) {
+      const ac = new AbortController()
+      this.childAbortControllers.push(ac)
+      this.subscribeToChild(child, ac.signal)
+    }
+  }
+
+  private async subscribeToChild(child: ChildHubInfo, signal: AbortSignal): Promise<void> {
+    const url = new URL(`http://localhost:${child.port}/api/events/stream?patterns=*`)
+    if (child.token) url.searchParams.set("token", child.token)
+
+    const connect = async () => {
+      try {
+        const response = await fetch(url.toString(), { signal })
+        if (!response.ok || !response.body) return
+
+        const reader = response.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ""
+
+        while (!signal.aborted) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+
+          const lines = buffer.split("\n")
+          buffer = lines.pop() || ""
+
+          for (const line of lines) {
+            if (!line.startsWith("data: ")) continue
+            try {
+              const event = JSON.parse(line.slice(6))
+              if (event.type?.startsWith("flow:")) continue
+              this.eventBus.emit({
+                type: event.type as MAPEventType,
+                source: `child:${child.name}:${event.source || "unknown"}`,
+                session: event.session,
+                data: { ...event.data, _child: child.name, _child_port: child.port },
+              })
+            } catch {
+              // skip malformed SSE data
+            }
+          }
+        }
+      } catch (err: any) {
+        if (signal.aborted) return
+        console.warn(`[FlowEngine] Child ${child.name} SSE disconnected: ${err.message}`)
+      }
+
+      if (!signal.aborted) {
+        setTimeout(() => connect(), 5000)
+      }
+    }
+
+    connect()
   }
 
   private loadFlows(): FlowDefinition[] {
@@ -329,8 +408,21 @@ export class FlowEngine {
   }
 
   private interpolate(template: string, event: MAPEvent): string {
-    return template.replace(/\{\{(\w+(?:\.\w+)*)\}\}/g, (_match, path: string) => {
-      const parts = path.split(".")
+    return template.replace(/\{\{(\w+(?:\.\w+)*)\}\}/g, (_match, varPath: string) => {
+      const parts = varPath.split(".")
+
+      if (parts[0] === "child" && parts.length >= 3) {
+        const childName = parts[1]
+        const field = parts[2]
+        const child = this.children.find(c => c.name === childName)
+        if (!child) return ""
+        if (field === "port") return String(child.port)
+        if (field === "path") return child.path
+        if (field === "token") return child.token || ""
+        if (field === "name") return child.name
+        return ""
+      }
+
       let value: any = event
       for (const part of parts) {
         if (value == null) return ""

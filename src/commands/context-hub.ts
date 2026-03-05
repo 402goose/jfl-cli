@@ -1857,9 +1857,14 @@ export async function contextHubCommand(
           // Don't exit - memory is optional
         }
 
-        // Start flow engine
+        // Start flow engine (with child hub connections for portfolio mode)
         try {
           const flowEngine = new FlowEngine(eventBus, projectRoot)
+          const children = getChildHubs(projectRoot)
+          if (children.length > 0) {
+            flowEngine.setChildren(children)
+            console.log(`[${timestamp}] Portfolio mode: connecting to ${children.length} child hub(s)`)
+          }
           const flowCount = await flowEngine.start()
           if (flowCount > 0) {
             console.log(`[${timestamp}] Flow engine started with ${flowCount} active flow(s)`)
