@@ -20,7 +20,7 @@ const TEMPLATE_REPO = "https://github.com/402goose/jfl-template.git"
 
 export async function initCommand(options?: { name?: string }) {
   // Start Clawdbot-style flow
-  p.intro(chalk.hex("#FFD700")("┌  JFL - Initialize GTM Workspace"))
+  p.intro(chalk.hex("#FFD700")("┌  JFL - Initialize Workspace"))
 
   // Check authentication - owner needs to be verified
   let ownerName = ""
@@ -71,6 +71,22 @@ export async function initCommand(options?: { name?: string }) {
     projectName = name as string
   }
 
+  // Ask workspace type
+  const workspaceType = await p.select({
+    message: "Workspace type:",
+    options: [
+      { label: "GTM", value: "gtm", hint: "Single product workspace" },
+      { label: "Portfolio", value: "portfolio", hint: "Manages multiple products" },
+    ],
+  })
+
+  if (p.isCancel(workspaceType)) {
+    p.cancel("Setup cancelled.")
+    process.exit(0)
+  }
+
+  const isPortfolio = workspaceType === "portfolio"
+
   // If cwd already matches the project name, initialize in place
   const cwdBasename = basename(process.cwd())
   const initInPlace = cwdBasename === projectName
@@ -100,7 +116,7 @@ export async function initCommand(options?: { name?: string }) {
   }
 
   // Clone template to temp directory, copy only template/ folder
-  const spinner = ora("Downloading GTM template...").start()
+  const spinner = ora(`Downloading ${isPortfolio ? "portfolio" : "GTM"} template...`).start()
   const tempDir = join(tmpdir(), `jfl-init-${Date.now()}`)
 
   try {
@@ -164,7 +180,7 @@ export async function initCommand(options?: { name?: string }) {
       execSync(`git init`, { cwd: projectPath, stdio: "pipe" })
     }
 
-    spinner.succeed("GTM workspace created!")
+    spinner.succeed(`${isPortfolio ? "Portfolio" : "GTM"} workspace created!`)
 
     // Validate and fix .claude/settings.json
     const settingsPath = join(projectPath, ".claude", "settings.json")
@@ -198,6 +214,88 @@ export async function initCommand(options?: { name?: string }) {
     }
 
     let productRepo = null
+
+    const portfolioChildGtms: Array<Record<string, any>> = []
+
+    if (isPortfolio) {
+      // Portfolio: register child GTM workspaces
+      p.note(
+        "Register existing GTM workspaces under this portfolio.\n" +
+        "Each GTM gets its own eval pipeline, journals, and event bus.\n" +
+        "The portfolio aggregates across all of them.",
+        chalk.hex("#FFA500")("Portfolio Setup")
+      )
+
+      const registerGtms = await p.confirm({
+        message: "Register GTM workspaces now?",
+        initialValue: true,
+      })
+
+      if (!p.isCancel(registerGtms) && registerGtms) {
+        let adding = true
+        let gtmCount = 0
+
+        while (adding) {
+          const gtmPathInput = await p.text({
+            message: gtmCount === 0
+              ? "GTM workspace path:"
+              : "Another GTM path (or Enter to skip):",
+            placeholder: "/path/to/my-product-gtm",
+            validate: (input: string) => {
+              if (gtmCount === 0 && !input.trim()) {
+                return "Enter at least one GTM path"
+              }
+            },
+          })
+
+          if (p.isCancel(gtmPathInput)) break
+          if (!gtmPathInput || (gtmPathInput as string).trim() === "") {
+            adding = false
+            break
+          }
+
+          const resolvedGtmPath = join(process.cwd(), gtmPathInput as string).replace(/\/+$/, "")
+          const absGtmPath = (gtmPathInput as string).startsWith("/") ? (gtmPathInput as string) : resolvedGtmPath
+
+          const gtmConfigPath = join(absGtmPath, ".jfl", "config.json")
+          if (!existsSync(gtmConfigPath)) {
+            p.log.warning(`No .jfl/config.json at ${absGtmPath} — skipping`)
+            continue
+          }
+
+          try {
+            const gtmConfig = JSON.parse(readFileSync(gtmConfigPath, "utf-8"))
+            if (gtmConfig.type !== "gtm") {
+              p.log.warning(`${absGtmPath} is type "${gtmConfig.type}", not "gtm" — skipping`)
+              continue
+            }
+
+            const { getRegisteredServices } = await import("../lib/service-gtm.js")
+            const svcCount = getRegisteredServices(absGtmPath).length
+
+            portfolioChildGtms.push({
+              name: gtmConfig.name,
+              path: absGtmPath,
+              type: "gtm",
+              registered_at: new Date().toISOString(),
+              status: "active",
+              context_scope: gtmConfig.context_scope,
+            })
+
+            // Write portfolio_parent back to child
+            gtmConfig.portfolio_parent = projectPath
+            writeFileSync(gtmConfigPath, JSON.stringify(gtmConfig, null, 2))
+
+            p.log.success(`Registered: ${gtmConfig.name} (${svcCount} services)`)
+            gtmCount++
+          } catch (err: any) {
+            p.log.warning(`Failed to read ${absGtmPath}: ${err.message}`)
+          }
+        }
+      }
+    }
+
+    if (!isPortfolio) {
 
     // Ask about product repo (registered as service, NOT a submodule)
     const productChoice = await p.select({
@@ -372,6 +470,8 @@ export async function initCommand(options?: { name?: string }) {
       }
     }
 
+    } // end if (!isPortfolio)
+
     // Update .jfl/config.json
     const configDir = join(projectPath, ".jfl")
     if (!existsSync(configDir)) {
@@ -381,7 +481,7 @@ export async function initCommand(options?: { name?: string }) {
     const configPath = join(configDir, "config.json")
     const config: Record<string, any> = {
       name: projectName,
-      type: "gtm",
+      type: isPortfolio ? "portfolio" : "gtm",
       description: description,
     }
 
@@ -401,6 +501,11 @@ export async function initCommand(options?: { name?: string }) {
     if (productRepo) {
       config.product_repo = productRepo
       config.registered_services = [{ name: "product", repo: productRepo }]
+    }
+
+    // Merge portfolio child GTMs collected earlier
+    if (isPortfolio && portfolioChildGtms.length > 0) {
+      config.registered_services = portfolioChildGtms
     }
 
     writeFileSync(configPath, JSON.stringify(config, null, 2) + "\n")
@@ -425,7 +530,7 @@ export async function initCommand(options?: { name?: string }) {
 
     if (profile) {
       // Generate CLAUDE.md from profile
-      const projectDescription = `GTM workspace for ${projectName}`
+      const projectDescription = isPortfolio ? `Portfolio workspace for ${projectName}` : `GTM workspace for ${projectName}`
       const claudeContent = generateClaudeMdFromProfile(profile, {
         name: projectName,
         description: projectDescription

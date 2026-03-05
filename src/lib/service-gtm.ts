@@ -15,10 +15,11 @@ import { getProjectHubUrl } from "../utils/context-hub-port.js";
 
 export interface ServiceConfig {
   name: string;
-  type: "service" | "gtm";
+  type: "service" | "gtm" | "portfolio";
   service_type?: "web" | "api" | "worker" | "daemon" | "cli" | "infrastructure" | "container" | "library";
   description: string;
   gtm_parent?: string;
+  portfolio_parent?: string;
   working_branch?: string;
   context_scope?: ContextScope;
   sync_to_parent?: {
@@ -83,6 +84,44 @@ export function findGTMParent(servicePath: string): string | null {
 }
 
 /**
+ * Find portfolio parent path from GTM config
+ */
+export function findPortfolioParent(gtmPath: string): string | null {
+  const configPath = path.join(gtmPath, ".jfl", "config.json");
+
+  if (!fs.existsSync(configPath)) {
+    return null;
+  }
+
+  try {
+    const config: ServiceConfig = JSON.parse(
+      fs.readFileSync(configPath, "utf-8")
+    );
+    return config.portfolio_parent || null;
+  } catch (error) {
+    return null;
+  }
+}
+
+/**
+ * Get full parent chain: service → GTM → portfolio
+ */
+export function getParentChain(projectPath: string): string[] {
+  const chain: string[] = [];
+  const config = loadServiceConfig(projectPath);
+
+  if (config.type === "service" && config.gtm_parent) {
+    chain.push(config.gtm_parent);
+    const portfolioParent = findPortfolioParent(config.gtm_parent);
+    if (portfolioParent) chain.push(portfolioParent);
+  } else if (config.type === "gtm" && config.portfolio_parent) {
+    chain.push(config.portfolio_parent);
+  }
+
+  return chain;
+}
+
+/**
  * Validate GTM parent exists and is valid GTM workspace
  */
 export function validateGTMParent(gtmPath: string): boolean {
@@ -97,12 +136,12 @@ export function validateGTMParent(gtmPath: string): boolean {
     return false;
   }
 
-  // Check it's actually a GTM
+  // Check it's a GTM or portfolio
   try {
     const config: GTMConfig = JSON.parse(
       fs.readFileSync(configPath, "utf-8")
     );
-    return config.type === "gtm";
+    return config.type === "gtm" || config.type === "portfolio";
   } catch (error) {
     return false;
   }

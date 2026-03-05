@@ -40,10 +40,23 @@ export function appendEval(entry: EvalEntry, projectRoot?: string): void {
 
   fs.appendFileSync(evalPath, JSON.stringify(entry) + "\n")
 
-  // Dual-write to GTM parent if this is a service
+  // Dual-write up the parent chain (service → GTM → portfolio)
   const config = loadConfig(root)
+  const parents: string[] = []
+
   if (config?.gtm_parent && fs.existsSync(config.gtm_parent)) {
-    const parentEvalPath = getEvalPath(config.gtm_parent)
+    parents.push(config.gtm_parent)
+    // Check if GTM has a portfolio parent
+    const gtmConfig = loadConfig(config.gtm_parent)
+    if (gtmConfig?.portfolio_parent && fs.existsSync(gtmConfig.portfolio_parent)) {
+      parents.push(gtmConfig.portfolio_parent)
+    }
+  } else if (config?.portfolio_parent && fs.existsSync(config.portfolio_parent)) {
+    parents.push(config.portfolio_parent)
+  }
+
+  for (const parent of parents) {
+    const parentEvalPath = getEvalPath(parent)
     const parentDir = path.dirname(parentEvalPath)
     if (!fs.existsSync(parentDir)) fs.mkdirSync(parentDir, { recursive: true })
     try {
@@ -117,16 +130,37 @@ export function getScopedJournalDirs(projectRoot?: string): string[] {
 
   if (!config) return dirs
 
-  // If GTM project, include all registered service journals
   const registeredServices = (config as any).registered_services as Array<{
     name: string
     path: string
+    type?: string
     context_scope?: { produces?: string[]; consumes?: string[]; denied?: string[] }
   }> | undefined
 
+  // Portfolio sees all child GTMs and their services
+  if (config.type === "portfolio" && registeredServices) {
+    for (const child of registeredServices) {
+      const childJournal = path.join(child.path, ".jfl", "journal")
+      if (fs.existsSync(childJournal)) dirs.push(childJournal)
+
+      // Also include child's registered services
+      const childConfig = loadConfig(child.path)
+      const childServices = (childConfig as any)?.registered_services as Array<{
+        name: string; path: string
+      }> | undefined
+      if (childServices) {
+        for (const svc of childServices) {
+          const svcJournal = path.join(svc.path, ".jfl", "journal")
+          if (fs.existsSync(svcJournal)) dirs.push(svcJournal)
+        }
+      }
+    }
+    return dirs
+  }
+
+  // GTM sees all registered service journals
   if (config.type === "gtm" && registeredServices) {
     for (const svc of registeredServices) {
-      // GTM sees everything
       const svcJournal = path.join(svc.path, ".jfl", "journal")
       if (fs.existsSync(svcJournal)) dirs.push(svcJournal)
     }
