@@ -160,12 +160,12 @@ export async function checkUsdcBalance(address: string): Promise<{ balance: bigi
   ])
 
   try {
-    const balance = await client.readContract({
+    const balance = await (client as any).readContract({
       address: getUsdcAddress() as `0x${string}`,
       abi: ERC20_ABI,
       functionName: 'balanceOf',
       args: [address as `0x${string}`],
-    })
+    }) as bigint
 
     return {
       balance,

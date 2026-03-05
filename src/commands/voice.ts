@@ -971,7 +971,7 @@ export class VoiceClient extends EventEmitter {
 
       // Send binary audio data - Buffer is automatically sent as binary
       // Use callback to catch send errors
-      this.ws.send(sendBuffer, (err) => {
+      this.ws.send(sendBuffer, (err: Error | undefined) => {
         if (err) {
           console.error(`[VoiceClient] send error:`, err)
         } else if (process.env.JFL_VOICE_DEBUG) {
