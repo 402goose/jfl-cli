@@ -81,6 +81,60 @@ export class FlowEngine {
     return [...this.executions]
   }
 
+  async approveGated(flowName: string, triggerEventId: string): Promise<FlowExecution | null> {
+    const execIdx = this.executions.findIndex(
+      e => e.flow === flowName && e.trigger_event_id === triggerEventId && e.gated
+    )
+    if (execIdx === -1) return null
+
+    const exec = this.executions[execIdx]
+    const flow = this.flows.find(f => f.name === flowName)
+    if (!flow) return null
+
+    const busEvents = this.eventBus.getEvents({ limit: 500 })
+    const original = busEvents.find((e: any) => e.id === triggerEventId)
+    const now = new Date().toISOString()
+    const event: MAPEvent = original || {
+      id: triggerEventId,
+      ts: now,
+      type: exec.trigger_event_type as MAPEventType,
+      source: `approved:${flowName}`,
+      data: {},
+    }
+
+    exec.gated = undefined
+    exec.started_at = new Date().toISOString()
+    exec.actions_executed = 0
+    exec.actions_failed = 0
+    delete exec.error
+
+    for (const action of flow.actions) {
+      try {
+        await this.executeAction(action, event, flow)
+        exec.actions_executed++
+      } catch (err: any) {
+        exec.actions_failed++
+        exec.error = err.message
+      }
+    }
+
+    exec.completed_at = new Date().toISOString()
+
+    this.eventBus.emit({
+      type: "flow:completed" as MAPEventType,
+      source: `flow:${flow.name}`,
+      data: {
+        flow_name: flow.name,
+        approved: true,
+        trigger_event_id: triggerEventId,
+        actions_executed: exec.actions_executed,
+        actions_failed: exec.actions_failed,
+      },
+    })
+
+    return exec
+  }
+
   private connectToChildren(): void {
     for (const child of this.children) {
       const ac = new AbortController()

@@ -660,7 +660,7 @@ async function getPortfolioContext(
 // HTTP Server
 // ============================================================================
 
-function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus): http.Server {
+function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus, flowEngine?: FlowEngine): http.Server {
   const server = http.createServer(async (req, res) => {
     const requestStart = Date.now()
     const pathname = new URL(req.url || "/", `http://localhost:${port}`).pathname
@@ -1190,6 +1190,80 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus)
 
       req.on("close", () => {
         eventBus.unsubscribe(sub.id)
+      })
+      return
+    }
+
+    // Telemetry digest
+    if (url.pathname === "/api/telemetry/digest" && req.method === "GET") {
+      try {
+        const { loadLocalEvents, analyzeEvents } = await import("../lib/telemetry-digest.js")
+        const hours = parseInt(url.searchParams.get("hours") || "168", 10)
+        const events = loadLocalEvents()
+        const digest = analyzeEvents(events, hours)
+        res.writeHead(200, { "Content-Type": "application/json" })
+        res.end(JSON.stringify(digest))
+      } catch (err: any) {
+        res.writeHead(500, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ error: err.message }))
+      }
+      return
+    }
+
+    // Flow definitions
+    if (url.pathname === "/api/flows" && req.method === "GET") {
+      if (!flowEngine) {
+        res.writeHead(200, { "Content-Type": "application/json" })
+        res.end(JSON.stringify([]))
+        return
+      }
+      res.writeHead(200, { "Content-Type": "application/json" })
+      res.end(JSON.stringify(flowEngine.getFlows()))
+      return
+    }
+
+    // Flow executions
+    if (url.pathname === "/api/flows/executions" && req.method === "GET") {
+      if (!flowEngine) {
+        res.writeHead(200, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ executions: [] }))
+        return
+      }
+      res.writeHead(200, { "Content-Type": "application/json" })
+      res.end(JSON.stringify({ executions: flowEngine.getExecutions() }))
+      return
+    }
+
+    // Flow approval
+    if (url.pathname.match(/^\/api\/flows\/[^/]+\/approve$/) && req.method === "POST") {
+      if (!flowEngine) {
+        res.writeHead(503, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ error: "Flow engine not initialized" }))
+        return
+      }
+      const flowName = decodeURIComponent(url.pathname.split("/")[3])
+      let body = ""
+      req.on("data", chunk => body += chunk)
+      req.on("end", async () => {
+        try {
+          const { trigger_event_id } = JSON.parse(body || "{}")
+          if (!trigger_event_id) {
+            res.writeHead(400, { "Content-Type": "application/json" })
+            res.end(JSON.stringify({ error: "trigger_event_id required" }))
+            return
+          }
+          const result = await flowEngine.approveGated(flowName, trigger_event_id)
+          if (!result) {
+            res.writeHead(404, { "Content-Type": "application/json" })
+            res.end(JSON.stringify({ error: "Gated execution not found" }))
+            return
+          }
+          res.writeHead(200, { "Content-Type": "application/json" })
+          res.end(JSON.stringify(result))
+        } catch (err: any) {
+          res.writeHead(500, { "Content-Type": "application/json" })
+          res.end(JSON.stringify({ error: err.message }))
+        }
       })
       return
     }
@@ -1855,7 +1929,8 @@ export async function contextHubCommand(
         journalDir: fs.existsSync(journalDir) ? journalDir : null,
       })
 
-      const server = createServer(projectRoot, port, eventBus)
+      const flowEngine = new FlowEngine(eventBus, projectRoot)
+      const server = createServer(projectRoot, port, eventBus, flowEngine)
       let isListening = false
 
       // When spawned as daemon, ignore SIGTERM during startup grace period.
@@ -1940,7 +2015,6 @@ export async function contextHubCommand(
 
         // Start flow engine (with child hub connections for portfolio mode)
         try {
-          const flowEngine = new FlowEngine(eventBus, projectRoot)
           const children = getChildHubs(projectRoot)
           if (children.length > 0) {
             flowEngine.setChildren(children)

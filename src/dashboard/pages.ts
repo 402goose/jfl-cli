@@ -10,7 +10,6 @@ export function getPagesJS(): string {
     // HOOKS
     // ================================================================
 
-    // Workspace mode detection — fetches once at mount
     function useWorkspaceMode() {
       const [mode, setMode] = useState('gtm')
       const [config, setConfig] = useState({})
@@ -32,7 +31,6 @@ export function getPagesJS(): string {
       return { mode, config, children, loading }
     }
 
-    // Eval data hook — leaderboard + optional trajectory, refreshes every 60s
     function useEvalData(selectedAgent) {
       const [leaderboard, setLeaderboard] = useState([])
       const [trajectory, setTrajectory] = useState([])
@@ -60,7 +58,6 @@ export function getPagesJS(): string {
       return { leaderboard, trajectory, loading }
     }
 
-    // Shared SSE hook — one connection, all pages can use it
     function useEventStream() {
       const [events, setEvents] = useState([])
       const [connected, setConnected] = useState(false)
@@ -104,7 +101,6 @@ export function getPagesJS(): string {
       return { events, connected }
     }
 
-    // Fetch journal + knowledge from Context API
     function useContextData() {
       const [journal, setJournal] = useState([])
       const [knowledge, setKnowledge] = useState([])
@@ -127,7 +123,48 @@ export function getPagesJS(): string {
       return { journal, knowledge, loading }
     }
 
-    // Extract agents from events
+    function useTelemetryDigest(hours) {
+      const [digest, setDigest] = useState(null)
+      const [loading, setLoading] = useState(true)
+
+      useEffect(() => {
+        function load() {
+          apiFetch('/api/telemetry/digest?hours=' + (hours || 168))
+            .then(data => setDigest(data))
+            .catch(() => setDigest(null))
+            .finally(() => setLoading(false))
+        }
+        load()
+        const interval = setInterval(load, 120000)
+        return () => clearInterval(interval)
+      }, [hours])
+
+      return { digest, loading }
+    }
+
+    function useFlowData() {
+      const [flows, setFlows] = useState([])
+      const [executions, setExecutions] = useState([])
+      const [loading, setLoading] = useState(true)
+
+      useEffect(() => {
+        function load() {
+          Promise.all([
+            apiFetch('/api/flows').catch(() => []),
+            apiFetch('/api/flows/executions').catch(() => ({ executions: [] }))
+          ]).then(([flowsData, execData]) => {
+            setFlows(flowsData || [])
+            setExecutions(execData.executions || execData || [])
+          }).finally(() => setLoading(false))
+        }
+        load()
+        const interval = setInterval(load, 15000)
+        return () => clearInterval(interval)
+      }, [])
+
+      return { flows, executions, loading }
+    }
+
     function extractAgents(events) {
       const agents = new Map()
       for (const e of events) {
@@ -144,6 +181,9 @@ export function getPagesJS(): string {
             lastEvent: e.type,
             lastSeen: e.ts || e.timestamp,
             eventCount: 0,
+            recentEvents: [],
+            startedAt: null,
+            currentTask: null,
           })
         }
 
@@ -151,6 +191,10 @@ export function getPagesJS(): string {
         agent.eventCount++
         agent.lastEvent = e.type
         agent.lastSeen = e.ts || e.timestamp || agent.lastSeen
+
+        if (agent.recentEvents.length < 20) {
+          agent.recentEvents.push(e)
+        }
 
         if (e.data?.model) agent.model = e.data.model
         if (e.data?.modelTier) agent.model = e.data.modelTier
@@ -160,10 +204,18 @@ export function getPagesJS(): string {
 
         if (e.type?.includes('started') || e.type?.includes('start')) {
           agent.status = 'active'
+          agent.startedAt = e.ts || e.timestamp
         } else if (e.type?.includes('completed') || e.type?.includes('complete') || e.type?.includes('ended')) {
           agent.status = 'idle'
         } else if (e.type?.includes('failed')) {
           agent.status = 'error'
+        }
+
+        if (e.type === 'peter:task-selected' || e.type === 'task:started') {
+          agent.currentTask = e.data?.task || e.data?.message || e.data?.title || null
+        }
+        if (e.type === 'peter:task-completed' || e.type === 'task:completed') {
+          agent.currentTask = null
         }
       }
       return [...agents.values()].sort((a, b) => {
@@ -182,7 +234,6 @@ export function getPagesJS(): string {
       const { leaderboard, loading: evalLoading } = useEvalData()
       const [childHealth, setChildHealth] = useState(children || [])
 
-      // Enrich children with eval data
       const enrichedChildren = (childHealth || []).map(child => {
         const agentsForChild = leaderboard.filter(a => a.agent.toLowerCase().includes(child.name.toLowerCase()))
         const bestAgent = agentsForChild[0]
@@ -203,23 +254,15 @@ export function getPagesJS(): string {
       return html\`
         <div>
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
-            <h2 class="page-title" style="margin-bottom: 0;">Portfolio Overview</h2>
+            <h2 style="font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em;">Portfolio Overview</h2>
             <\${LiveIndicator} connected=\${connected} />
           </div>
 
           <div class="grid-4" style="margin-bottom: 1.5rem;">
-            <\${Card} title="Total Products">
-              <div class="card-value">\${totalProducts}</div>
-            <//>
-            <\${Card} title="Active Sessions">
-              <div class="card-value" style="color: var(--success);">\${activeSessions}</div>
-            <//>
-            <\${Card} title="Events/hr">
-              <div class="card-value" style="color: var(--info);">\${eventRate}</div>
-            <//>
-            <\${Card} title="Avg Composite">
-              <div class="card-value" style="color: var(--accent);">\${avgComposite > 0 ? avgComposite.toFixed(3) : '—'}</div>
-            <//>
+            <\${MetricCard} value=\${totalProducts} label="Total Products" />
+            <\${MetricCard} value=\${activeSessions} label="Active Sessions" color="var(--success)" />
+            <\${MetricCard} value=\${eventRate} label="Events/hr" color="var(--info)" />
+            <\${MetricCard} value=\${avgComposite > 0 ? avgComposite.toFixed(3) : '—'} label="Avg Composite" color="var(--accent)" />
           </div>
 
           \${enrichedChildren.length > 0 && html\`
@@ -249,13 +292,13 @@ export function getPagesJS(): string {
                 <tbody>
                   \${leaderboard.map((a, i) => html\`
                     <tr key=\${a.agent}>
-                      <td style="font-weight: 700; color: \${i === 0 ? 'var(--accent)' : 'var(--text-soft)'};">\${i + 1}</td>
+                      <td style=\${'font-weight: 700; color:' + (i === 0 ? 'var(--accent)' : 'var(--muted-foreground)')}>\${i + 1}</td>
                       <td style="font-weight: 600;">\${a.agent}</td>
                       <td style="font-family: monospace; color: var(--accent);">\${a.composite != null ? a.composite.toFixed(4) : '—'}</td>
                       <td><\${Sparkline} data=\${a.trajectory} width=\${60} height=\${20} /></td>
                       <td>\${a.delta != null ? html\`<\${DeltaBadge} delta=\${a.delta} />\` : '—'}</td>
-                      <td style="font-size: 0.75rem; color: var(--text-soft);">\${a.model_version || '—'}</td>
-                      <td style="font-size: 0.75rem; color: var(--text-dim);">\${a.lastTs ? new Date(a.lastTs).toLocaleDateString() : '—'}</td>
+                      <td style="font-size: 0.75rem; color: var(--muted-foreground);">\${a.model_version || '—'}</td>
+                      <td style="font-size: 0.75rem; color: var(--dim);">\${a.lastTs ? new Date(a.lastTs).toLocaleDateString() : '—'}</td>
                     </tr>
                   \`)}
                 </tbody>
@@ -287,21 +330,19 @@ export function getPagesJS(): string {
     }
 
     // ================================================================
-    // EVALS PAGE (all modes)
+    // EVALS PAGE
     // ================================================================
 
     function EvalsPage() {
       const [selectedAgent, setSelectedAgent] = useState('')
       const { leaderboard, trajectory, loading } = useEvalData(selectedAgent)
 
-      // Auto-select first agent
       useEffect(() => {
         if (!selectedAgent && leaderboard.length > 0) {
           setSelectedAgent(leaderboard[0].agent)
         }
       }, [leaderboard, selectedAgent])
 
-      // Extract unique metric keys from leaderboard
       const metricKeys = leaderboard.length > 0
         ? [...new Set(leaderboard.flatMap(a => Object.keys(a.metrics || {})))]
         : []
@@ -309,7 +350,7 @@ export function getPagesJS(): string {
       return html\`
         <div>
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
-            <h2 class="page-title" style="margin-bottom: 0;">Evals</h2>
+            <h2 style="font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em;">Evals</h2>
             \${leaderboard.length > 0 && html\`
               <select class="agent-select" value=\${selectedAgent} onChange=\${e => setSelectedAgent(e.target.value)}>
                 \${leaderboard.map(a => html\`<option key=\${a.agent} value=\${a.agent}>\${a.agent}</option>\`)}
@@ -319,13 +360,13 @@ export function getPagesJS(): string {
 
           \${loading ? html\`<div class="loading">Loading eval data</div>\` : leaderboard.length === 0 ? html\`
             <div class="empty-state" style="padding: 3rem;">
-              <div style="font-size: 1.25rem; color: var(--text-dim); margin-bottom: 0.5rem;">No Eval Data</div>
-              <div style="color: var(--text-dim); font-size: 0.85rem;">
+              <div style="font-size: 1.25rem; color: var(--dim); margin-bottom: 0.5rem;">No Eval Data</div>
+              <div style="color: var(--dim); font-size: 0.85rem;">
                 Run evals with <span style="color: var(--accent); font-family: monospace;">jfl eval run</span> to see results here.
               </div>
             </div>
           \` : html\`
-            <\${Card} title=\${'Composite Trajectory — ' + selectedAgent}>
+            <\${ChartCard} title=\${'Composite Trajectory — ' + selectedAgent} subtitle="Score over time">
               <\${EvalChart} data=\${trajectory} width=\${800} height=\${240} label="composite score over time" />
             <//>
 
@@ -335,11 +376,7 @@ export function getPagesJS(): string {
                   const agent = leaderboard.find(a => a.agent === selectedAgent)
                   const val = agent?.metrics?.[key]
                   return html\`
-                    <\${Card} key=\${key} title=\${key}>
-                      <div style="display: flex; align-items: center; gap: 0.75rem;">
-                        <span style="font-size: 1.5rem; font-weight: 700; color: var(--accent);">\${val != null ? val.toFixed(3) : '—'}</span>
-                      </div>
-                    <//>
+                    <\${MetricCard} key=\${key} value=\${val != null ? val.toFixed(3) : '—'} label=\${key} color="var(--accent)" />
                   \`
                 })}
               </div>
@@ -360,14 +397,14 @@ export function getPagesJS(): string {
                 </thead>
                 <tbody>
                   \${leaderboard.map((a, i) => html\`
-                    <tr key=\${a.agent} style=\${a.agent === selectedAgent ? 'background: rgba(255,215,0,0.05);' : ''} onClick=\${() => setSelectedAgent(a.agent)}>
-                      <td style="font-weight: 700; color: \${i === 0 ? 'var(--accent)' : 'var(--text-soft)'}; cursor: pointer;">\${i + 1}</td>
+                    <tr key=\${a.agent} style=\${a.agent === selectedAgent ? 'background: oklch(0.588 0.158 241.966 / 0.06);' : ''} onClick=\${() => setSelectedAgent(a.agent)}>
+                      <td style=\${'font-weight: 700; cursor: pointer; color:' + (i === 0 ? 'var(--accent)' : 'var(--muted-foreground)')}>\${i + 1}</td>
                       <td style="font-weight: 600; cursor: pointer;">\${a.agent}</td>
                       <td style="font-family: monospace; color: var(--accent);">\${a.composite != null ? a.composite.toFixed(4) : '—'}</td>
                       <td><\${Sparkline} data=\${a.trajectory} width=\${60} height=\${20} /></td>
                       <td>\${a.delta != null ? html\`<\${DeltaBadge} delta=\${a.delta} />\` : '—'}</td>
-                      <td style="font-size: 0.75rem; color: var(--text-soft);">\${a.model_version || '—'}</td>
-                      <td style="font-size: 0.75rem; color: var(--text-dim);">\${a.lastTs ? new Date(a.lastTs).toLocaleDateString() : '—'}</td>
+                      <td style="font-size: 0.75rem; color: var(--muted-foreground);">\${a.model_version || '—'}</td>
+                      <td style="font-size: 0.75rem; color: var(--dim);">\${a.lastTs ? new Date(a.lastTs).toLocaleDateString() : '—'}</td>
                     </tr>
                   \`)}
                 </tbody>
@@ -389,10 +426,10 @@ export function getPagesJS(): string {
       if (services.length === 0) {
         return html\`
           <div>
-            <h2 class="page-title">Scope</h2>
+            <h2 style="font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 1.5rem;">Scope</h2>
             <div class="empty-state" style="padding: 3rem;">
-              <div style="color: var(--text-dim);">No registered services.</div>
-              <div style="color: var(--text-dim); font-size: 0.8rem; margin-top: 0.5rem;">
+              <div style="color: var(--dim);">No registered services.</div>
+              <div style="color: var(--dim); font-size: 0.8rem; margin-top: 0.5rem;">
                 Register services with <span style="color: var(--accent); font-family: monospace;">jfl services register</span>
               </div>
             </div>
@@ -411,14 +448,13 @@ export function getPagesJS(): string {
 
       return html\`
         <div>
-          <h2 class="page-title">Scope</h2>
+          <h2 style="font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 1.5rem;">Scope</h2>
           <\${Card}>
             <div class="scope-graph" style="overflow-x: auto;">
               <svg width=\${svgW} height=\${svgH} viewBox=\${'0 0 ' + svgW + ' ' + svgH}>
-                <!-- Top node: this workspace -->
                 <rect class="scope-node scope-node-self" x=\${topX} y=\${topY} width=\${nodeW} height=\${nodeH} />
                 <text class="scope-label" x=\${topX + nodeW / 2} y=\${topY + 22} fill="var(--accent)">\${selfName}</text>
-                <text x=\${topX + nodeW / 2} y=\${topY + 38} text-anchor="middle" fill="var(--text-dim)" font-size="10">\${config?.type || 'gtm'}</text>
+                <text x=\${topX + nodeW / 2} y=\${topY + 38} text-anchor="middle" fill="var(--dim)" font-size="10">\${config?.type || 'gtm'}</text>
 
                 \${services.map((svc, i) => {
                   const cx = childStartX + i * (nodeW + 30)
@@ -428,13 +464,11 @@ export function getPagesJS(): string {
                   const consumes = scope.consumes || []
                   const denied = scope.denied || []
 
-                  // Connection line
                   const lineX1 = topX + nodeW / 2
                   const lineY1 = topY + nodeH
                   const lineX2 = cx + nodeW / 2
                   const lineY2 = cy
 
-                  // Scope badges below each service node
                   const badgeY = cy + nodeH + 10
                   const badges = []
                   if (produces.length > 0) badges.push({ label: 'produces', cls: 'scope-badge-produces', items: produces })
@@ -446,11 +480,11 @@ export function getPagesJS(): string {
                       <line class="scope-line" x1=\${lineX1} y1=\${lineY1} x2=\${lineX2} y2=\${lineY2} />
                       <rect class="scope-node" x=\${cx} y=\${cy} width=\${nodeW} height=\${nodeH} />
                       <text class="scope-label" x=\${cx + nodeW / 2} y=\${cy + 22}>\${svc.name}</text>
-                      <text x=\${cx + nodeW / 2} y=\${cy + 38} text-anchor="middle" fill="var(--text-dim)" font-size="10">\${svc.type || 'service'}</text>
+                      <text x=\${cx + nodeW / 2} y=\${cy + 38} text-anchor="middle" fill="var(--dim)" font-size="10">\${svc.type || 'service'}</text>
                       \${badges.map((b, bi) => html\`
                         <g key=\${b.label}>
                           <rect class=\${b.cls} x=\${cx + bi * 55 + 2} y=\${badgeY} width=\${50} height=\${18} rx="4" stroke-width="1" />
-                          <text class="scope-badge-text" x=\${cx + bi * 55 + 27} y=\${badgeY + 13} fill="var(--text)">\${b.label}</text>
+                          <text class="scope-badge-text" x=\${cx + bi * 55 + 27} y=\${badgeY + 13} fill="var(--foreground)">\${b.label}</text>
                         </g>
                       \`)}
                     </g>
@@ -478,7 +512,7 @@ export function getPagesJS(): string {
                   return html\`
                     <tr key=\${svc.name}>
                       <td style="font-weight: 600;">\${svc.name}</td>
-                      <td style="font-size: 0.8rem; color: var(--text-soft);">\${svc.type || '—'}</td>
+                      <td style="font-size: 0.8rem; color: var(--muted-foreground);">\${svc.type || '—'}</td>
                       <td><\${StatusBadge} status=\${svc.status || 'unknown'} /></td>
                       <td style="font-size: 0.75rem; color: var(--success);">\${(scope.produces || []).join(', ') || '—'}</td>
                       <td style="font-size: 0.75rem; color: var(--info);">\${(scope.consumes || []).join(', ') || '—'}</td>
@@ -506,10 +540,8 @@ export function getPagesJS(): string {
       const serviceType = config?.type || 'service'
       const parentName = config?.gtm_parent ? config.gtm_parent.split('/').pop() : null
 
-      // Find eval for this service
       const myEval = leaderboard.find(a => a.agent.toLowerCase().includes(serviceName.toLowerCase()))
 
-      // Filter events to this service
       const myEvents = events.filter(e =>
         (e.source || '').toLowerCase().includes(serviceName.toLowerCase())
       )
@@ -517,31 +549,25 @@ export function getPagesJS(): string {
       return html\`
         <div>
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
-            <h2 class="page-title" style="margin-bottom: 0;">My Status</h2>
+            <h2 style="font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em;">My Status</h2>
             <\${LiveIndicator} connected=\${connected} />
           </div>
 
           <div class="grid-3" style="margin-bottom: 1.5rem;">
-            <\${Card} title="Service">
-              <div style="font-size: 1.25rem; font-weight: 700;">\${serviceName}</div>
-              <div style="font-size: 0.8rem; color: var(--text-dim); margin-top: 0.25rem;">\${serviceType}</div>
-              \${parentName && html\`<div style="font-size: 0.75rem; color: var(--text-soft); margin-top: 0.25rem;">Parent: \${parentName}</div>\`}
-            <//>
-            <\${Card} title="My Eval">
+            <\${MetricCard} value=\${serviceName} label=\${serviceType} description=\${parentName ? 'Parent: ' + parentName : ''} />
+            <div class="metric-card">
+              <div class="metric-label" style="margin-bottom: 0.5rem;">My Eval</div>
               \${myEval ? html\`
                 <div style="display: flex; align-items: center; gap: 0.75rem;">
-                  <span style="font-size: 1.5rem; font-weight: 700; color: var(--accent);">\${myEval.composite != null ? myEval.composite.toFixed(4) : '—'}</span>
+                  <span class="metric-value" style="font-size: 1.5rem; color: var(--accent);">\${myEval.composite != null ? myEval.composite.toFixed(4) : '—'}</span>
                   \${myEval.delta != null && html\`<\${DeltaBadge} delta=\${myEval.delta} />\`}
                 </div>
                 <div style="margin-top: 0.375rem;">
                   <\${Sparkline} data=\${myEval.trajectory} width=\${100} height=\${24} />
                 </div>
-              \` : html\`<div style="color: var(--text-dim); font-size: 0.85rem;">No eval data</div>\`}
-            <//>
-            <\${Card} title="Activity">
-              <div class="card-value">\${myEvents.length}</div>
-              <div style="font-size: 0.75rem; color: var(--text-dim);">events from this service</div>
-            <//>
+              \` : html\`<div style="color: var(--dim); font-size: 0.85rem;">No eval data</div>\`}
+            </div>
+            <\${MetricCard} value=\${myEvents.length} label="Events" description="from this service" />
           </div>
 
           \${myEvents.length > 0 && html\`
@@ -567,7 +593,7 @@ export function getPagesJS(): string {
           <\${Card} title="Scoped Journal">
             \${journalLoading ? html\`<div class="loading">Loading</div>\` :
               journal.length === 0 ? html\`
-                <div style="color: var(--text-dim); font-size: 0.8rem; padding: 0.5rem 0;">No journal entries</div>
+                <div style="color: var(--dim); font-size: 0.8rem; padding: 0.5rem 0;">No journal entries</div>
               \` : html\`
                 <div style="max-height: 300px; overflow-y: auto;">
                   \${journal.slice(0, 20).map(entry => html\`
@@ -582,13 +608,14 @@ export function getPagesJS(): string {
     }
 
     // ================================================================
-    // COMMAND CENTER (Overview) — Enhanced with eval velocity
+    // COMMAND CENTER (Overview)
     // ================================================================
 
     function OverviewPage() {
       const { events, connected } = useEventStream()
       const { journal, knowledge, loading } = useContextData()
       const { leaderboard } = useEvalData()
+      const { digest: telemetryDigest } = useTelemetryDigest(168)
       const [services, setServices] = useState({})
       const [projects, setProjects] = useState([])
       const [searchQuery, setSearchQuery] = useState('')
@@ -627,44 +654,63 @@ export function getPagesJS(): string {
       const totalProjects = (projects || []).length
       const decisionCount = journal.filter(e => e.type === 'decision').length
 
-      // Eval velocity: latest composite from top agent
       const topAgent = leaderboard[0]
       const evalCount = leaderboard.length
+
+      const activeAgents = extractAgents(events).filter(a => a.status === 'active')
 
       return html\`
         <div>
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
-            <h2 class="page-title" style="margin-bottom: 0;">Command Center</h2>
+            <h2 style="font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em;">Command Center</h2>
             <\${LiveIndicator} connected=\${connected} />
           </div>
 
           <!-- Stats row -->
           <div class="grid-4" style="margin-bottom: 1rem;">
-            <\${Card} title="Projects">
-              <div class="card-value" style="color: var(--success);">\${okProjects}<span style="font-size: 1rem; color: var(--text-dim);">/\${totalProjects}</span></div>
-            <//>
-            <\${Card} title="Journal Entries">
-              <div class="card-value">\${journal.length}</div>
-            <//>
-            <\${Card} title="Decisions">
-              <div class="card-value" style="color: var(--accent);">\${decisionCount}</div>
-            <//>
-            <\${Card} title="Eval Velocity">
+            <\${MetricCard} value=\${okProjects + '/' + totalProjects} label="Projects" color="var(--success)" />
+            <\${MetricCard} value=\${journal.length} label="Journal Entries" />
+            <\${MetricCard} value=\${decisionCount} label="Decisions" color="var(--accent)" />
+            <div class="metric-card">
+              <div class="metric-label" style="margin-bottom: 0.25rem;">Eval Velocity</div>
               \${topAgent ? html\`
                 <div style="display: flex; align-items: center; gap: 0.5rem;">
-                  <span style="font-size: 1.5rem; font-weight: 700; color: var(--accent);">\${topAgent.composite != null ? topAgent.composite.toFixed(3) : '—'}</span>
+                  <span class="metric-value" style="font-size: 1.5rem; color: var(--accent);">\${topAgent.composite != null ? topAgent.composite.toFixed(3) : '—'}</span>
                   \${topAgent.delta != null && html\`<\${DeltaBadge} delta=\${topAgent.delta} />\`}
                 </div>
                 <div style="margin-top: 0.25rem;">
                   <\${Sparkline} data=\${topAgent.trajectory} width=\${80} height=\${18} />
                 </div>
-                <div style="font-size: 0.65rem; color: var(--text-dim); margin-top: 0.125rem;">\${evalCount} agents evaluated</div>
+                <div class="metric-description">\${evalCount} agents evaluated</div>
               \` : html\`
-                <div class="card-value" style="color: var(--text-dim);">—</div>
-                <div style="font-size: 0.65rem; color: var(--text-dim);">No evals yet</div>
+                <div class="metric-value" style="color: var(--dim);">—</div>
+                <div class="metric-description">No evals yet</div>
               \`}
-            <//>
+            </div>
           </div>
+
+          <!-- Active agents strip -->
+          \${activeAgents.length > 0 && html\`
+            <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem; padding: 0.625rem 0.75rem; background: var(--card); border: 1px solid var(--border);">
+              <span style="font-size: 0.75rem; font-weight: 600; color: var(--muted-foreground); text-transform: uppercase; letter-spacing: 0.05em;">Active</span>
+              \${activeAgents.map(a => html\`
+                <span key=\${a.name} style="display: inline-flex; align-items: center; gap: 0.375rem; font-size: 0.8rem;">
+                  <span class="pulse-dot">
+                    <span class="pulse-dot-ping" style="background: var(--success);"></span>
+                    <span class="pulse-dot-core" style="background: var(--success);"></span>
+                  </span>
+                  \${a.name}
+                </span>
+              \`)}
+            </div>
+          \`}
+
+          <!-- Run activity chart -->
+          \${events.length > 0 && html\`
+            <\${ChartCard} title="Activity" subtitle="Last 14 days">
+              <\${RunActivityChart} events=\${events} days=\${14} />
+            <//>
+          \`}
 
           <div style="display: grid; grid-template-columns: 1fr 320px; gap: 1rem;">
 
@@ -674,22 +720,35 @@ export function getPagesJS(): string {
                 \${loading ? html\`<div class="loading">Loading journal</div>\` :
                   journal.length === 0 ? html\`
                     <div class="empty-state" style="padding: 1.5rem;">
-                      <div style="color: var(--text-dim);">No journal entries yet</div>
-                      <div style="color: var(--text-dim); font-size: 0.75rem; margin-top: 0.5rem;">
+                      <div style="color: var(--dim);">No journal entries yet</div>
+                      <div style="color: var(--dim); font-size: 0.75rem; margin-top: 0.5rem;">
                         Journal entries appear as you work across sessions
                       </div>
                     </div>
                   \` : html\`
-                    <div style="max-height: 360px; overflow-y: auto;">
-                      \${journal.slice(0, 15).map(entry => html\`
-                        <\${JournalEntryRow} key=\${entry.timestamp + entry.title} entry=\${entry} />
+                    <div style="max-height: 360px; overflow-y: auto;" class="divide-y">
+                      \${journal.slice(0, 15).map((entry, i) => html\`
+                        <\${ActivityRow} key=\${entry.timestamp + entry.title} event=\${{ type: entry.type, ts: entry.timestamp, data: { message: entry.title } }} isNew=\${i < 3} />
                       \`)}
                     </div>
                   \`
                 }
               <//>
 
-              <!-- Event stream (secondary, below journal) -->
+              \${telemetryDigest && telemetryDigest.commands && telemetryDigest.commands.length > 0 && html\`
+                <\${Card} title="Command Health">
+                  <div class="divide-y">
+                    \${telemetryDigest.commands.slice(0, 5).map(c => html\`
+                      <div key=\${c.command} style="display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0;">
+                        <span style="font-size: 0.8rem; font-weight: 600; min-width: 90px; font-family: monospace;">\${c.command}</span>
+                        <span style="font-size: 0.7rem; color: var(--dim); min-width: 35px;">\${c.count}x</span>
+                        <div style="flex: 1;"><\${SuccessRateBar} rate=\${c.successRate} /></div>
+                      </div>
+                    \`)}
+                  </div>
+                <//>
+              \`}
+
               \${events.length > 0 && html\`
                 <\${Card} title="Event Stream">
                   <div style="max-height: 200px; overflow-y: auto;">
@@ -711,16 +770,16 @@ export function getPagesJS(): string {
               \`}
             </div>
 
-            <!-- Right: Decisions + Services + Memory Search -->
+            <!-- Right: Decisions + Services + Search -->
             <div>
               <\${Card} title="Recent Decisions">
                 \${loading ? html\`<div class="loading">Loading</div>\` :
                   (() => {
                     const decisions = journal.filter(e => e.type === 'decision')
                     return decisions.length === 0 ? html\`
-                      <div style="color: var(--text-dim); font-size: 0.8rem; padding: 0.5rem 0;">No decisions recorded</div>
+                      <div style="color: var(--dim); font-size: 0.8rem; padding: 0.5rem 0;">No decisions recorded</div>
                     \` : html\`
-                      <div>
+                      <div class="divide-y">
                         \${decisions.slice(0, 5).map(d => html\`
                           <div key=\${d.timestamp + d.title} class="decision-row">
                             <div class="decision-title">\${d.title}</div>
@@ -738,16 +797,16 @@ export function getPagesJS(): string {
 
               \${serviceEntries.length > 0 && html\`
                 <\${Card} title="Services">
-                  <div style="display: grid; gap: 0.375rem;">
+                  <div class="divide-y">
                     \${serviceEntries.map(([name, svc]) => html\`
-                      <div key=\${name} style="display: flex; align-items: center; justify-content: space-between; padding: 0.375rem 0; border-bottom: 1px solid rgba(51,65,85,0.3);">
+                      <div key=\${name} style="display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 0;">
                         <div style="display: flex; align-items: center; gap: 0.5rem;">
                           <span class=\${'agent-dot agent-dot-' + (svc.status === 'running' ? 'active' : 'idle')}></span>
                           <span style="font-size: 0.8rem; font-weight: 600;">\${name}</span>
                         </div>
                         <div style="display: flex; align-items: center; gap: 0.5rem;">
-                          \${svc.port && svc.port !== '?' && html\`<span style="font-size: 0.7rem; color: var(--text-dim); font-family: monospace;">:\${svc.port}</span>\`}
-                          <span style="font-size: 0.65rem; padding: 0.1rem 0.375rem; border-radius: 4px; background: rgba(148,163,184,0.12); color: var(--text-soft);">\${svc.type || 'unknown'}</span>
+                          \${svc.port && svc.port !== '?' && html\`<span style="font-size: 0.7rem; color: var(--dim); font-family: monospace;">:\${svc.port}</span>\`}
+                          <span style="font-size: 0.65rem; padding: 0.1rem 0.375rem; border-radius: 4px; background: oklch(0.708 0 0 / 0.12); color: var(--muted-foreground);">\${svc.type || 'unknown'}</span>
                         </div>
                       </div>
                     \`)}
@@ -766,17 +825,17 @@ export function getPagesJS(): string {
                   <button class="btn btn-primary" style="white-space: nowrap;" onClick=\${doSearch}>Search</button>
                 </div>
                 \${searchResults !== null && html\`
-                  <div style="max-height: 250px; overflow-y: auto;">
+                  <div style="max-height: 250px; overflow-y: auto;" class="divide-y">
                     \${searchResults.length === 0 ? html\`
-                      <div style="color: var(--text-dim); font-size: 0.8rem; padding: 0.5rem 0;">No results found</div>
+                      <div style="color: var(--dim); font-size: 0.8rem; padding: 0.5rem 0;">No results found</div>
                     \` : searchResults.map((r, i) => html\`
                       <div key=\${i} class="memory-result">
                         <div style="display: flex; align-items: center; gap: 0.5rem;">
                           <\${TypeBadge} type=\${r.type || 'unknown'} />
                           <span style="font-size: 0.8rem; font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">\${r.title}</span>
-                          \${r.timestamp && html\`<span style="font-size: 0.65rem; color: var(--text-dim); white-space: nowrap;">\${new Date(r.timestamp).toLocaleDateString()}</span>\`}
+                          \${r.timestamp && html\`<span style="font-size: 0.65rem; color: var(--dim); white-space: nowrap;">\${new Date(r.timestamp).toLocaleDateString()}</span>\`}
                         </div>
-                        <div style="font-size: 0.75rem; color: var(--text-soft); margin-top: 0.25rem; line-height: 1.4;">
+                        <div style="font-size: 0.75rem; color: var(--muted-foreground); margin-top: 0.25rem; line-height: 1.4;">
                           \${(r.content || r.summary || '').slice(0, 150)}\${(r.content || r.summary || '').length > 150 ? '...' : ''}
                         </div>
                       </div>
@@ -791,7 +850,7 @@ export function getPagesJS(): string {
     }
 
     // ================================================================
-    // EVENTS (full stream with filtering)
+    // EVENTS
     // ================================================================
 
     function EventsPage() {
@@ -809,9 +868,9 @@ export function getPagesJS(): string {
       return html\`
         <div>
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
-            <h2 class="page-title" style="margin-bottom: 0;">Events</h2>
+            <h2 style="font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em;">Events</h2>
             <div style="display: flex; align-items: center; gap: 1rem;">
-              <span style="font-size: 0.8rem; color: var(--text-dim);">\${filtered.length} events</span>
+              <span style="font-size: 0.8rem; color: var(--dim);">\${filtered.length} events</span>
               <\${LiveIndicator} connected=\${connected} />
             </div>
           </div>
@@ -839,7 +898,7 @@ export function getPagesJS(): string {
               </table>
               \${filtered.length === 0 && html\`
                 <div class="empty-state">
-                  <div style="color: var(--text-dim);">\${filter ? 'No matching events' : 'No events yet'}</div>
+                  <div style="color: var(--dim);">\${filter ? 'No matching events' : 'No events yet'}</div>
                 </div>
               \`}
             </div>
@@ -852,48 +911,147 @@ export function getPagesJS(): string {
     // AGENTS
     // ================================================================
 
+    function AgentDetailPanel({ agent, events }) {
+      const agentEvents = events.filter(e => (e.source || '') === agent.name).slice(0, 50)
+      const duration = agent.startedAt ? Math.round((Date.now() - new Date(agent.startedAt).getTime()) / 1000) : null
+      const durationStr = duration !== null
+        ? duration < 60 ? duration + 's'
+        : duration < 3600 ? Math.round(duration / 60) + 'm'
+        : Math.round(duration / 3600) + 'h'
+        : 'N/A'
+
+      return html\`
+        <\${Card}>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
+            <div style="display: flex; align-items: center; gap: 0.75rem;">
+              <span class=\${'agent-dot agent-dot-' + agent.status}></span>
+              <span style="font-size: 1.125rem; font-weight: 700;">\${agent.name}</span>
+              \${agent.model && html\`<span class="model-badge">\${agent.model}</span>\`}
+              \${agent.runtime && agent.runtime !== 'local' && html\`<span class="runtime-badge">\${agent.runtime}</span>\`}
+            </div>
+            <span style="font-size: 0.8rem; color: var(--dim);">\${agent.status} — \${durationStr}</span>
+          </div>
+          \${agent.role && html\`<div style="font-size: 0.8rem; color: var(--muted-foreground); margin-bottom: 0.75rem;">\${agent.role}</div>\`}
+          \${agent.currentTask && html\`<div class="active-agent-task">\${agent.currentTask}</div>\`}
+
+          <div class="grid-3" style="margin-bottom: 1rem;">
+            <\${MetricCard} value=\${agent.eventCount} label="Total Events" />
+            <\${MetricCard} value=\${durationStr} label="Running Time" />
+            <\${MetricCard} value=\${agent.lastSeen ? new Date(agent.lastSeen).toLocaleTimeString() : '—'} label="Last Seen" />
+          </div>
+
+          <div class="section-header">Event Feed</div>
+          <div style="max-height: 300px; overflow-y: auto;" class="divide-y">
+            \${agentEvents.length === 0 ? html\`<div style="color: var(--dim); font-size: 0.8rem; padding: 0.5rem 0;">No events</div>\` :
+              agentEvents.map((e, i) => html\`
+                <\${ActivityRow} key=\${i} event=\${e} />
+              \`)
+            }
+          </div>
+        <//>
+      \`
+    }
+
     function AgentsPage() {
       const { events, connected } = useEventStream()
       const agents = extractAgents(events)
+      const [tab, setTab] = useState('active')
+      const [selectedAgent, setSelectedAgent] = useState(null)
 
-      const localAgents = agents.filter(a => !a.runtime || a.runtime === 'local')
-      const remoteAgents = agents.filter(a => a.runtime && a.runtime !== 'local')
+      const activeAgents = agents.filter(a => a.status === 'active')
+      const idleAgents = agents.filter(a => a.status !== 'active')
       const peterEvents = events.filter(e => (e.type || '').startsWith('peter:'))
 
       return html\`
         <div>
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
-            <h2 class="page-title" style="margin-bottom: 0;">Agents</h2>
-            <\${LiveIndicator} connected=\${connected} />
+            <h2 style="font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em;">Agents</h2>
+            <div style="display: flex; align-items: center; gap: 1rem;">
+              <span style="font-size: 0.8rem; color: var(--dim);">\${activeAgents.length} active / \${agents.length} total</span>
+              <\${LiveIndicator} connected=\${connected} />
+            </div>
           </div>
 
           \${agents.length === 0 ? html\`
             <div class="empty-state" style="padding: 3rem;">
-              <div style="font-size: 1.5rem; color: var(--text-dim); margin-bottom: 1rem;">No Agent Activity</div>
-              <div style="color: var(--text-dim); max-width: 400px; margin: 0 auto; line-height: 1.6;">
-                Agents appear here when they emit MAP events.<br/>
+              <div style="font-size: 1.5rem; color: var(--dim); margin-bottom: 1rem;">No Agent Activity</div>
+              <div style="color: var(--dim); max-width: 400px; margin: 0 auto; line-height: 1.6;">
+                Agents appear here when they emit MAP events.
                 Run <span style="color: var(--accent); font-family: monospace;">jfl peter</span> or
                 <span style="color: var(--accent); font-family: monospace;">jfl ralph</span> to see them in action.
               </div>
             </div>
           \` : html\`
-            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
-              <\${Card} title=\${'Local Agents (' + localAgents.length + ')'}>
-                \${localAgents.map(a => html\`
-                  <\${AgentCard} key=\${a.name} agent=\${a} />
-                \`)}
-                \${localAgents.length === 0 && html\`<div style="color: var(--text-dim); font-size: 0.8rem;">None</div>\`}
-              <//>
-              <\${Card} title=\${'Remote Agents (' + remoteAgents.length + ')'}>
-                \${remoteAgents.map(a => html\`
-                  <\${AgentCard} key=\${a.name} agent=\${a} />
-                \`)}
-                \${remoteAgents.length === 0 && html\`<div style="color: var(--text-dim); font-size: 0.8rem;">None</div>\`}
-              <//>
+            <div class="tab-group" style="margin-bottom: 1.5rem;">
+              <button class=\${'tab-btn ' + (tab === 'active' ? 'tab-btn-active' : '')} onClick=\${() => { setTab('active'); setSelectedAgent(null) }}>
+                Active \${activeAgents.length > 0 ? '(' + activeAgents.length + ')' : ''}
+              </button>
+              <button class=\${'tab-btn ' + (tab === 'all' ? 'tab-btn-active' : '')} onClick=\${() => { setTab('all'); setSelectedAgent(null) }}>
+                All (\${agents.length})
+              </button>
             </div>
 
+            \${tab === 'active' && html\`
+              \${activeAgents.length === 0 ? html\`
+                <div class="empty-state" style="padding: 2rem;">
+                  <div style="color: var(--dim);">No active agents</div>
+                </div>
+              \` : html\`
+                <div style="display: grid; grid-template-columns: repeat(auto-fill, minmax(350px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
+                  \${activeAgents.map(a => html\`
+                    <div key=\${a.name} onClick=\${() => setSelectedAgent(selectedAgent?.name === a.name ? null : a)} style="cursor: pointer;">
+                      <\${ActiveAgentCard} agent=\${a} />
+                    </div>
+                  \`)}
+                </div>
+              \`}
+
+              \${idleAgents.length > 0 && html\`
+                <\${Card} title=\${'Idle / Completed (' + idleAgents.length + ')'}>
+                  <div class="divide-y">
+                    \${idleAgents.map(a => html\`
+                      <div key=\${a.name} onClick=\${() => setSelectedAgent(selectedAgent?.name === a.name ? null : a)} style="cursor: pointer;">
+                        <\${AgentCard} agent=\${a} />
+                      </div>
+                    \`)}
+                  </div>
+                <//>
+              \`}
+            \`}
+
+            \${tab === 'all' && html\`
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem;">
+                <\${Card} title=\${'Local (' + agents.filter(a => !a.runtime || a.runtime === 'local').length + ')'}>
+                  <div class="divide-y">
+                    \${agents.filter(a => !a.runtime || a.runtime === 'local').map(a => html\`
+                      <div key=\${a.name} onClick=\${() => setSelectedAgent(selectedAgent?.name === a.name ? null : a)} style="cursor: pointer;">
+                        <\${AgentCard} agent=\${a} />
+                      </div>
+                    \`)}
+                  </div>
+                <//>
+                <\${Card} title=\${'Remote (' + agents.filter(a => a.runtime && a.runtime !== 'local').length + ')'}>
+                  <div class="divide-y">
+                    \${agents.filter(a => a.runtime && a.runtime !== 'local').map(a => html\`
+                      <div key=\${a.name} onClick=\${() => setSelectedAgent(selectedAgent?.name === a.name ? null : a)} style="cursor: pointer;">
+                        <\${AgentCard} agent=\${a} />
+                      </div>
+                    \`)}
+                  </div>
+                  \${agents.filter(a => a.runtime && a.runtime !== 'local').length === 0 && html\`<div style="color: var(--dim); font-size: 0.8rem; padding: 0.5rem 0;">None</div>\`}
+                <//>
+              </div>
+            \`}
+
+            <!-- Agent Detail Panel (inline expand) -->
+            \${selectedAgent && html\`
+              <div style="margin-top: 1rem;">
+                <\${AgentDetailPanel} agent=\${selectedAgent} events=\${events} />
+              </div>
+            \`}
+
             \${peterEvents.length > 0 && html\`
-              <\${Card} title="Peter Parker Routing" style="margin-top: 1rem;">
+              <\${Card} title="Peter Parker Routing" className="margin-top: 1rem;">
                 <div style="max-height: 300px; overflow-y: auto;">
                   <table>
                     <thead>
@@ -923,35 +1081,8 @@ export function getPagesJS(): string {
       \`
     }
 
-    function AgentCard({ agent }) {
-      const a = agent
-      const age = a.lastSeen ? Math.round((Date.now() - new Date(a.lastSeen).getTime()) / 1000) : null
-      const ageStr = age !== null
-        ? age < 60 ? age + 's ago'
-        : age < 3600 ? Math.round(age / 60) + 'm ago'
-        : Math.round(age / 3600) + 'h ago'
-        : ''
-
-      return html\`
-        <div style="display: flex; align-items: center; justify-content: space-between; padding: 0.5rem 0; border-bottom: 1px solid rgba(51,65,85,0.3);">
-          <div style="display: flex; align-items: center; gap: 0.625rem;">
-            <span class=\${'agent-dot agent-dot-' + a.status}></span>
-            <div>
-              <div style="font-size: 0.85rem; font-weight: 600;">\${a.name}</div>
-              \${a.role && html\`<div style="font-size: 0.7rem; color: var(--text-dim);">\${a.role}</div>\`}
-            </div>
-          </div>
-          <div style="display: flex; align-items: center; gap: 0.5rem; text-align: right;">
-            \${a.model && html\`<span class="model-badge">\${a.model}</span>\`}
-            \${a.runtime && a.runtime !== 'local' && html\`<span class="runtime-badge">\${a.runtime}</span>\`}
-            <span style="font-size: 0.65rem; color: var(--text-dim); min-width: 50px;">\${ageStr}</span>
-          </div>
-        </div>
-      \`
-    }
-
     // ================================================================
-    // PROJECTS (cross-project health)
+    // PROJECTS
     // ================================================================
 
     function ProjectsPage() {
@@ -973,7 +1104,6 @@ export function getPagesJS(): string {
         load()
         const interval = setInterval(load, 30000)
 
-        // Fetch journal for entry counts
         apiFetch('/api/context', {
           method: 'POST',
           body: JSON.stringify({ maxItems: 500 })
@@ -1002,9 +1132,9 @@ export function getPagesJS(): string {
       if (!projects || projects.length === 0) {
         return html\`
           <div>
-            <h2 class="page-title">Projects</h2>
+            <h2 style="font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 1.5rem;">Projects</h2>
             <div class="empty-state">
-              <div style="color: var(--text-dim);">No tracked projects found.</div>
+              <div style="color: var(--dim);">No tracked projects found.</div>
             </div>
           </div>
         \`
@@ -1016,17 +1146,11 @@ export function getPagesJS(): string {
 
       return html\`
         <div>
-          <h2 class="page-title">Projects</h2>
+          <h2 style="font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 1.5rem;">Projects</h2>
           <div class="grid-3" style="margin-bottom: 1rem;">
-            <\${Card} title="Healthy">
-              <div class="card-value" style="color: var(--success);">\${ok}</div>
-            <//>
-            <\${Card} title="Down">
-              <div class="card-value" style="color: \${down > 0 ? 'var(--error)' : 'var(--text-dim)'};">\${down}</div>
-            <//>
-            <\${Card} title="Zombie">
-              <div class="card-value" style="color: \${zombie > 0 ? 'var(--warning)' : 'var(--text-dim)'};">\${zombie}</div>
-            <//>
+            <\${MetricCard} value=\${ok} label="Healthy" color="var(--success)" />
+            <\${MetricCard} value=\${down} label="Down" color=\${down > 0 ? 'var(--error)' : 'var(--dim)'} />
+            <\${MetricCard} value=\${zombie} label="Zombie" color=\${zombie > 0 ? 'var(--warning)' : 'var(--dim)'} />
           </div>
           <\${Card}>
             <table>
@@ -1053,9 +1177,9 @@ export function getPagesJS(): string {
                       <td style="font-weight: 600;">\${p.name}</td>
                       <td style="font-family: monospace; font-size: 0.8rem;">\${p.port}</td>
                       <td><\${StatusBadge} status=\${p.status} /></td>
-                      <td style="font-family: monospace; font-size: 0.8rem; color: var(--text-soft);">\${p.pid || '-'}</td>
-                      <td style="font-size: 0.8rem; color: var(--text-soft);">\${entryCount}</td>
-                      <td style="font-size: 0.8rem; color: var(--text-soft);">\${lastActive}</td>
+                      <td style="font-family: monospace; font-size: 0.8rem; color: var(--muted-foreground);">\${p.pid || '-'}</td>
+                      <td style="font-size: 0.8rem; color: var(--muted-foreground);">\${entryCount}</td>
+                      <td style="font-size: 0.8rem; color: var(--muted-foreground);">\${lastActive}</td>
                     </tr>
                   \`
                 })}
@@ -1067,16 +1191,14 @@ export function getPagesJS(): string {
     }
 
     // ================================================================
-    // SESSIONS (journal-based)
+    // SESSIONS
     // ================================================================
 
     function SessionsPage() {
       const { journal, loading } = useContextData()
 
-      // Group entries by session field
       const sessions = new Map()
       for (const entry of journal) {
-        // Extract session ID from path (filename) since journal entries are per-session files
         const filename = (entry.path || '').split('/').pop() || ''
         const sid = filename.replace('.jsonl', '') || 'unknown'
         if (!sessions.has(sid)) {
@@ -1102,14 +1224,14 @@ export function getPagesJS(): string {
 
       return html\`
         <div>
-          <h2 class="page-title">Sessions</h2>
+          <h2 style="font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 1.5rem;">Sessions</h2>
           \${loading ? html\`<div class="loading">Loading sessions</div>\` :
             sessionList.length === 0 ? html\`
               <div class="empty-state" style="padding: 3rem;">
-                <div style="color: var(--text-dim);">No sessions found in journal.</div>
+                <div style="color: var(--dim);">No sessions found in journal.</div>
               </div>
             \` : html\`
-              <div style="margin-bottom: 1rem; font-size: 0.8rem; color: var(--text-dim);">
+              <div style="margin-bottom: 1rem; font-size: 0.8rem; color: var(--dim);">
                 \${sessionList.length} sessions from journal entries
               </div>
               <div style="display: grid; gap: 0.75rem;">
@@ -1118,12 +1240,12 @@ export function getPagesJS(): string {
                     <div style="display: flex; justify-content: space-between; align-items: flex-start;">
                       <div>
                         <div style="font-weight: 600; font-family: monospace; font-size: 0.85rem;">\${s.id}</div>
-                        <div style="font-size: 0.75rem; color: var(--text-dim); margin-top: 0.25rem;">
+                        <div style="font-size: 0.75rem; color: var(--dim); margin-top: 0.25rem;">
                           \${s.firstTs ? new Date(s.firstTs).toLocaleString() : ''}
                           \${s.lastTs && s.lastTs !== s.firstTs ? ' — ' + new Date(s.lastTs).toLocaleTimeString() : ''}
                         </div>
                       </div>
-                      <span style="font-size: 0.8rem; font-weight: 600; color: var(--text-soft);">
+                      <span style="font-size: 0.8rem; font-weight: 600; color: var(--muted-foreground);">
                         \${s.entries.length} entries
                       </span>
                     </div>
@@ -1132,12 +1254,11 @@ export function getPagesJS(): string {
                         <\${TypeBadge} key=\${t} type=\${t} />
                       \`)}
                     </div>
-                    <!-- Show last 3 entries as preview -->
-                    <div style="margin-top: 0.625rem; border-top: 1px solid var(--border); padding-top: 0.5rem;">
+                    <div style="margin-top: 0.625rem; border-top: 1px solid var(--border); padding-top: 0.5rem;" class="divide-y">
                       \${s.entries.slice(0, 3).map(entry => html\`
                         <div key=\${entry.timestamp + entry.title} style="display: flex; gap: 0.5rem; align-items: baseline; padding: 0.2rem 0; font-size: 0.75rem;">
-                          <span style="color: var(--text-dim); white-space: nowrap;">\${entry.timestamp ? new Date(entry.timestamp).toLocaleTimeString() : ''}</span>
-                          <span style="color: var(--text-soft);">\${entry.title}</span>
+                          <span style="color: var(--dim); white-space: nowrap;">\${entry.timestamp ? new Date(entry.timestamp).toLocaleTimeString() : ''}</span>
+                          <span style="color: var(--muted-foreground);">\${entry.title}</span>
                         </div>
                       \`)}
                     </div>
@@ -1151,7 +1272,245 @@ export function getPagesJS(): string {
     }
 
     // ================================================================
-    // JOURNAL (full feed with type filtering)
+    // COSTS PAGE
+    // ================================================================
+
+    function CostsPage() {
+      const [period, setPeriod] = useState(168)
+      const { digest, loading } = useTelemetryDigest(period)
+
+      const totalTokens = digest ? digest.costs.reduce((sum, c) => sum + c.totalTokens, 0) : 0
+      const totalCalls = digest ? digest.costs.reduce((sum, c) => sum + c.calls, 0) : 0
+
+      return html\`
+        <div>
+          <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
+            <h2 style="font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em;">Costs</h2>
+            <div style="display: flex; gap: 0.375rem;">
+              \${[{v: 24, l: '24h'}, {v: 168, l: '7d'}, {v: 720, l: '30d'}].map(p => html\`
+                <button key=\${p.v} class=\${'btn ' + (period === p.v ? 'btn-ghost active' : 'btn-ghost')}
+                  style="font-size: 0.75rem; padding: 0.375rem 0.75rem;"
+                  onClick=\${() => setPeriod(p.v)}>\${p.l}</button>
+              \`)}
+            </div>
+          </div>
+
+          \${loading ? html\`<div class="loading">Loading telemetry</div>\` : !digest ? html\`
+            <div class="empty-state" style="padding: 3rem;">
+              <div style="font-size: 1.25rem; color: var(--dim); margin-bottom: 0.5rem;">No Telemetry Data</div>
+              <div style="color: var(--dim); font-size: 0.85rem;">
+                Run some <span style="color: var(--accent); font-family: monospace;">jfl</span> commands to generate telemetry events.
+              </div>
+            </div>
+          \` : html\`
+            <div class="grid-4" style="margin-bottom: 1.5rem;">
+              <\${MetricCard} value=\${'$' + digest.totalCostUsd.toFixed(4)} label="Total Spend" color="var(--accent)" />
+              <\${MetricCard} value=\${totalCalls} label="API Calls" />
+              <\${MetricCard} value=\${totalTokens.toLocaleString()} label="Total Tokens" />
+              <\${MetricCard} value=\${digest.sessions.started} label="Sessions" />
+            </div>
+
+            \${digest.costs.length > 0 && html\`
+              <\${Card} title="Cost by Model">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>Model</th>
+                      <th style="width: 70px;">Calls</th>
+                      <th style="width: 120px;">Tokens (P/C)</th>
+                      <th style="width: 140px;">Token Split</th>
+                      <th style="width: 90px;">Cost</th>
+                      <th style="width: 120px;">Utilization</th>
+                      <th style="width: 90px;">Avg Latency</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    \${digest.costs.map(c => {
+                      const utilPct = totalTokens > 0 ? Math.round((c.totalTokens / totalTokens) * 100) : 0
+                      return html\`
+                        <tr key=\${c.model}>
+                          <td style="font-weight: 600; font-size: 0.8rem;">\${c.model}</td>
+                          <td style="font-family: monospace;">\${c.calls}</td>
+                          <td style="font-family: monospace; font-size: 0.75rem;">\${c.promptTokens.toLocaleString()} / \${c.completionTokens.toLocaleString()}</td>
+                          <td><\${CostBar} prompt=\${c.promptTokens} completion=\${c.completionTokens} /></td>
+                          <td style="font-family: monospace; color: var(--accent);">$\${c.estimatedCostUsd.toFixed(4)}</td>
+                          <td><\${UtilBar} value=\${utilPct} max=\${100} /></td>
+                          <td style="font-family: monospace; font-size: 0.75rem; color: var(--muted-foreground);">\${c.avgLatencyMs > 0 ? Math.round(c.avgLatencyMs) + 'ms' : '—'}</td>
+                        </tr>
+                      \`
+                    })}
+                  </tbody>
+                </table>
+              <//>
+            \`}
+
+            <div class="grid-2">
+              \${digest.commands.length > 0 && html\`
+                <\${Card} title="Command Usage">
+                  <div style="max-height: 300px; overflow-y: auto;" class="divide-y">
+                    \${digest.commands.slice(0, 10).map(c => html\`
+                      <div key=\${c.command} style="display: flex; align-items: center; gap: 0.75rem; padding: 0.5rem 0;">
+                        <span style="font-size: 0.8rem; font-weight: 600; min-width: 100px; font-family: monospace;">\${c.command}</span>
+                        <span style="font-size: 0.75rem; color: var(--dim); min-width: 40px;">\${c.count}x</span>
+                        <div style="flex: 1;"><\${SuccessRateBar} rate=\${c.successRate} /></div>
+                      </div>
+                    \`)}
+                  </div>
+                <//>
+              \`}
+
+              <\${Card} title="System Health">
+                <\${StatRow} label="Hub Starts" value=\${digest.hubHealth.starts} />
+                <\${StatRow} label="Hub Crashes" value=\${digest.hubHealth.crashes} />
+                <\${StatRow} label="MCP Calls" value=\${digest.hubHealth.mcpCalls} />
+                <\${StatRow} label="Avg MCP Latency" value=\${digest.hubHealth.avgMcpLatencyMs + 'ms'} />
+                <\${StatRow} label="Memory Index Runs" value=\${digest.memoryHealth.indexRuns} />
+                <\${StatRow} label="Entries Indexed" value=\${digest.memoryHealth.entriesIndexed} />
+                <\${StatRow} label="Session Crashes" value=\${digest.sessions.crashed} />
+                <\${StatRow} label="Errors" value=\${digest.errors.total} />
+              <//>
+            </div>
+          \`}
+        </div>
+      \`
+    }
+
+    // ================================================================
+    // FLOWS PAGE
+    // ================================================================
+
+    function FlowsPage() {
+      const { flows, executions, loading } = useFlowData()
+      const [tab, setTab] = useState('pending')
+
+      const pending = executions.filter(e => e.gated)
+      const all = executions
+
+      async function approveExecution(flowName, triggerId) {
+        try {
+          await apiFetch('/api/flows/' + encodeURIComponent(flowName) + '/approve', {
+            method: 'POST',
+            body: JSON.stringify({ trigger_event_id: triggerId })
+          })
+        } catch (err) {
+          console.error('Approval failed:', err)
+        }
+      }
+
+      return html\`
+        <div>
+          <h2 style="font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em; margin-bottom: 1.5rem;">Flows</h2>
+          <div class="tab-group" style="margin-bottom: 1.5rem;">
+            <button class=\${'tab-btn ' + (tab === 'pending' ? 'tab-btn-active' : '')} onClick=\${() => setTab('pending')}>
+              Pending \${pending.length > 0 ? '(' + pending.length + ')' : ''}
+            </button>
+            <button class=\${'tab-btn ' + (tab === 'all' ? 'tab-btn-active' : '')} onClick=\${() => setTab('all')}>
+              All
+            </button>
+            <button class=\${'tab-btn ' + (tab === 'definitions' ? 'tab-btn-active' : '')} onClick=\${() => setTab('definitions')}>
+              Definitions
+            </button>
+          </div>
+
+          \${loading ? html\`<div class="loading">Loading flows</div>\` : html\`
+            \${tab === 'pending' && html\`
+              \${pending.length === 0 ? html\`
+                <div class="empty-state" style="padding: 3rem;">
+                  <div style="color: var(--dim);">No pending approvals</div>
+                </div>
+              \` : html\`
+                <div style="display: grid; gap: 0.75rem;">
+                  \${pending.map((ex, i) => html\`
+                    <\${Card} key=\${i}>
+                      <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <div>
+                          <div style="font-weight: 700;">\${ex.flow}</div>
+                          <div style="font-size: 0.75rem; color: var(--dim); margin-top: 0.25rem;">
+                            Trigger: \${ex.trigger_event_type} — \${new Date(ex.started_at).toLocaleString()}
+                          </div>
+                          <span class="badge badge-gated" style="margin-top: 0.375rem;">\${ex.gated}</span>
+                        </div>
+                        \${ex.gated === 'approval' && html\`
+                          <button class="btn-approve" onClick=\${() => approveExecution(ex.flow, ex.trigger_event_id)}>Approve</button>
+                        \`}
+                      </div>
+                    <//>
+                  \`)}
+                </div>
+              \`}
+            \`}
+
+            \${tab === 'all' && html\`
+              <\${Card}>
+                <div style="max-height: 500px; overflow-y: auto;">
+                  <table>
+                    <thead>
+                      <tr>
+                        <th>Flow</th>
+                        <th>Trigger</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                        <th>Time</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      \${all.length === 0 ? html\`<tr><td colspan="5" style="text-align: center; color: var(--dim);">No executions</td></tr>\` :
+                        all.slice().reverse().map((ex, i) => {
+                          const status = ex.gated ? 'gated' : ex.actions_failed > 0 ? 'error' : 'completed'
+                          const badgeCls = 'badge badge-' + status
+                          return html\`
+                            <tr key=\${i}>
+                              <td style="font-weight: 600;">\${ex.flow}</td>
+                              <td style="font-size: 0.75rem; color: var(--muted-foreground);">\${ex.trigger_event_type}</td>
+                              <td><span class=\${badgeCls}>\${ex.gated || status}</span></td>
+                              <td style="font-family: monospace; font-size: 0.8rem;">\${ex.actions_executed}\${ex.actions_failed > 0 ? ' / ' + ex.actions_failed + ' failed' : ''}</td>
+                              <td style="font-size: 0.75rem; color: var(--dim);">\${ex.started_at ? new Date(ex.started_at).toLocaleString() : '—'}</td>
+                            </tr>
+                          \`
+                        })
+                      }
+                    </tbody>
+                  </table>
+                </div>
+              <//>
+            \`}
+
+            \${tab === 'definitions' && html\`
+              \${flows.length === 0 ? html\`
+                <div class="empty-state" style="padding: 3rem;">
+                  <div style="color: var(--dim);">No flows defined</div>
+                  <div style="font-size: 0.8rem; color: var(--dim); margin-top: 0.5rem;">
+                    Create flows in <span style="color: var(--accent); font-family: monospace;">.jfl/flows.yaml</span>
+                  </div>
+                </div>
+              \` : html\`
+                <div style="display: grid; gap: 0.75rem;">
+                  \${flows.map(f => html\`
+                    <\${Card} key=\${f.name}>
+                      <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+                        <div>
+                          <div style="font-weight: 700;">\${f.name}</div>
+                          \${f.description && html\`<div style="font-size: 0.8rem; color: var(--muted-foreground); margin-top: 0.25rem;">\${f.description}</div>\`}
+                        </div>
+                        <span class=\${'badge ' + (f.enabled !== false ? 'badge-ok' : 'badge-unknown')}>\${f.enabled !== false ? 'enabled' : 'disabled'}</span>
+                      </div>
+                      <div style="margin-top: 0.75rem; display: flex; gap: 1rem; font-size: 0.75rem; color: var(--dim);">
+                        <span>Trigger: <span style="color: var(--info); font-family: monospace;">\${f.trigger?.pattern}</span></span>
+                        <span>Actions: \${(f.actions || []).length}</span>
+                        \${f.gate?.requires_approval && html\`<span style="color: var(--warning);">Requires approval</span>\`}
+                      </div>
+                    <//>
+                  \`)}
+                </div>
+              \`}
+            \`}
+          \`}
+        </div>
+      \`
+    }
+
+    // ================================================================
+    // JOURNAL
     // ================================================================
 
     function JournalPage() {
@@ -1174,8 +1533,8 @@ export function getPagesJS(): string {
       return html\`
         <div>
           <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1.5rem;">
-            <h2 class="page-title" style="margin-bottom: 0;">Journal</h2>
-            <span style="font-size: 0.8rem; color: var(--text-dim);">\${filtered.length} entries</span>
+            <h2 style="font-size: 1.5rem; font-weight: 700; letter-spacing: -0.02em;">Journal</h2>
+            <span style="font-size: 0.8rem; color: var(--dim);">\${filtered.length} entries</span>
           </div>
 
           <div style="display: flex; gap: 0.75rem; margin-bottom: 1rem; flex-wrap: wrap;">
@@ -1186,14 +1545,14 @@ export function getPagesJS(): string {
             />
             <div style="display: flex; gap: 0.375rem; flex-wrap: wrap; align-items: center;">
               <button
-                class=\${'btn ' + (!typeFilter ? 'btn-primary' : 'btn-secondary')}
+                class=\${'btn ' + (!typeFilter ? 'btn-ghost active' : 'btn-ghost')}
                 style="font-size: 0.75rem; padding: 0.375rem 0.75rem;"
                 onClick=\${() => setTypeFilter('')}
               >All</button>
               \${types.map(t => html\`
                 <button
                   key=\${t}
-                  class=\${'btn ' + (typeFilter === t ? 'btn-primary' : 'btn-secondary')}
+                  class=\${'btn ' + (typeFilter === t ? 'btn-ghost active' : 'btn-ghost')}
                   style="font-size: 0.75rem; padding: 0.375rem 0.75rem;"
                   onClick=\${() => setTypeFilter(typeFilter === t ? '' : t)}
                 >\${t}</button>
@@ -1203,10 +1562,10 @@ export function getPagesJS(): string {
 
           \${loading ? html\`<div class="loading">Loading journal</div>\` : html\`
             <\${Card}>
-              <div style="max-height: 600px; overflow-y: auto;">
+              <div style="max-height: 600px; overflow-y: auto;" class="divide-y">
                 \${filtered.length === 0 ? html\`
                   <div class="empty-state">
-                    <div style="color: var(--text-dim);">\${searchFilter || typeFilter ? 'No matching entries' : 'No journal entries'}</div>
+                    <div style="color: var(--dim);">\${searchFilter || typeFilter ? 'No matching entries' : 'No journal entries'}</div>
                   </div>
                 \` : filtered.map(entry => html\`
                   <\${JournalEntryRow} key=\${entry.timestamp + entry.title} entry=\${entry} expanded=\${true} />

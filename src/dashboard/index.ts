@@ -67,7 +67,7 @@ export function generateDashboardHTML(projectName: string, port: number): string
       }
       const res = await fetch(path, { ...opts, headers })
       if (res.status === 401) {
-        document.getElementById('app').innerHTML = '<div style="padding: 3rem; text-align: center; color: var(--error);"><h2>Unauthorized</h2><p style="color: var(--text-soft); margin-top: 0.5rem;">Token expired or invalid. Run: jfl context-hub dashboard</p></div>'
+        document.getElementById('app').innerHTML = '<div style="padding: 3rem; text-align: center; color: var(--error);"><h2>Unauthorized</h2><p style="color: var(--muted-foreground); margin-top: 0.5rem;">Token expired or invalid. Run: jfl context-hub dashboard</p></div>'
         throw new Error('Unauthorized')
       }
       return res.json()
@@ -108,6 +108,8 @@ export function generateDashboardHTML(projectName: string, port: number): string
         evals: EvalsPage,
         scope: ScopePage,
         service: ServiceOverviewPage,
+        costs: CostsPage,
+        flows: FlowsPage,
       }
 
       const pageComponent = pageMap[page] || OverviewPage
