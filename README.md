@@ -55,28 +55,37 @@ That's it. SessionStart hooks handle repo sync, session branching, Context Hub s
 
 ## Architecture
 
-JFL workspaces are **context layers**, not code repos. Product code lives in separate service repos that register with the GTM.
+JFL supports a three-level hierarchy: **Portfolio > GTM > Services**. Portfolios coordinate multiple products. GTMs are context layers for individual products. Services are the repos that do the actual work.
 
 ```
-my-project/                    <- GTM workspace (strategy, context, orchestration)
+visa-portfolio/                <- Portfolio (strategy, cross-product RL, data flow)
 ├── .jfl/
-│   ├── config.json           <- Project config (team, services, ports)
-│   ├── journal/              <- Session journals (JSONL, one file per session)
-│   ├── memory.db             <- Indexed memory (TF-IDF + embeddings)
-│   ├── agents/              <- Narrowly-scoped agent manifests + policies
-│   ├── flows/               <- Per-agent flow definitions (auto-loaded)
-│   ├── service-events.jsonl  <- Event bus file-drop
-│   └── services.json         <- Registered services
-├── knowledge/                <- Strategy docs (VISION, ROADMAP, THESIS, etc.)
-├── content/                  <- Generated content
-├── suggestions/              <- Per-contributor workspaces
-├── .claude/
-│   ├── settings.json         <- Claude Code hooks (SessionStart, Stop, etc.)
-│   ├── agents/               <- Service agent definitions
-│   └── skills/               <- Slash commands (/hud, /content, etc.)
-├── scripts/session/          <- Session management (init, sync, cleanup)
-├── CLAUDE.md                 <- AI instructions
-└── .mcp.json                 <- MCP server config (Context Hub)
+│   ├── config.json           <- type: "portfolio", registered child GTMs
+│   ├── eval.jsonl            <- Aggregated eval data from all children
+│   ├── flows.yaml            <- Cross-product event routing
+│   └── journal/              <- Portfolio-level + synced child journals
+│
+├── productrank-gtm/           <- GTM workspace (registered as child)
+│   ├── .jfl/
+│   │   ├── config.json       <- type: "gtm", portfolio_parent, registered services
+│   │   ├── eval.jsonl        <- Eval entries from arena competitions
+│   │   ├── journal/          <- Session journals + synced service journals
+│   │   ├── agents/           <- Agent manifests + policies
+│   │   ├── flows/            <- Per-agent flow definitions
+│   │   └── service-events.jsonl
+│   ├── knowledge/            <- Strategy docs (VISION, ROADMAP, THESIS, etc.)
+│   ├── content/              <- Generated content
+│   ├── suggestions/          <- Per-contributor workspaces
+│   ├── .claude/
+│   │   ├── settings.json     <- Claude Code hooks
+│   │   ├── agents/           <- Service agent definitions
+│   │   └── skills/           <- Slash commands (/hud, /content, etc.)
+│   ├── scripts/session/      <- Session management
+│   ├── CLAUDE.md             <- AI instructions
+│   └── .mcp.json             <- MCP server config
+│
+└── seo-agent/                 <- Another GTM (registered as child)
+    └── ...
 
 my-api/                        <- Service repo (registered in GTM)
 ├── src/
@@ -89,7 +98,8 @@ my-api/                        <- Service repo (registered in GTM)
 - Services work independently
 - Multiple services register to one GTM
 - `jfl update` updates tooling without touching service code
-- Journal entries sync from services to parent GTM
+- Eval data dual-writes up the chain (service > GTM > portfolio)
+- Cross-product event routing at portfolio level
 
 ---
 
@@ -106,14 +116,22 @@ jfl context-hub stop          # Stop daemon
 jfl context-hub restart       # Restart daemon
 jfl context-hub doctor        # Diagnose all projects (OK/ZOMBIE/DOWN/STALE)
 jfl context-hub ensure-all    # Start for all GTM projects
-jfl context-hub dashboard     # Live event + context dashboard
+jfl context-hub dashboard     # Live web dashboard (opens browser)
 jfl context-hub install-daemon  # Auto-start on boot (launchd/systemd)
 jfl context-hub uninstall-daemon  # Remove auto-start
 jfl context-hub query         # Query context from CLI
 jfl context-hub serve         # Run in foreground (daemon mode)
 ```
 
-**Per-project ports** assigned automatically (or set in `.jfl/config.json` → `contextHub.port`).
+**Per-project ports** assigned automatically (or set in `.jfl/config.json` > `contextHub.port`).
+
+**Web Dashboard** — mode-aware SPA served directly from Context Hub. Auto-detects workspace type (portfolio/gtm/service) and adapts layout:
+
+- **Portfolio mode:** Health grid across child GTMs, cross-product leaderboard, live event feed, metric cards
+- **GTM mode:** Command center with journal activity, decisions, eval velocity, command health
+- **Service mode:** Scoped journal view, filtered events, parent GTM context
+
+Pages: Overview, Journal, Agents, Evals, Events, Costs, Flows, Sessions, Scope, Projects.
 
 **MCP Tools** (available to Claude Code and any MCP client):
 
@@ -126,6 +144,9 @@ jfl context-hub serve         # Run in foreground (daemon mode)
 | `memory_search` | Search indexed journal memories |
 | `memory_status` | Memory system statistics |
 | `memory_add` | Add manual memory entry |
+| `query_experiment_history` | Query RL trajectories for agent experiments |
+
+**Portfolio fan-out:** In portfolio mode, Context Hub connects to child GTM hubs via SSE, bridges their events into the portfolio event bus, and fans out search queries across all children. Cross-product flows route events between child GTMs.
 
 **Resilience:** 5-layer system — MCP auto-recovery on ECONNREFUSED, health-check-before-ensure hooks, `ensure-all` for batch startup, `doctor` diagnostics, launchd/systemd daemon with keepalive.
 
@@ -138,9 +159,87 @@ Metrics, Agents, Pipeline — an in-process event bus inside Context Hub.
 - **Journal bridge** — watches `.jfl/journal/`, emits events on new entries
 - **Pattern-matching subscriptions** (glob support)
 - **Transports:** SSE, WebSocket, HTTP polling
-- **Event types:** `session:started`, `session:ended`, `task:completed`, `journal:entry`, `service:healthy`, `custom`, and more
+- **Cross-product routing** — portfolio flows route events between child GTMs
+- **Event types:** `session:started`, `session:ended`, `eval:scored`, `journal:entry`, `flow:triggered`, `agent:iteration-complete`, `portfolio:phone-home`, and more
 
 Services emit events by appending to `.jfl/service-events.jsonl` — no auth needed, Context Hub watches the file automatically.
+
+### Eval Framework
+
+Track agent performance over time. Eval entries dual-write up the parent chain (service > GTM > portfolio) so every level has visibility.
+
+```bash
+jfl eval list                 # List recent eval entries
+jfl eval list -a shadow       # Filter by agent
+jfl eval trajectory -a shadow # Composite score over time (with sparkline)
+jfl eval log -a shadow -m '{"composite":0.69}' # Log an eval entry
+jfl eval compare              # Side-by-side agent comparison
+jfl eval tuples               # Extract (state, action, reward) training tuples
+```
+
+**Eval entries** are JSONL with agent name, metrics, composite score, model version, and deltas:
+
+```json
+{
+  "v": 1, "ts": "2026-03-05T15:22:47Z",
+  "agent": "productrank-shadow",
+  "dataset": "vibe-50-v1",
+  "model_version": "shadow-0.3.1",
+  "metrics": {"ndcg@10": 0.59, "mrr": 0.77, "precision@5": 0.43},
+  "composite": 0.6935,
+  "delta": {"composite": -0.029}
+}
+```
+
+**Training tuples** extracted from journals for fine-tuning: `(state, action, reward)` — maps codebase state + experiment action to eval score delta.
+
+**API endpoints** on Context Hub:
+- `GET /api/eval/leaderboard` — all agents ranked by composite
+- `GET /api/eval/trajectory?agent=X&metric=composite` — score trajectory with timestamps
+
+### RL Infrastructure (Phase 1)
+
+JFL generalizes the Karpathy nanochat pattern: structured journals are the replay buffer, eval scores are rewards, agents learn in-context from past trajectories.
+
+```
+Agent LLM (Policy)        > reads trajectories, proposes experiments
+Stratus (World Model)     > predicts outcomes, filters bad proposals
+Journals (Replay Buffer)  > structured experiment history
+Eval Framework (Reward)   > composite scores, score deltas
+Event Bus (Nervous System) > connects everything
+```
+
+**JournalEntry type** — canonical schema with 6 RL fields: `hypothesis`, `outcome`, `score_delta`, `eval_snapshot`, `diff_hash`, `context_entries`.
+
+**TrajectoryLoader** — query, filter, and render experiment trajectories for agent context windows. Supports filtering by session, agent, outcome, score range.
+
+**MCP tool:** `query_experiment_history` — agents query past experiment trajectories to inform next proposals.
+
+### Portfolio Management
+
+Coordinate multiple GTM workspaces under one portfolio.
+
+```bash
+jfl portfolio register /path/to/gtm   # Register a GTM in this portfolio
+jfl portfolio list                     # List child GTMs with health
+jfl portfolio unregister <name>        # Remove a GTM
+jfl portfolio status                   # Portfolio health + eval summary
+jfl portfolio phone-home               # Report GTM health to portfolio parent
+```
+
+**Cross-product flows** defined in `.jfl/flows.yaml`:
+
+```yaml
+- name: tool-trends-to-seo
+  trigger:
+    pattern: "discovery:tool-trend"
+    source: "productrank-gtm"
+  actions:
+    - type: webhook
+      url: "http://localhost:{{child.seo-agent.port}}/api/events"
+```
+
+Template variables: `{{child.NAME.port}}`, `{{child.NAME.token}}`
 
 ### Memory System
 
@@ -164,6 +263,7 @@ Automatic session isolation for parallel work:
 - **Multiple concurrent sessions:** Isolated git worktrees prevent conflicts
 - **Auto-commit:** Saves work every 2 minutes (knowledge, journal, suggestions)
 - **Crash recovery:** Detects uncommitted work in stale sessions, auto-commits on next start
+- **Cleanup guard:** Prevents `rm -rf` on main branch when no worktrees exist
 
 ```bash
 # Hooks handle everything automatically. Manual control:
@@ -212,6 +312,18 @@ jfl services                  # Interactive TUI (no args)
 - Service entry in `.jfl/services.json`
 - Config in service repo (`.jfl/config.json` with `gtm_parent`)
 
+**Context scoping:** Each service declares what events it produces and consumes. The GTM enforces scope — teams can't read each other's journals unless explicitly granted.
+
+```json
+{
+  "context_scope": {
+    "produces": ["eval:submission", "journal:my-team*"],
+    "consumes": ["eval:scored", "leaderboard:updated"],
+    "denied": ["journal:other-team*"]
+  }
+}
+```
+
 **Phone-home on session end:** When a service session ends, it syncs to the parent GTM:
 - Journal entries copied to `GTM/.jfl/journal/service-{name}-*.jsonl`
 - Comprehensive sync payload (git stats, health, environment)
@@ -254,11 +366,31 @@ jfl services                  # Interactive TUI (no args)
 | `jfl context-hub status` | Health check |
 | `jfl context-hub doctor [--clean]` | Diagnose all projects |
 | `jfl context-hub ensure-all` | Start for all GTM projects |
-| `jfl context-hub dashboard` | Live event/context dashboard |
+| `jfl context-hub dashboard` | Open web dashboard in browser |
 | `jfl context-hub query` | Query context from CLI |
 | `jfl context-hub serve` | Run in foreground (daemon mode) |
 | `jfl context-hub install-daemon` | Auto-start on boot |
 | `jfl context-hub uninstall-daemon` | Remove auto-start |
+
+### Eval Framework
+
+| Command | Description |
+|---------|-------------|
+| `jfl eval list [-a agent] [-l limit]` | List recent eval entries |
+| `jfl eval trajectory -a <agent>` | Composite score trajectory with sparkline |
+| `jfl eval log -a <agent> -m <metrics>` | Log an eval entry |
+| `jfl eval compare` | Side-by-side agent comparison |
+| `jfl eval tuples [--limit N] [--format json]` | Extract training tuples from journals |
+
+### Portfolio
+
+| Command | Description |
+|---------|-------------|
+| `jfl portfolio register <path>` | Register GTM workspace in portfolio |
+| `jfl portfolio list` | List child GTMs with health status |
+| `jfl portfolio unregister <name>` | Remove GTM from portfolio |
+| `jfl portfolio status` | Portfolio health and eval summary |
+| `jfl portfolio phone-home` | Report GTM health to portfolio parent |
 
 ### Memory
 
@@ -461,14 +593,16 @@ Every session MUST write journal entries. Hooks enforce this.
   "summary": "Built jfl onboard command that registers service repos in GTM",
   "detail": "Creates agent definition, skill wrapper, services.json entry...",
   "files": ["src/commands/onboard.ts"],
-  "incomplete": ["peer sync not wired"],
-  "next": "Wire phone-home on session end"
+  "hypothesis": "Structured onboarding reduces setup errors",
+  "outcome": "confirmed",
+  "score_delta": 0.12,
+  "eval_snapshot": {"composite": 0.85}
 }
 ```
 
 **Write entries when:** Feature completed, decision made, bug fixed, milestone reached, session ending.
 
-Entries become searchable via `jfl memory search` and MCP `memory_search` tool.
+Entries become searchable via `jfl memory search` and MCP `memory_search` tool. RL fields (`hypothesis`, `outcome`, `score_delta`, `eval_snapshot`, `diff_hash`, `context_entries`) enable trajectory-based learning.
 
 ---
 
@@ -488,10 +622,31 @@ SessionStart hook fires          You work normally                Stop hook fire
                     ├─ Serves MCP tools to Claude Code
                     ├─ Aggregates journal + knowledge + code
                     ├─ Bridges service events from file-drop
-                    └─ Watches journal/ for live entries
+                    ├─ Watches journal/ for live entries
+                    ├─ Portfolio mode: fans out to child hubs
+                    └─ Web dashboard at /dashboard
 ```
 
 **Everything is files.** No proprietary database. No lock-in. Context is git-native — version controlled, portable, model-agnostic.
+
+---
+
+## CI/CD
+
+GitHub Actions pipeline runs on every push and PR to main:
+
+- TypeScript strict mode type checking
+- Full test suite (~365 tests across 17 test files)
+- Coverage reporting
+
+```yaml
+# .github/workflows/ci.yml
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+```
 
 ---
 
@@ -529,6 +684,20 @@ jfl wallet                    # Wallet and day pass status
 ---
 
 ## What's New
+
+**0.3.0**
+- Feat: **Portfolio layer** — `jfl portfolio register/list/unregister/status/phone-home`. Coordinate multiple GTM workspaces under one portfolio with cross-product event routing and aggregated eval data
+- Feat: **Eval framework** — `jfl eval list/trajectory/log/compare/tuples`. Track agent metrics over time, dual-write up parent chain, extract training tuples
+- Feat: **RL infrastructure (Phase 1)** — `JournalEntry` type with 6 RL fields (hypothesis, outcome, score_delta, eval_snapshot, diff_hash, context_entries), `TrajectoryLoader` for querying experiment history, `query_experiment_history` MCP tool
+- Feat: **Web dashboard redesign** — Paperclip-inspired oklch monochromatic design system, mode-aware pages (portfolio/gtm/service), Preact+HTM SPA with eval charts, sparklines, health grid, live event feed
+- Feat: **Context Hub portfolio fan-out** — detects portfolio type, connects to child GTM hubs via SSE, bridges events, fans out search queries
+- Feat: **Cross-product event routing** — `flows.yaml` with `{{child.NAME.port}}` template variables, events route between child GTMs
+- Feat: **Eval API endpoints** — `/api/eval/leaderboard` and `/api/eval/trajectory` on Context Hub
+- Feat: CI/CD pipeline — GitHub Actions with strict TypeScript + Jest gate
+- Feat: Service agent templates (CLAUDE.md, settings.json, knowledge docs)
+- Feat: Session cleanup guard — prevents `rm -rf` on main when no worktrees exist
+- Fix: TypeScript strict mode build errors resolved
+- Test: ~365 tests across 17 test files (up from 237)
 
 **0.2.5**
 - Feat: Docker-style grouped `jfl --help` — 5 groups (Getting Started, Daily Use, Management, Platform, Advanced), ~30 lines down from 52
