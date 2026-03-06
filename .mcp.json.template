@@ -4,7 +4,7 @@
       "command": "jfl-context-hub-mcp",
       "args": [],
       "env": {
-        "CONTEXT_HUB_URL": "http://localhost:4521"
+        "CONTEXT_HUB_URL": "http://localhost:4200"
       }
     }
   }

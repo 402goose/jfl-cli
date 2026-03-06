@@ -15,7 +15,6 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${JFL_REPO_DIR:-$(pwd)}"
 WORKTREES_DIR="$REPO_DIR/worktrees"
-INIT_START_TIME=$(date +%s)
 
 cd "$REPO_DIR" || exit 1
 
@@ -158,10 +157,6 @@ if [[ -d "$WORKTREES_DIR" ]]; then
                 done
                 echo ""
                 echo -e "${GREEN}✓${NC} All changes saved. Continuing..."
-                jfl telemetry track \
-                  --category session \
-                  --event "hook:crash_recovery" \
-                  --success true 2>/dev/null &
                 ;;
             2)
                 echo ""
@@ -353,14 +348,3 @@ if [[ "$use_worktree" != "true" ]]; then
     echo -e "${GREEN}✓${NC}  Session ready on branch: $session_name"
     echo ""
 fi
-
-# ==============================================================================
-# Step 4: Track session init telemetry (fire-and-forget)
-# ==============================================================================
-
-INIT_DURATION=$(( $(date +%s) - INIT_START_TIME ))
-jfl telemetry track \
-  --category session \
-  --event "hook:session_init" \
-  --duration "${INIT_DURATION}000" \
-  --success true 2>/dev/null &

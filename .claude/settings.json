@@ -10,7 +10,7 @@
           },
           {
             "type": "command",
-            "command": "jfl context-hub ensure >> .jfl/logs/context-hub.log 2>&1 &",
+            "command": "PORT=$(jq -r '.contextHub.port // empty' .jfl/config.json 2>/dev/null); if [ -n \"$PORT\" ]; then curl -sf http://localhost:$PORT/health >/dev/null 2>&1 || jfl context-hub ensure >> .jfl/logs/context-hub.log 2>&1; fi",
             "async": true
           }
         ]

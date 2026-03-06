@@ -25,42 +25,24 @@ If they're lost → ask "What are you building?" and go from there.
 
 ## Workflow
 
-### Step 1: Get Context via MCP Tools (ONE CALL)
+### Step 1: Read Context & Assess State
 
-**A. Get unified context:**
-```
-Call: mcp__jfl-context__context_get
-Parameters: { "taskType": "general", "maxItems": 30 }
-```
+Read these files:
+- `knowledge/VISION.md` - What you're building
+- `knowledge/ROADMAP.md` - Timeline and phases
+- `knowledge/NARRATIVE.md` - How you tell the story
+- `knowledge/THESIS.md` - Why you'll win
+- `knowledge/TASKS.md` - Current tasks
 
-This returns EVERYTHING in one call:
-- Recent journal entries (what happened across sessions)
-- Knowledge docs (vision, roadmap, narrative, thesis, tasks)
-- Code file headers (@purpose tags)
+**Pull CRM status:**
+- Run `./crm list` to get current pipeline
+- Note any CALL_SCHEDULED, IN_CONVO, or REACHED_OUT that need attention
 
-**DO NOT read individual markdown files.** The context MCP tool aggregates everything.
-
-**B. Pull CRM pipeline:**
-```bash
-./crm list
-```
-
-Look for these statuses that need attention:
-- 🟠 `IN_CONVO` - Active conversations, may need follow-up
-- 🟡 `REACHED_OUT` - Waiting for response
-- 🔴 `HOT` - Urgent action needed
-- 📞 `CALL_SCHEDULED` - Prep needed
-
-**C. Assess state from context_get response:**
-- Journal section → recent work, decisions, what's in progress
-- Knowledge section → vision status (EMERGENT vs DECLARED), ship date from roadmap
-- Code section → what files exist, their purposes
-
-**D. If you need to search for something specific:**
-```
-Call: mcp__jfl-context__context_search
-Parameters: { "query": "your search terms" }
-```
+**Assess state:**
+- Are docs filled in or still templates?
+- Is there a launch date set?
+- What phase are they in?
+- Any active CRM convos that need follow-up?
 
 ### Step 2: Route Based on State
 
@@ -124,40 +106,24 @@ Say "let's do it" or /brand-architect
 
 Ship: {date} ({days} days)
 Phase: {current phase}
-Memory: {X} docs, {Y} memories indexed
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-PIPELINE (from ./crm list)
+PIPELINE
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-🟠 Jack (Nascent) - IN_CONVO - needs follow-up docs
-🟠 Wes (Formation) - IN_CONVO - waiting on beta timing
-🟡 Avi (Coinfund) - REACHED_OUT - no response yet
+{Show active CRM contacts - CALL_SCHEDULED, IN_CONVO, REACHED_OUT}
+{For each: name, status, what's needed (prep, follow-up, etc.)}
 
-{Only show IN_CONVO, REACHED_OUT, HOT - skip COLD}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-RECENT WORK
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-{from journal + memory query - recent decisions/work}
-{what's next based on that context}
+Anything to add or update?
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 THIS WEEK
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-{from knowledge/TASKS.md or inferred priorities}
-1. {most urgent based on pipeline + context}
-2. {second priority}
-3. {third priority}
+{priority tasks}
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 NEXT ACTION
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-{Pick ONE specific thing based on:
- - Urgent pipeline items (follow-ups due)
- - Recent journal entries (what's in progress)
- - This week's priorities from TASKS.md}
-
-What do you want to tackle?
+{specific next thing to do, not "what do you want to work on?"}
 ```
 
 ### Compact Mode (--compact)
@@ -173,9 +139,8 @@ What do you want to tackle?
    - Or: Ask a specific question to move forward
 
 2. **Detect returning users**
-   - Check journal for recent work (last few entries)
-   - Query memory for "recent decisions" or "current focus"
-   - "You were working on X. Want to continue?"
+   - If they were mid-flow, pick up where they left off
+   - "Last time we were working on your narrative. Want to continue?"
 
 3. **Guide, don't report**
    - Bad: "Your docs are templates. Fill them in."
@@ -190,17 +155,3 @@ What do you want to tackle?
 - Works with minimal setup (just CLAUDE.md)
 - Better with `knowledge/` docs populated
 - User context from `suggestions/{name}.md`
-- **Context Hub MCP is the hub** - use `mcp__jfl-context__context_get` for unified context
-- Journal files at `.jfl/journal/<session-id>.jsonl`
-- CRM via `./crm` CLI (Google Sheets backend)
-
-## MCP Tools Available
-
-| Tool | Purpose |
-|------|---------|
-| `mcp__jfl-context__context_get` | Get unified context (journal + knowledge + code) |
-| `mcp__jfl-context__context_search` | Search across all context sources |
-| `mcp__jfl-context__context_status` | Check Context Hub status |
-| `mcp__jfl-context__context_sessions` | See activity from other sessions |
-| `mcp__jfl-memory__memory_search` | Semantic search in memory |
-| `mcp__jfl-memory__memory_add` | Add a memory directly |
