@@ -554,11 +554,114 @@ function getUnifiedContext(projectRoot: string, query?: string, taskType?: strin
 }
 
 // ============================================================================
+// Portfolio Fan-Out
+// ============================================================================
+
+interface ChildHub {
+  name: string
+  path: string
+  port: number
+  token?: string
+}
+
+function getChildHubs(projectRoot: string): ChildHub[] {
+  const configPath = path.join(projectRoot, ".jfl", "config.json")
+  if (!fs.existsSync(configPath)) return []
+
+  try {
+    const config = JSON.parse(fs.readFileSync(configPath, "utf-8"))
+    if (config.type !== "portfolio") return []
+
+    const children: ChildHub[] = []
+    for (const service of config.registered_services || []) {
+      if (service.type === "gtm" && service.path) {
+        const childPort = getProjectPort(service.path)
+        const tokenPath = path.join(service.path, ".jfl", "context-hub.token")
+        const token = fs.existsSync(tokenPath)
+          ? fs.readFileSync(tokenPath, "utf-8").trim()
+          : undefined
+        children.push({ name: service.name, path: service.path, port: childPort, token })
+      }
+    }
+    return children
+  } catch {
+    return []
+  }
+}
+
+async function fetchChildContext(
+  child: ChildHub,
+  endpoint: string,
+  body: Record<string, unknown>
+): Promise<ContextItem[]> {
+  try {
+    const headers: Record<string, string> = { "Content-Type": "application/json" }
+    if (child.token) headers["Authorization"] = `Bearer ${child.token}`
+
+    const response = await fetch(`http://localhost:${child.port}${endpoint}`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(5000),
+    })
+
+    if (!response.ok) return []
+
+    const data = (await response.json()) as { items?: ContextItem[] }
+    return (data.items || []).map((item) => ({
+      ...item,
+      title: `[${child.name}] ${item.title}`,
+    }))
+  } catch {
+    return readJournalEntries(child.path, 10).map((item) => ({
+      ...item,
+      title: `[${child.name}] ${item.title}`,
+    }))
+  }
+}
+
+async function getPortfolioContext(
+  projectRoot: string,
+  query?: string,
+  taskType?: string,
+  maxItems?: number
+): Promise<UnifiedContext> {
+  const local = getUnifiedContext(projectRoot, query, taskType)
+  const children = getChildHubs(projectRoot)
+  if (children.length === 0) return local
+
+  const endpoint = query ? "/api/context/search" : "/api/context"
+  const body: Record<string, unknown> = { maxItems: maxItems || 20 }
+  if (query) body.query = query
+  if (taskType) body.taskType = taskType
+
+  const childResults = await Promise.all(
+    children.map((child) => fetchChildContext(child, endpoint, body))
+  )
+
+  let merged = [...local.items, ...childResults.flat()]
+  if (query) {
+    merged = semanticSearch(merged, query)
+  }
+
+  return {
+    items: maxItems ? merged.slice(0, maxItems) : merged,
+    sources: {
+      ...local.sources,
+      journal: true,
+      knowledge: true,
+    },
+    query,
+    taskType,
+  }
+}
+
+// ============================================================================
 // HTTP Server
 // ============================================================================
 
-function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus): http.Server {
-  const server = http.createServer((req, res) => {
+function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus, flowEngine?: FlowEngine): http.Server {
+  const server = http.createServer(async (req, res) => {
     const requestStart = Date.now()
     const pathname = new URL(req.url || "/", `http://localhost:${port}`).pathname
 
@@ -687,31 +790,72 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus)
       return
     }
 
-    // Status
+    // Status (includes child hub health for portfolio)
     if (url.pathname === "/api/context/status" && req.method === "GET") {
       const context = getUnifiedContext(projectRoot)
+      const children = getChildHubs(projectRoot)
+
+      // Read actual workspace type from config
+      let workspaceType: "portfolio" | "gtm" | "service" | "standalone" = "standalone"
+      let workspaceConfig: Record<string, unknown> = {}
+      const configPath = path.join(projectRoot, ".jfl", "config.json")
+      if (fs.existsSync(configPath)) {
+        try {
+          const cfg = JSON.parse(fs.readFileSync(configPath, "utf-8"))
+          if (cfg.type === "portfolio" || cfg.type === "gtm" || cfg.type === "service") {
+            workspaceType = cfg.type
+          }
+          workspaceConfig = {
+            name: cfg.name,
+            type: cfg.type,
+            description: cfg.description,
+            scope: cfg.context_scope || null,
+            registered_services: (cfg.registered_services || []).map((s: any) => ({
+              name: s.name,
+              type: s.type,
+              status: s.status,
+              context_scope: s.context_scope || null,
+            })),
+            gtm_parent: cfg.gtm_parent || null,
+            portfolio_parent: cfg.portfolio_parent || null,
+          }
+        } catch {}
+      }
+
+      const childStatus = await Promise.all(
+        children.map(async (child) => {
+          try {
+            const resp = await fetch(`http://localhost:${child.port}/health`, {
+              signal: AbortSignal.timeout(2000),
+            })
+            return { name: child.name, port: child.port, status: resp.ok ? "ok" : "error" }
+          } catch {
+            return { name: child.name, port: child.port, status: "down" }
+          }
+        })
+      )
+
       res.writeHead(200, { "Content-Type": "application/json" })
       res.end(JSON.stringify({
         status: "running",
         port,
+        type: workspaceType,
+        config: workspaceConfig,
         sources: context.sources,
-        itemCount: context.items.length
+        itemCount: context.items.length,
+        ...(children.length > 0 ? { children: childStatus } : {}),
       }))
       return
     }
 
-    // Get context
+    // Get context (portfolio-aware: fans out to child hubs)
     if (url.pathname === "/api/context" && req.method === "POST") {
       let body = ""
       req.on("data", chunk => body += chunk)
-      req.on("end", () => {
+      req.on("end", async () => {
         try {
           const { query, taskType, maxItems } = JSON.parse(body || "{}")
-          const context = getUnifiedContext(projectRoot, query, taskType)
-
-          if (maxItems && context.items.length > maxItems) {
-            context.items = context.items.slice(0, maxItems)
-          }
+          const context = await getPortfolioContext(projectRoot, query, taskType, maxItems)
 
           telemetry.track({
             category: 'context_hub',
@@ -733,11 +877,11 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus)
       return
     }
 
-    // Search
+    // Search (portfolio-aware: fans out to child hubs)
     if (url.pathname === "/api/context/search" && req.method === "POST") {
       let body = ""
       req.on("data", chunk => body += chunk)
-      req.on("end", () => {
+      req.on("end", async () => {
         try {
           const { query, maxItems = 20 } = JSON.parse(body || "{}")
           if (!query) {
@@ -747,7 +891,7 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus)
           }
 
           const searchStart = Date.now()
-          const context = getUnifiedContext(projectRoot, query)
+          const context = await getPortfolioContext(projectRoot, query, undefined, maxItems)
           context.items = context.items
             .filter(item => item.relevance && item.relevance > 0)
             .slice(0, maxItems)
@@ -875,6 +1019,59 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus)
       return
     }
 
+    // Eval trajectory
+    if (url.pathname === "/api/eval/trajectory" && req.method === "GET") {
+      try {
+        const { getTrajectory } = await import("../lib/eval-store.js")
+        const agent = url.searchParams.get("agent") || ""
+        const metric = url.searchParams.get("metric") || "composite"
+        if (!agent) {
+          res.writeHead(400, { "Content-Type": "application/json" })
+          res.end(JSON.stringify({ error: "agent query param required" }))
+          return
+        }
+        const points = getTrajectory(agent, metric, projectRoot)
+        res.writeHead(200, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ agent, metric, points }))
+      } catch (err: any) {
+        res.writeHead(500, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ error: err.message }))
+      }
+      return
+    }
+
+    // Eval leaderboard
+    if (url.pathname === "/api/eval/leaderboard" && req.method === "GET") {
+      try {
+        const { readEvals, listAgents, getLatestEval, getTrajectory } = await import("../lib/eval-store.js")
+        const agents = listAgents(projectRoot)
+        const leaderboard = agents.map(agent => {
+          const latest = getLatestEval(agent, projectRoot)
+          const trajectory = getTrajectory(agent, "composite", projectRoot)
+          const prevPoint = trajectory.length >= 2 ? trajectory[trajectory.length - 2] : null
+          const delta = latest?.composite != null && prevPoint
+            ? latest.composite - prevPoint.value
+            : null
+          return {
+            agent,
+            composite: latest?.composite ?? null,
+            metrics: latest?.metrics ?? {},
+            delta,
+            model_version: latest?.model_version ?? null,
+            lastTs: latest?.ts ?? null,
+            trajectory: trajectory.slice(-20).map(p => p.value),
+          }
+        }).sort((a, b) => (b.composite ?? 0) - (a.composite ?? 0))
+
+        res.writeHead(200, { "Content-Type": "application/json" })
+        res.end(JSON.stringify(leaderboard))
+      } catch (err: any) {
+        res.writeHead(500, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ error: err.message }))
+      }
+      return
+    }
+
     // Cross-project health
     if (url.pathname === "/api/projects" && req.method === "GET") {
       const tracked = getTrackedProjects()
@@ -993,6 +1190,80 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus)
 
       req.on("close", () => {
         eventBus.unsubscribe(sub.id)
+      })
+      return
+    }
+
+    // Telemetry digest
+    if (url.pathname === "/api/telemetry/digest" && req.method === "GET") {
+      try {
+        const { loadLocalEvents, analyzeEvents } = await import("../lib/telemetry-digest.js")
+        const hours = parseInt(url.searchParams.get("hours") || "168", 10)
+        const events = loadLocalEvents()
+        const digest = analyzeEvents(events, hours)
+        res.writeHead(200, { "Content-Type": "application/json" })
+        res.end(JSON.stringify(digest))
+      } catch (err: any) {
+        res.writeHead(500, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ error: err.message }))
+      }
+      return
+    }
+
+    // Flow definitions
+    if (url.pathname === "/api/flows" && req.method === "GET") {
+      if (!flowEngine) {
+        res.writeHead(200, { "Content-Type": "application/json" })
+        res.end(JSON.stringify([]))
+        return
+      }
+      res.writeHead(200, { "Content-Type": "application/json" })
+      res.end(JSON.stringify(flowEngine.getFlows()))
+      return
+    }
+
+    // Flow executions
+    if (url.pathname === "/api/flows/executions" && req.method === "GET") {
+      if (!flowEngine) {
+        res.writeHead(200, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ executions: [] }))
+        return
+      }
+      res.writeHead(200, { "Content-Type": "application/json" })
+      res.end(JSON.stringify({ executions: flowEngine.getExecutions() }))
+      return
+    }
+
+    // Flow approval
+    if (url.pathname.match(/^\/api\/flows\/[^/]+\/approve$/) && req.method === "POST") {
+      if (!flowEngine) {
+        res.writeHead(503, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ error: "Flow engine not initialized" }))
+        return
+      }
+      const flowName = decodeURIComponent(url.pathname.split("/")[3])
+      let body = ""
+      req.on("data", chunk => body += chunk)
+      req.on("end", async () => {
+        try {
+          const { trigger_event_id } = JSON.parse(body || "{}")
+          if (!trigger_event_id) {
+            res.writeHead(400, { "Content-Type": "application/json" })
+            res.end(JSON.stringify({ error: "trigger_event_id required" }))
+            return
+          }
+          const result = await flowEngine.approveGated(flowName, trigger_event_id)
+          if (!result) {
+            res.writeHead(404, { "Content-Type": "application/json" })
+            res.end(JSON.stringify({ error: "Gated execution not found" }))
+            return
+          }
+          res.writeHead(200, { "Content-Type": "application/json" })
+          res.end(JSON.stringify(result))
+        } catch (err: any) {
+          res.writeHead(500, { "Content-Type": "application/json" })
+          res.end(JSON.stringify({ error: err.message }))
+        }
       })
       return
     }
@@ -1428,16 +1699,17 @@ export async function contextHubCommand(
   const projectRoot = isGlobal ? homedir() : process.cwd()
   const port = options.port || getProjectPort(projectRoot)
 
-  // Ensure directories exist
-  if (isGlobal) {
-    // Global mode: use XDG directories
-    const { JFL_PATHS, ensureJflDirs } = await import("../utils/jfl-paths.js")
-    ensureJflDirs()
-  } else {
-    // Project mode: use .jfl/
-    const jflDir = path.join(projectRoot, ".jfl")
-    if (!fs.existsSync(jflDir)) {
-      fs.mkdirSync(jflDir, { recursive: true })
+  // Ensure directories exist (skip for actions that don't need local project root)
+  const globalActions = ["ensure-all", "doctor", "install-daemon", "uninstall-daemon"]
+  if (!globalActions.includes(action || "")) {
+    if (isGlobal) {
+      const { JFL_PATHS, ensureJflDirs } = await import("../utils/jfl-paths.js")
+      ensureJflDirs()
+    } else {
+      const jflDir = path.join(projectRoot, ".jfl")
+      if (!fs.existsSync(jflDir)) {
+        fs.mkdirSync(jflDir, { recursive: true })
+      }
     }
   }
 
@@ -1657,7 +1929,8 @@ export async function contextHubCommand(
         journalDir: fs.existsSync(journalDir) ? journalDir : null,
       })
 
-      const server = createServer(projectRoot, port, eventBus)
+      const flowEngine = new FlowEngine(eventBus, projectRoot)
+      const server = createServer(projectRoot, port, eventBus, flowEngine)
       let isListening = false
 
       // When spawned as daemon, ignore SIGTERM during startup grace period.
@@ -1740,9 +2013,13 @@ export async function contextHubCommand(
           // Don't exit - memory is optional
         }
 
-        // Start flow engine
+        // Start flow engine (with child hub connections for portfolio mode)
         try {
-          const flowEngine = new FlowEngine(eventBus, projectRoot)
+          const children = getChildHubs(projectRoot)
+          if (children.length > 0) {
+            flowEngine.setChildren(children)
+            console.log(`[${timestamp}] Portfolio mode: connecting to ${children.length} child hub(s)`)
+          }
           const flowCount = await flowEngine.start()
           if (flowCount > 0) {
             console.log(`[${timestamp}] Flow engine started with ${flowCount} active flow(s)`)

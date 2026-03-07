@@ -323,7 +323,13 @@ async function checkHooksAndSession(cwd: string): Promise<ValidationCheck[]> {
 
   // Check for invalid hook names (like SessionStart:service)
   const invalidHooks: string[] = [];
-  const validHookNames = ['SessionStart', 'Stop', 'PreCompact', 'UserPromptSubmit'];
+  const validHookNames = [
+    'SessionStart', 'Stop', 'PreCompact', 'UserPromptSubmit',
+    'PostToolUse', 'PreToolUse',
+    'TaskCompleted', 'TaskStarted',
+    'SubagentStart', 'SubagentStop',
+    'Notification',
+  ];
 
   for (const hookName of Object.keys(settings.hooks)) {
     if (!validHookNames.includes(hookName)) {

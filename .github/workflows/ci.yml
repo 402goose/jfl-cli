@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - run: npm ci
+
+      - name: Type Check (strict)
+        run: npx tsc --build --noEmit
+
+      - name: Unit Tests
+        run: npx jest --verbose --coverage
+        env:
+          JFL_TELEMETRY: 'off'
+          NODE_OPTIONS: '--experimental-vm-modules'
+
+      - name: Upload Coverage
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: coverage/
+          retention-days: 14
+
+      - name: Test Summary
+        if: always()
+        run: |
+          echo "### Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          if [ -f coverage/coverage-summary.json ]; then
+            node -e "
+              const s = require('./coverage/coverage-summary.json').total;
+              console.log('| Metric | Coverage |');
+              console.log('|--------|----------|');
+              ['lines','statements','branches','functions'].forEach(k =>
+                console.log('| ' + k + ' | ' + s[k].pct + '% |'));
+            " >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "Coverage report not available" >> $GITHUB_STEP_SUMMARY
+          fi

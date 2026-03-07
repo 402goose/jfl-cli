@@ -87,7 +87,7 @@ program.hook('postAction', (_thisCommand, actionCommand) => {
 const HELP_GROUPS: Record<string, string[]> = {
   "Getting Started": ["init", "status", "hud", "doctor"],
   "Daily Use": ["synopsis", "ask", "improve", "events", "voice"],
-  "Management": ["services", "flows", "hooks", "scope", "memory", "telemetry", "context-hub", "skills"],
+  "Management": ["services", "portfolio", "flows", "hooks", "scope", "memory", "eval", "telemetry", "context-hub", "skills"],
   "Platform": ["login", "deploy", "wallet", "preferences"],
   "Advanced": ["peter", "orchestrate", "openclaw", "ralph", "agent"],
 }
@@ -261,7 +261,7 @@ program
 program
   .command("scope")
   .description("View and manage service context scopes")
-  .argument("[action]", "list, set, test")
+  .argument("[action]", "list, set, test, viz")
   .argument("[args...]", "Arguments for the action")
   .action(async (action, args) => {
     await scopeCommand(action, ...args)
@@ -1019,12 +1019,21 @@ openclaw
   })
 
 // ============================================================================
+// EVAL FRAMEWORK
+// ============================================================================
+
+registerEvalCommand(program)
+registerPortfolioCommand(program)
+
+// ============================================================================
 // TELEMETRY
 // ============================================================================
 
 const telemetryCmd = program.command("telemetry").description("Manage anonymous usage telemetry")
 
 import { registerDigestCommand } from "./commands/digest.js"
+import { registerEvalCommand } from "./commands/eval.js"
+import { registerPortfolioCommand } from "./commands/portfolio.js"
 registerDigestCommand(telemetryCmd)
 
 telemetryCmd

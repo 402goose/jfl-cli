@@ -15,6 +15,8 @@ import { execSync } from "child_process"
 
 import { getProjectHubUrl } from "../utils/context-hub-port.js"
 import { telemetry } from "../lib/telemetry.js"
+import { TrajectoryLoader } from "../lib/trajectory-loader.js"
+import type { ExperimentOutcome } from "../types/journal.js"
 
 const CONTEXT_HUB_URL = process.env.CONTEXT_HUB_URL || getProjectHubUrl()
 const TOKEN_FILE = ".jfl/context-hub.token"
@@ -240,6 +242,45 @@ const TOOLS = [
         limit: {
           type: "number",
           description: "Maximum events to return (default: 20)"
+        }
+      }
+    }
+  },
+  {
+    name: "query_experiment_history",
+    description: "Search past experiments, their outcomes, and what was learned. Use before starting new experiments to avoid repeating failures.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {
+        files: {
+          type: "array",
+          items: { type: "string" },
+          description: "Filter by files changed"
+        },
+        minDelta: {
+          type: "number",
+          description: "Min score improvement"
+        },
+        maxAge: {
+          type: "string",
+          description: "Max age e.g. 7d, 30d"
+        },
+        outcome: {
+          type: "string",
+          enum: ["confirmed", "rejected", "inconclusive"],
+          description: "Filter by experiment outcome"
+        },
+        limit: {
+          type: "number",
+          description: "Max results (default: 20)"
+        },
+        type: {
+          type: "string",
+          description: "Filter by entry type (e.g., 'experiment')"
+        },
+        agent: {
+          type: "string",
+          description: "Filter by agent ID"
         }
       }
     }
@@ -757,6 +798,30 @@ async function handleToolCall(name: string, args: any): Promise<string> {
         return `${i + 1}. [${e.type}] from ${e.source} (${time})\n   ${JSON.stringify(e.data).slice(0, 150)}`
       })
       return `${result.count} event(s):\n\n${lines.join('\n\n')}`
+    }
+
+    case "query_experiment_history": {
+      // Find project root by walking up from cwd
+      const projectRoot = findRepoRoot()
+      if (!projectRoot) {
+        return "Not in a JFL project directory."
+      }
+
+      const loader = new TrajectoryLoader(projectRoot)
+      const entries = loader.load({
+        files: args.files,
+        minDelta: args.minDelta,
+        maxAge: args.maxAge,
+        outcome: args.outcome as ExperimentOutcome | undefined,
+        limit: args.limit || 20,
+        type: args.type,
+        agent: args.agent,
+      })
+
+      // Deduplicate entries
+      const deduped = loader.deduplicate(entries)
+
+      return loader.renderForContext(deduped)
     }
 
     default:

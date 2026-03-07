@@ -26,8 +26,9 @@ export interface HookEntry {
 }
 
 export interface HookCommand {
-  type: string;
-  command: string;
+  type: "command" | "http";
+  command?: string;
+  url?: string;
   args?: string[];
   async?: boolean;
 }
@@ -120,12 +121,30 @@ export function validateSettings(settings: any): ValidationError[] {
               error: `Hook command ${cmdIndex} missing "type" field`,
             });
           }
-          if (!cmd.command) {
-            errors.push({
-              hook: hookName,
-              index,
-              error: `Hook command ${cmdIndex} missing "command" field`,
-            });
+
+          if (cmd.type === 'http') {
+            if (!cmd.url) {
+              errors.push({
+                hook: hookName,
+                index,
+                error: `Hook command ${cmdIndex} (http) missing "url" field`,
+              });
+            } else if (!cmd.url.startsWith('http://localhost') && !cmd.url.startsWith('http://127.0.0.1')) {
+              errors.push({
+                hook: hookName,
+                index,
+                error: `Hook command ${cmdIndex} (http) url must be localhost`,
+                fix: 'HTTP hooks should point to http://localhost:<port>/api/hooks',
+              });
+            }
+          } else if (cmd.type === 'command' || !cmd.type) {
+            if (!cmd.command) {
+              errors.push({
+                hook: hookName,
+                index,
+                error: `Hook command ${cmdIndex} missing "command" field`,
+              });
+            }
           }
 
           // Check for context-hub stop in Stop hook (common bug)

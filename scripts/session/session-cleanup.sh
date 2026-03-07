@@ -155,12 +155,21 @@ if [ $MERGE_STATUS -eq 0 ]; then
   # Push to origin
   git push origin "$WORKING_BRANCH" 2>/dev/null || echo "⚠ Push failed - run manually: git push origin $WORKING_BRANCH"
 
-  # Remove worktree if it exists
-  WORKTREE_PATH=$(git worktree list | grep "$BRANCH" | awk '{print $1}' | head -1)
+  # Remove worktree if it exists (NEVER remove the main repo)
+  MAIN_TOPLEVEL=$(git rev-parse --show-toplevel 2>/dev/null)
+  WORKTREE_PATH=$(git worktree list | grep "$BRANCH" | grep -v "(bare)" | awk '{print $1}' | head -1)
   if [ -n "$WORKTREE_PATH" ] && [ -d "$WORKTREE_PATH" ]; then
-    echo "Removing worktree at $WORKTREE_PATH..."
-    rm -rf "$WORKTREE_PATH" 2>/dev/null || true
-    git worktree prune 2>/dev/null || true
+    WORKTREE_REAL=$(cd "$WORKTREE_PATH" && pwd -P)
+    MAIN_REAL=$(cd "$MAIN_TOPLEVEL" && pwd -P)
+    if [ "$WORKTREE_REAL" = "$MAIN_REAL" ]; then
+      echo "⚠ SAFETY: refusing to rm -rf main repo at $WORKTREE_PATH"
+    elif [ "$WORKTREE_REAL" = "$HOME" ] || [ "$WORKTREE_REAL" = "/" ]; then
+      echo "⚠ SAFETY: refusing to rm -rf protected path $WORKTREE_PATH"
+    else
+      echo "Removing worktree at $WORKTREE_PATH..."
+      git worktree remove "$WORKTREE_PATH" --force 2>/dev/null || true
+      git worktree prune 2>/dev/null || true
+    fi
   fi
 
   # Delete the branch
@@ -227,12 +236,21 @@ else
     # Push to origin
     git push origin "$WORKING_BRANCH" 2>/dev/null || echo "⚠ Push failed - run manually: git push origin $WORKING_BRANCH"
 
-    # Remove worktree
-    WORKTREE_PATH=$(git worktree list | grep "$BRANCH" | awk '{print $1}' | head -1)
+    # Remove worktree if it exists (NEVER remove the main repo)
+    MAIN_TOPLEVEL=$(git rev-parse --show-toplevel 2>/dev/null)
+    WORKTREE_PATH=$(git worktree list | grep "$BRANCH" | grep -v "(bare)" | awk '{print $1}' | head -1)
     if [ -n "$WORKTREE_PATH" ] && [ -d "$WORKTREE_PATH" ]; then
-      echo "Removing worktree at $WORKTREE_PATH..."
-      rm -rf "$WORKTREE_PATH" 2>/dev/null || true
-      git worktree prune 2>/dev/null || true
+      WORKTREE_REAL=$(cd "$WORKTREE_PATH" && pwd -P)
+      MAIN_REAL=$(cd "$MAIN_TOPLEVEL" && pwd -P)
+      if [ "$WORKTREE_REAL" = "$MAIN_REAL" ]; then
+        echo "⚠ SAFETY: refusing to rm -rf main repo at $WORKTREE_PATH"
+      elif [ "$WORKTREE_REAL" = "$HOME" ] || [ "$WORKTREE_REAL" = "/" ]; then
+        echo "⚠ SAFETY: refusing to rm -rf protected path $WORKTREE_PATH"
+      else
+        echo "Removing worktree at $WORKTREE_PATH..."
+        git worktree remove "$WORKTREE_PATH" --force 2>/dev/null || true
+        git worktree prune 2>/dev/null || true
+      fi
     fi
 
     # Delete the branch

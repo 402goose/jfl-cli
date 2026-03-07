@@ -1,129 +1,39 @@
 /**
  * Context Hub Web Dashboard
  *
- * Serves a Preact+HTM SPA from the existing Context Hub HTTP server.
- * Zero build step — ships as template strings compiled by normal tsc.
+ * Serves pre-built Vite+Preact SPA from dist/dashboard-static/.
+ * Static files built at publish time, served by Context Hub at runtime.
  *
- * @purpose HTML generator + route handler for Context Hub web dashboard
+ * @purpose Static file server + SPA fallback for Context Hub web dashboard
  */
 
 import * as http from "http"
-import { getDashboardStyles } from "./styles.js"
-import { getComponentsJS } from "./components.js"
-import { getPagesJS } from "./pages.js"
+import * as fs from "fs"
+import * as path from "path"
+import { fileURLToPath } from "url"
 
-export function generateDashboardHTML(projectName: string, port: number): string {
-  const styles = getDashboardStyles()
-  const components = getComponentsJS()
-  const pages = getPagesJS()
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>${escapeHtml(projectName)} - Context Hub</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script type="importmap">
-  {
-    "imports": {
-      "preact": "https://esm.sh/preact@10.24.3",
-      "preact/hooks": "https://esm.sh/preact@10.24.3/hooks",
-      "htm": "https://esm.sh/htm@3.1.1"
-    }
-  }
-  </script>
-  <style>${styles}</style>
-</head>
-<body>
-  <div id="app"></div>
-  <script type="module">
-    import { h, render } from 'preact'
-    import { useState, useEffect, useRef } from 'preact/hooks'
-    import htm from 'htm'
-
-    const html = htm.bind(h)
-
-    // Auth: read token from URL, store in localStorage, strip from URL
-    const urlParams = new URLSearchParams(window.location.search)
-    const urlToken = urlParams.get('token')
-    if (urlToken) {
-      localStorage.setItem('jfl-token', urlToken)
-      const clean = new URL(window.location)
-      clean.searchParams.delete('token')
-      window.history.replaceState({}, '', clean.toString())
-    }
-
-    function getToken() {
-      return localStorage.getItem('jfl-token') || ''
-    }
-
-    async function apiFetch(path, opts = {}) {
-      const token = getToken()
-      const headers = {
-        'Content-Type': 'application/json',
-        ...(token ? { 'Authorization': 'Bearer ' + token } : {}),
-        ...(opts.headers || {})
-      }
-      const res = await fetch(path, { ...opts, headers })
-      if (res.status === 401) {
-        document.getElementById('app').innerHTML = '<div style="padding: 3rem; text-align: center; color: var(--error);"><h2>Unauthorized</h2><p style="color: var(--text-soft); margin-top: 0.5rem;">Token expired or invalid. Run: jfl context-hub dashboard</p></div>'
-        throw new Error('Unauthorized')
-      }
-      return res.json()
-    }
-
-    // Components
-    ${components}
-
-    // Pages
-    ${pages}
-
-    // App
-    function App() {
-      const [page, setPage] = useState('overview')
-
-      const pageComponent = {
-        overview: OverviewPage,
-        journal: JournalPage,
-        agents: AgentsPage,
-        events: EventsPage,
-        sessions: SessionsPage,
-        projects: ProjectsPage,
-      }[page] || OverviewPage
-
-      return html\`
-        <\${Nav}
-          currentPage=\${page}
-          setPage=\${setPage}
-          projectName="${escapeHtml(projectName)}"
-          port=\${${port}}
-        />
-        <div class="main-content">
-          <\${pageComponent} />
-        </div>
-      \`
-    }
-
-    render(html\`<\${App} />\`, document.getElementById('app'))
-  </script>
-</body>
-</html>`
+const MIME_TYPES: Record<string, string> = {
+  ".html": "text/html; charset=utf-8",
+  ".js": "application/javascript; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".ico": "image/x-icon",
+  ".woff": "font/woff",
+  ".woff2": "font/woff2",
 }
 
-function escapeHtml(str: string): string {
-  return str
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#39;")
+function getStaticDir(): string {
+  return path.resolve(__dirname, "../dashboard-static")
 }
 
 export function handleDashboardRoutes(
   req: http.IncomingMessage,
   res: http.ServerResponse,
-  projectRoot: string,
+  _projectRoot: string,
   port: number
 ): boolean {
   const url = new URL(req.url || "/", `http://localhost:${port}`)
@@ -132,14 +42,47 @@ export function handleDashboardRoutes(
     return false
   }
 
-  // Derive project name from directory
-  const projectName = projectRoot.split("/").pop() || "Context Hub"
+  const staticDir = getStaticDir()
 
-  const html = generateDashboardHTML(projectName, port)
-  res.writeHead(200, {
-    "Content-Type": "text/html; charset=utf-8",
-    "Cache-Control": "no-cache",
-  })
-  res.end(html)
+  if (!fs.existsSync(staticDir)) {
+    res.writeHead(500, { "Content-Type": "application/json" })
+    res.end(JSON.stringify({ error: "Dashboard not built. Run: cd dashboard && npm run build" }))
+    return true
+  }
+
+  const relativePath = url.pathname.replace(/^\/dashboard\/?/, "") || "index.html"
+  const filePath = path.join(staticDir, relativePath)
+  const normalizedPath = path.normalize(filePath)
+  if (!normalizedPath.startsWith(staticDir)) {
+    res.writeHead(403, { "Content-Type": "application/json" })
+    res.end(JSON.stringify({ error: "Forbidden" }))
+    return true
+  }
+
+  if (fs.existsSync(filePath) && fs.statSync(filePath).isFile()) {
+    const ext = path.extname(filePath)
+    const contentType = MIME_TYPES[ext] || "application/octet-stream"
+    const isAsset = relativePath.startsWith("assets/")
+
+    res.writeHead(200, {
+      "Content-Type": contentType,
+      "Cache-Control": isAsset ? "public, max-age=31536000, immutable" : "no-cache",
+    })
+    fs.createReadStream(filePath).pipe(res)
+    return true
+  }
+
+  const indexPath = path.join(staticDir, "index.html")
+  if (fs.existsSync(indexPath)) {
+    res.writeHead(200, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-cache",
+    })
+    fs.createReadStream(indexPath).pipe(res)
+    return true
+  }
+
+  res.writeHead(404, { "Content-Type": "application/json" })
+  res.end(JSON.stringify({ error: "Dashboard index.html not found" }))
   return true
 }

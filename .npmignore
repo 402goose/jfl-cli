@@ -28,6 +28,9 @@ tests/
 *.spec.js
 coverage/
 
+# Dashboard source (we ship dist/dashboard-static/ only)
+dashboard/
+
 # Build artifacts
 *.tsbuildinfo
 

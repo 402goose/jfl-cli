@@ -324,7 +324,7 @@ export async function startDashboard(): Promise<void> {
   }
 
   // Handle service selection
-  serviceList.rows.on("select", async (item: any, index: number) => {
+  (serviceList as any).rows.on("select", async (item: any, index: number) => {
     if (index < 0 || index >= services.length) return
 
     selectedService = services[index].name
