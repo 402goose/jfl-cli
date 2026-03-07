@@ -1159,6 +1159,366 @@ export async function phoneHomeToGTM(
 }
 
 /**
+ * GTM sync payload - comprehensive session summary for portfolio
+ */
+export interface GTMSyncPayload {
+  gtm_name: string;
+  sync_timestamp: string;
+  session_branch: string;
+  journal: {
+    entry_count: number;
+    since: string;
+    types: {
+      feature: number;
+      fix: number;
+      decision: number;
+      discovery: number;
+      milestone: number;
+      other: number;
+    };
+    files_aggregated: string[];
+    incomplete_aggregated: string[];
+    next_steps: string[];
+  };
+  git: {
+    commits: GitCommitSummary[];
+    files_changed: number;
+    lines_added: number;
+    lines_removed: number;
+    working_branch: string;
+  };
+  agent_notified: boolean;
+  errors: string[];
+}
+
+/**
+ * Phone home to Portfolio - sync full GTM journal content up to parent portfolio
+ *
+ * Mirrors phoneHomeToGTM() but for the GTM→Portfolio direction.
+ * Reads GTM journal entries since last sync, copies journal files to portfolio,
+ * writes aggregated service-sync entry to portfolio journal, and emits a hub event.
+ *
+ * IMPORTANT: Never blocks session end. Collects all errors and returns partial success.
+ */
+export async function phoneHomeToPortfolio(
+  gtmPath: string,
+  portfolioPath: string,
+  sessionBranch: string
+): Promise<GTMSyncPayload> {
+  const errors: string[] = [];
+
+  // Load and validate portfolio config
+  const portfolioConfigPath = path.join(portfolioPath, ".jfl", "config.json");
+  if (!fs.existsSync(portfolioConfigPath)) {
+    throw new Error(`Portfolio config not found: ${portfolioConfigPath}`);
+  }
+
+  let portfolioConfig: GTMConfig;
+  try {
+    portfolioConfig = JSON.parse(fs.readFileSync(portfolioConfigPath, "utf-8"));
+  } catch (error: any) {
+    throw new Error(`Failed to load portfolio config: ${error.message}`);
+  }
+
+  if (portfolioConfig.type !== "portfolio") {
+    throw new Error(`Expected portfolio type, got: ${portfolioConfig.type}`);
+  }
+
+  // Load GTM config for name and working_branch
+  const gtmConfig = loadServiceConfig(gtmPath);
+  const gtmName = gtmConfig.name;
+  const workingBranch = gtmConfig.working_branch || "main";
+
+  const syncTimestamp = new Date().toISOString();
+
+  // Determine `since` timestamp from portfolio's registered_services
+  let since: string;
+  try {
+    const registeredGTM = (portfolioConfig.registered_services || []).find(
+      (s) => s.name === gtmName
+    );
+    if (registeredGTM?.last_sync) {
+      since = registeredGTM.last_sync;
+    } else {
+      // Fallback: 7 days ago
+      since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    }
+  } catch (error: any) {
+    since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    errors.push(`Failed to determine last sync time: ${error.message}`);
+  }
+
+  // Read GTM journal entries since `since`
+  const journalData: GTMSyncPayload["journal"] = {
+    entry_count: 0,
+    since,
+    types: { feature: 0, fix: 0, decision: 0, discovery: 0, milestone: 0, other: 0 },
+    files_aggregated: [],
+    incomplete_aggregated: [],
+    next_steps: [],
+  };
+
+  let journalFilesProcessed: string[] = [];
+
+  try {
+    const gtmJournalPath = path.join(gtmPath, ".jfl", "journal");
+    if (fs.existsSync(gtmJournalPath)) {
+      const journalFiles = fs
+        .readdirSync(gtmJournalPath)
+        .filter((f) => f.endsWith(".jsonl") && !f.startsWith("service-"));
+
+      journalFilesProcessed = journalFiles;
+
+      for (const file of journalFiles) {
+        const filePath = path.join(gtmJournalPath, file);
+        const content = fs.readFileSync(filePath, "utf-8");
+        const lines = content.trim().split("\n").filter((l) => l.length > 0);
+
+        for (const line of lines) {
+          try {
+            const entry = JSON.parse(line);
+
+            // Filter by since timestamp
+            if (entry.ts && entry.ts < since) continue;
+
+            journalData.entry_count++;
+
+            const type = entry.type || "other";
+            if (type in journalData.types) {
+              journalData.types[type as keyof typeof journalData.types]++;
+            } else {
+              journalData.types.other++;
+            }
+
+            // Aggregate files
+            if (Array.isArray(entry.files)) {
+              for (const f of entry.files) {
+                if (!journalData.files_aggregated.includes(f)) {
+                  journalData.files_aggregated.push(f);
+                }
+              }
+            }
+
+            // Aggregate incomplete items
+            if (Array.isArray(entry.incomplete)) {
+              for (const item of entry.incomplete) {
+                if (!journalData.incomplete_aggregated.includes(item)) {
+                  journalData.incomplete_aggregated.push(item);
+                }
+              }
+            }
+
+            // Aggregate next steps
+            if (entry.next && !journalData.next_steps.includes(entry.next)) {
+              journalData.next_steps.push(entry.next);
+            }
+          } catch {
+            // Skip invalid JSON lines
+          }
+        }
+      }
+    }
+  } catch (error: any) {
+    errors.push(`Failed to read GTM journals: ${error.message}`);
+  }
+
+  // Read recent git activity
+  const gitData: GTMSyncPayload["git"] = {
+    commits: [],
+    files_changed: 0,
+    lines_added: 0,
+    lines_removed: 0,
+    working_branch: workingBranch,
+  };
+
+  try {
+    const sinceDate = new Date(since).toISOString();
+    const commitLog = execSync(
+      `git log --format='%H|%s|%an|%ct' --since="${sinceDate}" 2>/dev/null || true`,
+      { cwd: gtmPath, encoding: "utf-8" }
+    ).trim();
+
+    if (commitLog) {
+      for (const line of commitLog.split("\n").filter((l) => l.length > 0)) {
+        const [hash, message, author, timestamp] = line.split("|");
+        gitData.commits.push({
+          hash: hash.substring(0, 8),
+          message,
+          author,
+          timestamp: new Date(parseInt(timestamp) * 1000).toISOString(),
+          files_changed: 0,
+        });
+      }
+    }
+
+    const diffStat = execSync(
+      `git diff --numstat ${workingBranch}..HEAD 2>/dev/null || true`,
+      { cwd: gtmPath, encoding: "utf-8" }
+    ).trim();
+
+    if (diffStat) {
+      const lines = diffStat.split("\n");
+      gitData.files_changed = lines.length;
+      for (const line of lines) {
+        const [added, removed] = line.split("\t");
+        gitData.lines_added += parseInt(added) || 0;
+        gitData.lines_removed += parseInt(removed) || 0;
+      }
+    }
+  } catch (error: any) {
+    errors.push(`Failed to collect git activity: ${error.message}`);
+  }
+
+  // Ensure portfolio journal directory exists
+  const portfolioJournalPath = path.join(portfolioPath, ".jfl", "journal");
+  try {
+    if (!fs.existsSync(portfolioJournalPath)) {
+      fs.mkdirSync(portfolioJournalPath, { recursive: true });
+    }
+  } catch (error: any) {
+    errors.push(`Failed to create portfolio journal dir: ${error.message}`);
+  }
+
+  // Copy GTM journal files to portfolio with gtm- prefix
+  try {
+    const gtmJournalDir = path.join(gtmPath, ".jfl", "journal");
+    if (fs.existsSync(gtmJournalDir) && fs.existsSync(portfolioJournalPath)) {
+      for (const file of journalFilesProcessed) {
+        const src = path.join(gtmJournalDir, file);
+        const dst = path.join(portfolioJournalPath, `gtm-${gtmName}-${file}`);
+        fs.copyFileSync(src, dst);
+      }
+    }
+  } catch (error: any) {
+    errors.push(`Failed to copy journal files to portfolio: ${error.message}`);
+  }
+
+  // Build aggregated journal entry for portfolio
+  const payload: GTMSyncPayload = {
+    gtm_name: gtmName,
+    sync_timestamp: syncTimestamp,
+    session_branch: sessionBranch,
+    journal: journalData,
+    git: gitData,
+    agent_notified: false,
+    errors,
+  };
+
+  try {
+    const portfolioCurrentBranch = execSync(
+      "git branch --show-current 2>/dev/null || echo 'main'",
+      { cwd: portfolioPath, encoding: "utf-8" }
+    ).trim();
+
+    const portfolioJournalFile = path.join(
+      portfolioJournalPath,
+      `${portfolioCurrentBranch}.jsonl`
+    );
+
+    const sinceDate = new Date(since);
+    const sinceFmt = `${sinceDate.getFullYear()}-${String(sinceDate.getMonth() + 1).padStart(2, "0")}-${String(sinceDate.getDate()).padStart(2, "0")}`;
+
+    const detailParts: string[] = [
+      `Git: ${gitData.commits.length} commits, ${gitData.files_changed} files, +${gitData.lines_added}/-${gitData.lines_removed} lines`,
+      `Journal: ${journalData.entry_count} entries (${journalData.types.feature} feature, ${journalData.types.fix} fix, ${journalData.types.decision} decision, ${journalData.types.discovery} discovery)`,
+    ];
+
+    if (journalData.files_aggregated.length > 0) {
+      detailParts.push(`Files: ${journalData.files_aggregated.join(", ")}`);
+    }
+
+    if (journalData.incomplete_aggregated.length > 0) {
+      detailParts.push(`Incomplete: ${journalData.incomplete_aggregated.join("; ")}`);
+    }
+
+    if (errors.length > 0) {
+      detailParts.push(`Errors: ${errors.join("; ")}`);
+    }
+
+    const portfolioEntry = {
+      v: 1,
+      ts: syncTimestamp,
+      session: portfolioCurrentBranch,
+      type: "service-sync",
+      status: "complete",
+      title: `GTM sync: ${gtmName}`,
+      summary: `${gtmName} synced ${journalData.entry_count} journal entries and ${gitData.commits.length} commits since ${sinceFmt}.`,
+      detail: detailParts.join("\n"),
+      service: gtmName,
+      session_branch: sessionBranch,
+      files: journalData.files_aggregated,
+      incomplete: journalData.incomplete_aggregated,
+      next: journalData.next_steps[0] || undefined,
+      sync_payload: payload,
+    };
+
+    fs.appendFileSync(portfolioJournalFile, JSON.stringify(portfolioEntry) + "\n");
+  } catch (error: any) {
+    errors.push(`Failed to write portfolio journal entry: ${error.message}`);
+  }
+
+  // Update registered_services last_sync in portfolio config
+  try {
+    updateServiceSync(portfolioPath, gtmName, syncTimestamp);
+  } catch (error: any) {
+    errors.push(`Failed to update portfolio registered_services: ${error.message}`);
+  }
+
+  // Write inbox trigger for portfolio hooks
+  try {
+    const inboxDir = path.join(portfolioPath, ".jfl", "inbox");
+    if (!fs.existsSync(inboxDir)) {
+      fs.mkdirSync(inboxDir, { recursive: true });
+    }
+
+    const triggerFile = path.join(
+      inboxDir,
+      `gtm-update-${gtmName}-${Date.now()}.trigger`
+    );
+    fs.writeFileSync(
+      triggerFile,
+      JSON.stringify({
+        gtm: gtmName,
+        timestamp: syncTimestamp,
+        entries: journalData.entry_count,
+        commits: gitData.commits.length,
+        message: `GTM ${gtmName} session ended — journals synced to portfolio`,
+      })
+    );
+  } catch (error: any) {
+    errors.push(`Failed to write portfolio inbox trigger: ${error.message}`);
+  }
+
+  // Emit Context Hub event (non-fatal)
+  try {
+    const tokenPath = path.join(portfolioPath, ".jfl", "context-hub.token");
+    if (fs.existsSync(tokenPath)) {
+      const token = fs.readFileSync(tokenPath, "utf-8").trim();
+      const { getProjectPort } = await import("../utils/context-hub-port.js");
+      const port = getProjectPort(portfolioPath);
+      await fetch(`http://localhost:${port}/api/events`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          type: "portfolio:gtm-sync",
+          source: gtmName,
+          data: payload,
+        }),
+        signal: AbortSignal.timeout(5000),
+      });
+      payload.agent_notified = true;
+    }
+  } catch {
+    // Hub not running is the expected case — silently continue
+  }
+
+  return payload;
+}
+
+/**
  * Helper: Load service config with error handling
  */
 function loadServiceConfig(servicePath: string): ServiceConfig {

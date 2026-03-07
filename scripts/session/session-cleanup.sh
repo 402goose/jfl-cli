@@ -20,6 +20,17 @@ get_working_branch() {
 
 WORKING_BRANCH=$(get_working_branch)
 
+# Phone home to portfolio (non-fatal helper)
+phone_home_to_portfolio() {
+    local project_root="$1"
+    local portfolio_path
+    portfolio_path=$(jq -r '.portfolio_parent // empty' "$project_root/.jfl/config.json" 2>/dev/null)
+    [[ -z "$portfolio_path" ]] && return 0
+    [[ ! -d "$portfolio_path" ]] && echo "⚠ Portfolio path not found — skipping portfolio sync" && return 0
+    echo "Syncing journals to portfolio..."
+    jfl portfolio phone-home 2>/dev/null || echo "⚠ Portfolio phone-home failed (non-fatal)"
+}
+
 # Stop background processes first
 echo "Stopping background processes..."
 
@@ -155,6 +166,9 @@ if [ $MERGE_STATUS -eq 0 ]; then
   # Push to origin
   git push origin "$WORKING_BRANCH" 2>/dev/null || echo "⚠ Push failed - run manually: git push origin $WORKING_BRANCH"
 
+  # Sync journals to portfolio (if configured)
+  phone_home_to_portfolio "$MAIN_REPO"
+
   # Remove worktree if it exists (NEVER remove the main repo)
   MAIN_TOPLEVEL=$(git rev-parse --show-toplevel 2>/dev/null)
   WORKTREE_PATH=$(git worktree list | grep "$BRANCH" | grep -v "(bare)" | awk '{print $1}' | head -1)
@@ -235,6 +249,9 @@ else
 
     # Push to origin
     git push origin "$WORKING_BRANCH" 2>/dev/null || echo "⚠ Push failed - run manually: git push origin $WORKING_BRANCH"
+
+    # Sync journals to portfolio (if configured)
+    phone_home_to_portfolio "$MAIN_REPO"
 
     # Remove worktree if it exists (NEVER remove the main repo)
     MAIN_TOPLEVEL=$(git rev-parse --show-toplevel 2>/dev/null)
