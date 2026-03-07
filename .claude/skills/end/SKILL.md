@@ -1075,12 +1075,12 @@ done
 EXIT_CODE=${PIPESTATUS[0]}
 
 # ============================================================
-# STEP 5.5: Phone Home to GTM (if in service)
+# STEP 5.5: Sync to GTM (if in service)
 # ============================================================
 
 if [[ "$SYNC_TO_GTM" == "true" && -n "$GTM_PARENT" ]]; then
     echo ""
-    echo "📡 Phoning home to GTM workspace..."
+    echo "📡 Syncing to GTM workspace..."
 
     # Validate GTM parent exists
     if [[ ! -d "$GTM_PARENT" ]]; then
@@ -1093,89 +1093,50 @@ if [[ "$SYNC_TO_GTM" == "true" && -n "$GTM_PARENT" ]]; then
             echo "⚠️  Parent is not a GTM workspace (type: $GTM_TYPE)"
             echo "Skipping sync. Session cleaned up locally."
         else
-            # Call phoneHomeToGTM via jfl CLI (uses TypeScript function)
-            if command -v jfl >/dev/null 2>&1; then
-                SYNC_RESULT=$(jfl services phone-home "$GTM_PARENT" "$BRANCH" 2>&1)
-                SYNC_EXIT=$?
+            # 1. Sync journal entries
+            mkdir -p "$GTM_PARENT/.jfl/journal"
 
-                if [[ $SYNC_EXIT -eq 0 ]]; then
-                    # Parse result JSON
-                    COMMITS=$(echo "$SYNC_RESULT" | jq -r '.git.commits | length' 2>/dev/null || echo "0")
-                    FILES=$(echo "$SYNC_RESULT" | jq -r '.git.files_changed' 2>/dev/null || echo "0")
-                    JOURNAL_ENTRIES=$(echo "$SYNC_RESULT" | jq -r '.journal.entry_count' 2>/dev/null || echo "0")
-                    DURATION_MIN=$(echo "$SYNC_RESULT" | jq -r '(.session.duration_seconds / 60 | floor)' 2>/dev/null || echo "0")
+            SYNCED_COUNT=0
+            for journal in .jfl/journal/*.jsonl; do
+                if [[ -f "$journal" ]]; then
+                    BASENAME=$(basename "$journal")
+                    TARGET="$GTM_PARENT/.jfl/journal/service-${SERVICE_NAME}-${BASENAME}"
 
-                    # Content sync stats
-                    KNOWLEDGE_COUNT=$(echo "$SYNC_RESULT" | jq -r '.content_synced.knowledge_files | length' 2>/dev/null || echo "0")
-                    CONTENT_COUNT=$(echo "$SYNC_RESULT" | jq -r '.content_synced.content_files | length' 2>/dev/null || echo "0")
-                    CONFIG_COUNT=$(echo "$SYNC_RESULT" | jq -r '.content_synced.config_files | length' 2>/dev/null || echo "0")
-                    CLAUDE_MD_SYNCED=$(echo "$SYNC_RESULT" | jq -r '.content_synced.claude_md_synced' 2>/dev/null || echo "false")
-                    TOTAL_BYTES=$(echo "$SYNC_RESULT" | jq -r '.content_synced.total_bytes' 2>/dev/null || echo "0")
-                    ERROR_COUNT=$(echo "$SYNC_RESULT" | jq -r '.errors | length' 2>/dev/null || echo "0")
-
-                    echo "  ✓ Session summary synced"
-                    echo "  ✓ Git activity: $COMMITS commits, $FILES files"
-                    echo "  ✓ Journal: $JOURNAL_ENTRIES entries"
-                    echo "  ✓ Duration: ${DURATION_MIN}min"
-
-                    # Display content sync if any files were synced
-                    TOTAL_CONTENT_FILES=$((KNOWLEDGE_COUNT + CONTENT_COUNT + CONFIG_COUNT))
-                    if [[ "$TOTAL_CONTENT_FILES" -gt 0 ]] || [[ "$CLAUDE_MD_SYNCED" == "true" ]]; then
-                        echo ""
-                        echo "  📁 Content synced to GTM:"
-                        [[ "$KNOWLEDGE_COUNT" -gt 0 ]] && echo "     • Knowledge: $KNOWLEDGE_COUNT files"
-                        [[ "$CONTENT_COUNT" -gt 0 ]] && echo "     • Content: $CONTENT_COUNT files"
-                        [[ "$CONFIG_COUNT" -gt 0 ]] && echo "     • Config: $CONFIG_COUNT files"
-                        [[ "$CLAUDE_MD_SYNCED" == "true" ]] && echo "     • CLAUDE.md"
-
-                        # Human-readable bytes
-                        if [[ "$TOTAL_BYTES" -gt 1048576 ]]; then
-                            SIZE_MB=$(echo "scale=1; $TOTAL_BYTES / 1048576" | bc)
-                            echo "     Total: ${SIZE_MB}MB"
-                        elif [[ "$TOTAL_BYTES" -gt 1024 ]]; then
-                            SIZE_KB=$(echo "scale=1; $TOTAL_BYTES / 1024" | bc)
-                            echo "     Total: ${SIZE_KB}KB"
-                        elif [[ "$TOTAL_BYTES" -gt 0 ]]; then
-                            echo "     Total: ${TOTAL_BYTES} bytes"
-                        fi
-                    fi
-
-                    if [[ "$ERROR_COUNT" -gt 0 ]]; then
-                        echo "  ⚠️  $ERROR_COUNT error(s) during sync (partial success)"
-                        # Errors are non-blocking
-                    fi
-
-                    echo ""
-                    echo "✅ Phone home complete (GTM fully updated)"
-                else
-                    # Fallback to basic sync if phone-home command not available
-                    echo "  ⚠️  Phone home command not available, using basic sync"
-
-                    # Basic sync (copy journals only)
-                    mkdir -p "$GTM_PARENT/.jfl/journal"
-
-                    SYNCED_COUNT=0
-                    for journal in .jfl/journal/*.jsonl; do
-                        if [[ -f "$journal" ]]; then
-                            BASENAME=$(basename "$journal")
-                            TARGET="$GTM_PARENT/.jfl/journal/service-${SERVICE_NAME}-${BASENAME}"
-                            cp "$journal" "$TARGET"
-                            ((SYNCED_COUNT++))
-                        fi
-                    done
-
-                    # Update GTM registry
-                    cd "$GTM_PARENT"
-                    TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-                    jq --arg name "$SERVICE_NAME" --arg ts "$TIMESTAMP" \
-                       '(.registered_services // []) |= (if any(.name == $name) then map(if .name == $name then .last_sync = $ts else . end) else . + [{"name": $name, "last_sync": $ts}] end)' \
-                       .jfl/config.json > .jfl/config.json.tmp && mv .jfl/config.json.tmp .jfl/config.json
-
-                    echo "  ✓ Basic sync complete ($SYNCED_COUNT journal files)"
+                    # Copy journal with preserved permissions
+                    cp "$journal" "$TARGET"
+                    ((SYNCED_COUNT++))
+                    echo "  ✓ Synced: $BASENAME"
                 fi
-            else
-                echo "  ⚠️  jfl command not found, skipping sync"
-            fi
+            done
+
+            # 2. Update GTM's last_sync timestamp
+            cd "$GTM_PARENT"
+            TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+            # Use jq to update the timestamp (create registered_services if needed)
+            jq --arg name "$SERVICE_NAME" \
+               --arg ts "$TIMESTAMP" \
+               '(.registered_services // []) |= (
+                 if any(.name == $name) then
+                   map(if .name == $name then .last_sync = $ts else . end)
+                 else
+                   . + [{"name": $name, "last_sync": $ts}]
+                 end
+               )' \
+               .jfl/config.json > .jfl/config.json.tmp && \
+               mv .jfl/config.json.tmp .jfl/config.json
+
+            # 3. Create sync entry in GTM journal
+            GTM_SESSION=$(git branch --show-current 2>/dev/null || echo "main")
+            GTM_JOURNAL=".jfl/journal/${GTM_SESSION}.jsonl"
+
+            cat >> "$GTM_JOURNAL" << EOF
+{"v":1,"ts":"$TIMESTAMP","session":"$GTM_SESSION","type":"sync","title":"Service sync: $SERVICE_NAME","summary":"Synced $SYNCED_COUNT journal file(s) from $SERVICE_NAME","service":"$SERVICE_NAME","files_synced":$SYNCED_COUNT}
+EOF
+
+            echo "  ✓ Updated GTM registry"
+            echo ""
+            echo "✅ Sync complete ($SYNCED_COUNT journal file(s) → GTM)"
         fi
     fi
 fi

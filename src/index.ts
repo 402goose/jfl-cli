@@ -100,6 +100,52 @@ const HIDDEN_COMMANDS = new Set([
 
 program.configureHelp({
   formatHelp(cmd, helper) {
+    // For sub-commands, render standard Commander help so arguments/options are visible
+    if (cmd.parent !== null) {
+      const lines: string[] = []
+      const pad = 22
+
+      lines.push("")
+      lines.push(`  Usage: ${helper.commandUsage(cmd)}`)
+
+      const desc = helper.commandDescription(cmd)
+      if (desc) {
+        lines.push("")
+        lines.push(`  ${desc}`)
+      }
+
+      const args = helper.visibleArguments(cmd)
+      if (args.length > 0) {
+        lines.push("")
+        lines.push("  Arguments:")
+        for (const arg of args) {
+          lines.push(`    ${helper.argumentTerm(arg).padEnd(pad)}${helper.argumentDescription(arg)}`)
+        }
+      }
+
+      const opts = helper.visibleOptions(cmd)
+      if (opts.length > 0) {
+        lines.push("")
+        lines.push("  Options:")
+        for (const opt of opts) {
+          lines.push(`    ${helper.optionTerm(opt).padEnd(pad)}${helper.optionDescription(opt)}`)
+        }
+      }
+
+      const cmds = helper.visibleCommands(cmd)
+      if (cmds.length > 0) {
+        lines.push("")
+        lines.push("  Commands:")
+        for (const c of cmds) {
+          lines.push(`    ${helper.subcommandTerm(c).padEnd(pad)}${helper.subcommandDescription(c)}`)
+        }
+      }
+
+      lines.push("")
+      return lines.join("\n")
+    }
+
+    // Root command: custom grouped format
     const lines: string[] = []
     lines.push("")
     lines.push(chalk.bold("  JFL - Just Fucking Launch"))
@@ -318,8 +364,9 @@ program
   })
 
 program
-  .command("onboard <path-or-url>")
+  .command("onboard")
   .description("Onboard a service repo as a service agent")
+  .argument("<path-or-url>", "Local path to service directory, or git URL to clone")
   .option("-n, --name <name>", "Override service name")
   .option("-t, --type <type>", "Override service type (web, api, container, worker, cli, infrastructure, library)")
   .option("-d, --description <desc>", "Override service description")
@@ -329,8 +376,9 @@ program
   })
 
 program
-  .command("orchestrate [name]")
+  .command("orchestrate")
   .description("Execute multi-service orchestration workflows")
+  .argument("[name]", "Orchestration name to run (omit to list available)")
   .option("--dry-run", "Preview orchestration steps without executing")
   .option("--list", "List available orchestrations")
   .option("--create <name>", "Create new orchestration template")
@@ -357,8 +405,10 @@ program
   })
 
 program
-  .command("service-agent <action> [name]")
-  .description("Manage service MCP agents (init, generate, register, list)")
+  .command("service-agent")
+  .description("Manage service MCP agents")
+  .argument("<action>", "init | generate | generate-all | register | unregister | list | clean")
+  .argument("[name]", "Service name (required for generate, unregister)")
   .action(async (action, name) => {
     const { init, generate, generateAll, register, unregister, list, clean } = await import("./commands/service-agent.js")
 
@@ -552,24 +602,28 @@ skills
   .action(listSkillsCommand)
 
 skills
-  .command("install <skills...>")
+  .command("install")
   .description("Install skill(s)")
+  .argument("<skills...>", "Skill name(s) to install")
   .action(installSkillCommand)
 
 skills
-  .command("remove <skills...>")
+  .command("remove")
   .description("Remove skill(s)")
+  .argument("<skills...>", "Skill name(s) to remove")
   .action(removeSkillCommand)
 
 skills
-  .command("update [skill]")
+  .command("update")
   .description("Update installed skill(s)")
+  .argument("[skill]", "Skill name to update (omit to update all)")
   .option("--dry", "Show what would be updated without making changes")
   .action((skill, options) => updateSkillsCommand({ ...options, skillName: skill }))
 
 skills
-  .command("search <query>")
+  .command("search")
   .description("Search for skills")
+  .argument("<query>", "Search query")
   .action(searchSkillsCommand)
 
 // ============================================================================
@@ -713,8 +767,9 @@ memory
   .action(memoryStatusCommand)
 
 memory
-  .command("search <query>")
+  .command("search")
   .description("Search memories")
+  .argument("<query>", "Search query")
   .option("-t, --type <type>", "Filter by type (feature, fix, decision, etc.)")
   .option("-n, --max <n>", "Maximum results", "10")
   .action(memorySearchCommand)
@@ -727,8 +782,9 @@ memory
 
 // Alias: jfl ask <question> → jfl memory search <question>
 program
-  .command("ask <question>")
+  .command("ask")
   .description("Ask a question - searches memory system")
+  .argument("<question>", "Question to search for in memory")
   .option("-t, --type <type>", "Filter by type (feature, fix, decision, etc.)")
   .option("-n, --max <n>", "Maximum results", "5")
   .action(async (question, options) => {
@@ -1092,8 +1148,9 @@ program
 const agent = program.command("agent").description("Manage narrowly-scoped agents")
 
 agent
-  .command("init <name>")
+  .command("init")
   .description("Scaffold a new agent (manifest + policy + flows)")
+  .argument("<name>", "Agent name (lowercase, hyphens allowed)")
   .option("-d, --description <desc>", "Agent description")
   .action(async (name, options) => {
     await agentCommand("init", name, { description: options.description })
@@ -1107,8 +1164,9 @@ agent
   })
 
 agent
-  .command("status <name>")
+  .command("status")
   .description("Show agent health and config")
+  .argument("<name>", "Agent name")
   .action(async (name) => {
     await agentCommand("status", name)
   })
@@ -1124,8 +1182,9 @@ agent.action(async () => {
 const gtm = program.command("gtm").description("GTM workspace management")
 
 gtm
-  .command("process-service-update [event-file]")
+  .command("process-service-update")
   .description("Process service sync notification (called by hooks)")
+  .argument("[event-file]", "Path to service sync event JSON file")
   .action(async (eventFile) => {
     const { gtmProcessUpdate } = await import("./commands/gtm-process-update.js")
     await gtmProcessUpdate(eventFile)
