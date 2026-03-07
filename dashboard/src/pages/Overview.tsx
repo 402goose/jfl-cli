@@ -37,7 +37,10 @@ export function OverviewPage({ status }: OverviewProps) {
   const journalItems = journal.data || []
 
   const healthyChildren = children.filter((c) => c.status === "ok").length
-  const serviceCount = Object.keys(discoveredServices).length
+  const registeredCount = config?.registered_services?.length || 0
+  const discoveredCount = Object.keys(discoveredServices).length
+  const serviceCount = Math.max(registeredCount, discoveredCount)
+  const openclawCount = config?.openclaw_agents?.length || 0
   const agentGroups = groupAgentsByProduct(agents)
 
   return (
@@ -61,17 +64,17 @@ export function OverviewPage({ status }: OverviewProps) {
         <MetricCard
           label="Services"
           value={serviceCount}
-          sub={serviceCount > 0 ? "registered" : "none"}
+          sub={`${registeredCount} registered`}
+        />
+        <MetricCard
+          label="Agents"
+          value={agents.length + openclawCount}
+          sub={`${agents.length} eval · ${openclawCount} openclaw`}
         />
         <MetricCard
           label="Events"
           value={eventList.length}
           sub="recent"
-        />
-        <MetricCard
-          label="Journal"
-          value={journalItems.length}
-          sub="entries"
         />
       </div>
 

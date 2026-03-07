@@ -9,12 +9,19 @@ export interface WorkspaceStatus {
     type: string
     description?: string
     registered_services?: ServiceRegistration[]
+    openclaw_agents?: OpenclawAgent[]
     gtm_parent?: string | null
     portfolio_parent?: string | null
   }
   sources: Record<string, boolean>
   itemCount: number
   children?: ChildHub[]
+}
+
+export interface OpenclawAgent {
+  id: string
+  runtime: string
+  registered_at?: string
 }
 
 export interface ChildHub {
@@ -33,6 +40,16 @@ export interface ServiceRegistration {
     consumes?: string[]
     denied?: string[]
   }
+}
+
+export interface GlobalServiceAgent {
+  name: string
+  type: string
+  description: string
+  path?: string
+  status: string
+  port?: number
+  mcp?: { enabled: boolean; transport?: string }
 }
 
 export interface EvalAgent {

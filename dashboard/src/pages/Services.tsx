@@ -1,4 +1,4 @@
-import { WorkspaceStatus, api, DiscoveredService, ServiceRegistration } from "@/api"
+import { WorkspaceStatus, api, DiscoveredService, ServiceRegistration, OpenclawAgent } from "@/api"
 import { StatusDot } from "@/components"
 import { usePolling, cn } from "@/lib/hooks"
 
@@ -38,12 +38,24 @@ function computeFlows(services: ServiceRegistration[]): DataFlow[] {
   return flows
 }
 
+function typeColor(type?: string): string {
+  switch (type) {
+    case "web": return "bg-info/15 text-info"
+    case "cli": return "bg-success/15 text-success"
+    case "api": return "bg-warning/15 text-warning"
+    case "library": return "bg-purple-500/15 text-purple-400"
+    case "gtm": return "bg-pink-500/15 text-pink-400"
+    default: return "bg-muted text-muted-foreground"
+  }
+}
+
 export function ServicesPage({ status }: ServicesPageProps) {
   const services = usePolling(() => api.services(), 10000)
 
   const children = status?.children || []
   const mode = status?.type || "standalone"
   const configServices = status?.config?.registered_services || []
+  const openclawAgents = status?.config?.openclaw_agents || []
   const discoveredServices = services.data ? Object.values(services.data) : []
   const dataFlows = computeFlows(configServices)
 
@@ -57,9 +69,14 @@ export function ServicesPage({ status }: ServicesPageProps) {
     }
   }
 
+  const totalCount = configServices.length + discoveredServices.length + openclawAgents.length
+
   return (
     <div class="space-y-6">
-      <h1 class="text-xl font-semibold">Services</h1>
+      <div class="flex items-center justify-between">
+        <h1 class="text-xl font-semibold">Services</h1>
+        <span class="text-sm text-muted-foreground">{totalCount} total</span>
+      </div>
 
       {configServices.length > 0 && configServices.some((s) => s.context_scope) && (
         <ScopeGraph services={configServices} flows={dataFlows} children={children} />
@@ -91,9 +108,23 @@ export function ServicesPage({ status }: ServicesPageProps) {
         </section>
       )}
 
-      {mode === "portfolio" ? (
+      {configServices.length > 0 && (
+        <section>
+          <h2 class="text-sm font-medium text-muted-foreground uppercase tracking-wider mb-3">
+            Registered Services ({configServices.length})
+          </h2>
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {configServices.map((svc) => (
+              <RegisteredServiceCard key={svc.name} service={svc} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {mode === "portfolio" && children.length > 0 && (
         children.map((child) => {
           const childSvcs = servicesByParent[child.name] || []
+          if (childSvcs.length === 0) return null
           return (
             <section key={child.name}>
               <div class="flex items-center gap-2 mb-3">
@@ -104,51 +135,43 @@ export function ServicesPage({ status }: ServicesPageProps) {
                   {childSvcs.length} services
                 </span>
               </div>
-              {childSvcs.length > 0 ? (
-                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                  {childSvcs.map((svc) => (
-                    <ServiceDetailCard key={svc.name} service={svc} />
-                  ))}
-                </div>
-              ) : (
-                <div class="bg-card rounded-lg border border-border p-4 text-sm text-muted-foreground">
-                  No services discovered for this product
-                </div>
-              )}
-            </section>
-          )
-        })
-      ) : (
-        <>
-          {configServices.length > 0 && (
-            <section>
-              <h2 class="text-sm font-medium text-muted-foreground uppercase tracking-wider mb-3">
-                Registered ({configServices.length})
-              </h2>
               <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                {configServices.map((svc) => (
-                  <RegisteredServiceCard key={svc.name} service={svc} />
-                ))}
-              </div>
-            </section>
-          )}
-
-          {discoveredServices.length > 0 && (
-            <section>
-              <h2 class="text-sm font-medium text-muted-foreground uppercase tracking-wider mb-3">
-                Discovered ({discoveredServices.length})
-              </h2>
-              <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-                {discoveredServices.map((svc) => (
+                {childSvcs.map((svc) => (
                   <ServiceDetailCard key={svc.name} service={svc} />
                 ))}
               </div>
             </section>
-          )}
-        </>
+          )
+        })
       )}
 
-      {children.length === 0 && configServices.length === 0 && discoveredServices.length === 0 && (
+      {mode !== "portfolio" && discoveredServices.length > 0 && (
+        <section>
+          <h2 class="text-sm font-medium text-muted-foreground uppercase tracking-wider mb-3">
+            Discovered ({discoveredServices.length})
+          </h2>
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {discoveredServices.map((svc) => (
+              <ServiceDetailCard key={svc.name} service={svc} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {openclawAgents.length > 0 && (
+        <section>
+          <h2 class="text-sm font-medium text-muted-foreground uppercase tracking-wider mb-3">
+            Openclaw Agents ({openclawAgents.length})
+          </h2>
+          <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {openclawAgents.map((agent) => (
+              <OpenclawAgentCard key={agent.id} agent={agent} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {totalCount === 0 && (
         <div class="bg-card rounded-lg border border-border p-8 text-center">
           <div class="text-muted-foreground text-sm">No services registered</div>
           <div class="text-muted-foreground text-xs mt-1 mono">
@@ -193,7 +216,7 @@ function ScopeGraph({
                   </div>
                   <div class="flex items-center gap-1.5">
                     {svc.type && (
-                      <span class="text-[10px] mono text-muted-foreground bg-muted px-1.5 py-0.5 rounded uppercase">
+                      <span class={cn("text-[10px] mono px-1.5 py-0.5 rounded uppercase", typeColor(svc.type))}>
                         {svc.type}
                       </span>
                     )}
@@ -272,19 +295,26 @@ function ScopeGraph({
 }
 
 function RegisteredServiceCard({ service }: { service: ServiceRegistration }) {
+  const shortPath = service.path
+    ? service.path.replace(/^\/Users\/[^/]+\//, "~/").replace(/^\/home\/[^/]+\//, "~/")
+    : null
+
   return (
     <div class="bg-card rounded-lg border border-border p-4 animate-fade-in">
-      <div class="flex items-center justify-between mb-2">
+      <div class="flex items-center justify-between mb-1">
         <div class="flex items-center gap-2">
           <StatusDot status={service.status === "active" ? "ok" : "idle"} />
           <span class="font-medium text-sm">{service.name}</span>
         </div>
         {service.type && (
-          <span class="text-[10px] mono text-muted-foreground bg-muted px-1.5 py-0.5 rounded uppercase">
+          <span class={cn("text-[10px] mono px-1.5 py-0.5 rounded uppercase", typeColor(service.type))}>
             {service.type}
           </span>
         )}
       </div>
+      {shortPath && (
+        <div class="text-[10px] mono text-muted-foreground mt-1 truncate">{shortPath}</div>
+      )}
       {service.context_scope && (
         <div class="mt-2 space-y-1">
           {service.context_scope.produces && service.context_scope.produces.length > 0 && (
@@ -322,13 +352,38 @@ function ServiceDetailCard({ service }: { service: DiscoveredService }) {
           <span class="font-medium text-sm">{service.name}</span>
         </div>
         {service.type && (
-          <span class="text-[10px] mono text-muted-foreground bg-muted px-1.5 py-0.5 rounded uppercase">
+          <span class={cn("text-[10px] mono px-1.5 py-0.5 rounded uppercase", typeColor(service.type))}>
             {service.type}
           </span>
         )}
       </div>
       {service.description && (
         <p class="text-xs text-muted-foreground mt-1">{service.description}</p>
+      )}
+    </div>
+  )
+}
+
+function OpenclawAgentCard({ agent }: { agent: OpenclawAgent }) {
+  const registered = agent.registered_at
+    ? new Date(agent.registered_at).toLocaleDateString()
+    : null
+
+  return (
+    <div class="bg-card rounded-lg border border-border p-4 animate-fade-in">
+      <div class="flex items-center justify-between mb-1">
+        <div class="flex items-center gap-2">
+          <span class="w-[6px] h-[6px] rounded-full bg-purple-400 shrink-0" />
+          <span class="font-medium text-sm">{agent.id}</span>
+        </div>
+        <span class="text-[10px] mono bg-purple-500/15 text-purple-400 px-1.5 py-0.5 rounded uppercase">
+          {agent.runtime}
+        </span>
+      </div>
+      {registered && (
+        <div class="text-[10px] text-muted-foreground mt-1">
+          Registered {registered}
+        </div>
       )}
     </div>
   )
