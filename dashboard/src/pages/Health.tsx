@@ -112,9 +112,21 @@ export function HealthPage({ status }: HealthPageProps) {
                   <span class="text-xs mono text-muted-foreground">:{proj.port}</span>
                 </div>
                 <div class="text-xs text-muted-foreground mono truncate">{proj.path}</div>
-                {proj.pid && (
-                  <div class="text-[10px] text-muted-foreground mt-1">PID {proj.pid}</div>
-                )}
+                <div class="flex items-center gap-3 mt-1.5">
+                  {proj.pid && (
+                    <span class="text-[10px] text-muted-foreground">PID {proj.pid}</span>
+                  )}
+                  {proj.port && proj.status === "OK" && (
+                    <a
+                      href={`http://localhost:${proj.port}/dashboard/`}
+                      target="_blank"
+                      rel="noopener"
+                      class="text-[10px] text-info hover:underline"
+                    >
+                      Open Dashboard
+                    </a>
+                  )}
+                </div>
               </div>
             ))}
           </div>
