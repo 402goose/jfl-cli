@@ -2,11 +2,19 @@ import { render } from "preact"
 import { useState } from "preact/hooks"
 import { api, WorkspaceStatus } from "./api"
 import { Sidebar } from "./components/Sidebar"
-import { OverviewPage, AgentsPage, JournalPage, EventsPage, ServicesPage } from "./pages"
+import {
+  OverviewPage,
+  AgentsPage,
+  JournalPage,
+  EventsPage,
+  ServicesPage,
+  FlowsPage,
+  HealthPage,
+} from "./pages"
 import { usePolling } from "./lib/hooks"
 import "./index.css"
 
-type PageId = "overview" | "agents" | "journal" | "events" | "services"
+type PageId = "overview" | "agents" | "journal" | "events" | "services" | "flows" | "health"
 
 const pageMap: Record<PageId, (props: { status: WorkspaceStatus | null }) => preact.JSX.Element> = {
   overview: OverviewPage,
@@ -14,6 +22,8 @@ const pageMap: Record<PageId, (props: { status: WorkspaceStatus | null }) => pre
   journal: () => <JournalPage />,
   events: () => <EventsPage />,
   services: ServicesPage,
+  flows: () => <FlowsPage />,
+  health: HealthPage,
 }
 
 function App() {
@@ -34,8 +44,8 @@ function App() {
         <div class="text-center">
           <div class="text-destructive text-sm font-medium">Connection Error</div>
           <div class="text-muted-foreground text-xs mt-1">{status.error}</div>
-          <div class="text-muted-foreground text-xs mt-2">
-            Make sure Context Hub is running: <span class="mono">jfl context-hub start</span>
+          <div class="text-muted-foreground text-xs mt-2 mono">
+            jfl context-hub start
           </div>
         </div>
       </div>

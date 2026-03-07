@@ -118,10 +118,22 @@ export interface FlowExecution {
   completed_at?: string
 }
 
+export interface MemoryStatus {
+  total_memories: number
+  by_type: Record<string, number>
+  date_range: { earliest: string; latest: string }
+  embeddings: { available: boolean; count: number }
+  last_index: string
+}
+
 export const api = {
   status: () => apiFetch<WorkspaceStatus>("/api/context/status"),
 
-  events: (limit = 50) => apiFetch<{ events: HubEvent[] }>(`/api/events?limit=${limit}`),
+  events: (limit = 50, pattern?: string) => {
+    let url = `/api/events?limit=${limit}`
+    if (pattern) url += `&pattern=${encodeURIComponent(pattern)}`
+    return apiFetch<{ events: HubEvent[] }>(url)
+  },
 
   leaderboard: () => apiFetch<EvalAgent[]>("/api/eval/leaderboard"),
 
@@ -144,4 +156,15 @@ export const api = {
   flows: () => apiFetch<FlowDef[]>("/api/flows"),
 
   flowExecutions: () => apiFetch<FlowExecution[]>("/api/flows/executions"),
+
+  memoryStatus: () => apiFetch<MemoryStatus>("/api/memory/status"),
+
+  memorySearch: (query: string, type?: string) => {
+    const body: Record<string, unknown> = { query }
+    if (type && type !== "all") body.type = type
+    return apiFetch<{ results: unknown[] }>("/api/memory/search", {
+      method: "POST",
+      body: JSON.stringify(body),
+    })
+  },
 }
