@@ -6,12 +6,14 @@ import { Command } from "commander"
 import * as fs from "fs"
 import * as path from "path"
 import chalk from "chalk"
+import { execSync } from "child_process"
 import {
   type ServiceConfig,
   type GTMConfig,
   type ServiceRegistration,
   getRegisteredServices,
   validateGTMParent,
+  phoneHomeToPortfolio,
 } from "../lib/service-gtm.js"
 
 function findProjectRoot(): string {
@@ -245,7 +247,7 @@ export function registerPortfolioCommand(program: Command): void {
 
   portfolio
     .command("phone-home")
-    .description("Report this GTM's health to its portfolio parent")
+    .description("Sync this GTM's journals and activity to its portfolio parent")
     .action(async () => {
       const root = findProjectRoot()
       const config = loadConfig(root)
@@ -254,7 +256,7 @@ export function registerPortfolioCommand(program: Command): void {
         return
       }
 
-      const portfolioPath = (config as any).portfolio_parent
+      const portfolioPath = (config as any).portfolio_parent as string | undefined
       if (!portfolioPath) {
         console.log(chalk.yellow("No portfolio_parent configured. This GTM is not part of a portfolio."))
         return
@@ -265,77 +267,28 @@ export function registerPortfolioCommand(program: Command): void {
         return
       }
 
-      // Build health report
-      const services = getRegisteredServices(root)
-      const evalPath = path.join(root, ".jfl", "eval.jsonl")
-      let evalCount = 0
-      let latestEval: string | null = null
-      if (fs.existsSync(evalPath)) {
-        const lines = fs.readFileSync(evalPath, "utf-8").split("\n").filter(l => l.trim())
-        evalCount = lines.length
-        if (lines.length > 0) {
-          try {
-            const last = JSON.parse(lines[lines.length - 1])
-            latestEval = last.ts
-          } catch {}
+      let sessionBranch = "main"
+      try {
+        sessionBranch = execSync("git branch --show-current", {
+          cwd: root,
+          encoding: "utf-8",
+        }).trim() || "main"
+      } catch {}
+
+      try {
+        const result = await phoneHomeToPortfolio(root, portfolioPath, sessionBranch)
+
+        console.log(chalk.green(`Synced to portfolio: ${path.basename(portfolioPath)}`))
+        console.log(chalk.dim(`  GTM: ${result.gtm_name}`))
+        console.log(chalk.dim(`  Journal entries synced: ${result.journal.entry_count}`))
+        console.log(chalk.dim(`  Commits: ${result.git.commits.length}`))
+        console.log(chalk.dim(`  Files changed: ${result.git.files_changed}`))
+
+        if (result.errors.length > 0) {
+          console.log(chalk.yellow(`  Warnings: ${result.errors.join(", ")}`))
         }
+      } catch (error: any) {
+        console.log(chalk.red(`Phone-home failed: ${error.message}`))
       }
-
-      const report = {
-        name: config.name,
-        type: config.type,
-        services: services.length,
-        evals: evalCount,
-        latest_eval: latestEval,
-        reported_at: new Date().toISOString(),
-      }
-
-      // Write report to portfolio's journal
-      const portfolioJournalDir = path.join(portfolioPath, ".jfl", "journal")
-      if (!fs.existsSync(portfolioJournalDir)) {
-        fs.mkdirSync(portfolioJournalDir, { recursive: true })
-      }
-      const entry = {
-        v: 1,
-        ts: new Date().toISOString(),
-        session: "phone-home",
-        type: "discovery",
-        title: `Phone home: ${config.name}`,
-        summary: `${config.name} reports ${services.length} services, ${evalCount} evals. Latest eval: ${latestEval || "none"}.`,
-        status: "complete",
-      }
-      const journalFile = path.join(portfolioJournalDir, "phone-home.jsonl")
-      fs.appendFileSync(journalFile, JSON.stringify(entry) + "\n")
-
-      // Try to emit event to portfolio hub
-      const portfolioConfig = loadConfig(portfolioPath)
-      if (portfolioConfig) {
-        const tokenPath = path.join(portfolioPath, ".jfl", "context-hub.token")
-        if (fs.existsSync(tokenPath)) {
-          try {
-            const token = fs.readFileSync(tokenPath, "utf-8").trim()
-            const { getProjectPort } = await import("../utils/context-hub-port.js")
-            const port = getProjectPort(portfolioPath)
-            await fetch(`http://localhost:${port}/api/events`, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${token}`,
-              },
-              body: JSON.stringify({
-                type: "portfolio:phone-home",
-                source: config.name,
-                data: report,
-              }),
-              signal: AbortSignal.timeout(5000),
-            })
-          } catch {}
-        }
-      }
-
-      console.log(chalk.green(`Reported to portfolio: ${path.basename(portfolioPath)}`))
-      console.log(chalk.dim(`  Services: ${services.length}`))
-      console.log(chalk.dim(`  Evals: ${evalCount}`))
-      console.log(chalk.dim(`  Latest eval: ${latestEval || "none"}`))
     })
 }
