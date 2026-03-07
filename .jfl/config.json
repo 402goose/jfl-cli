@@ -20,5 +20,8 @@
       },
       "health_check": null
     }
+  },
+  "contextHub": {
+    "port": 4358
   }
 }
