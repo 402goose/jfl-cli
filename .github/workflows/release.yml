@@ -1,0 +1,55 @@
+name: Release
+
+# Triggers after CI passes on main.
+# - If changesets exist: creates/updates a "Version Packages" PR
+# - If Version PR is merged: publishes to npm via trusted publisher (OIDC, no token needed)
+#
+# npm Trusted Publisher setup (one-time, per package):
+#   npmjs.com → jfl package → Settings → Publish Access → Add Provenance
+#   Repository: 402goose/jfl-cli
+#   Workflow:   .github/workflows/release.yml
+#   Environment: (leave blank)
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+concurrency: ${{ github.workflow }}-${{ github.ref }}
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success'
+    permissions:
+      contents: write        # create git tags, push version commits
+      pull-requests: write   # create/update the Version Packages PR
+      id-token: write        # npm trusted publisher (OIDC provenance)
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+          registry-url: 'https://registry.npmjs.org'
+
+      - run: npm ci
+
+      - name: Create Release PR or Publish
+        uses: changesets/action@v1
+        with:
+          publish: npm publish --provenance --access public
+          title: 'chore: version packages'
+          commit: 'chore: version packages'
+          createGithubReleases: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # No NPM_TOKEN needed — OIDC trusted publisher handles auth
+          # prepublishOnly in package.json runs `npm run build` automatically before publish
