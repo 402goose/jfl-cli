@@ -633,20 +633,39 @@ SessionStart hook fires          You work normally                Stop hook fire
 
 ## CI/CD
 
-GitHub Actions pipeline runs on every push and PR to main:
+Two GitHub Actions workflows handle quality and releases.
+
+### CI — `.github/workflows/ci.yml`
+
+Runs on every push and PR to `main`:
 
 - TypeScript strict mode type checking
 - Full test suite (~365 tests across 17 test files)
-- Coverage reporting
+- Coverage report uploaded as artifact
 
-```yaml
-# .github/workflows/ci.yml
-on:
-  push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+### CD — `.github/workflows/release.yml`
+
+Fires after CI passes on `main`. Uses [Changesets](https://github.com/changesets/changesets) for version management and npm Trusted Publisher (OIDC) for secretless publishing.
+
+**Release flow:**
+
+```bash
+# 1. Document your change
+npx changeset         # pick bump level (patch/minor/major), write summary
+
+# 2. Push to main — CI runs, then release.yml fires
+#    → changesets/action creates a "Version Packages" PR
+
+# 3. Merge the Version PR
+#    → release.yml fires again → npm publish --provenance --access public
 ```
+
+No `NPM_TOKEN` needed. Publishing uses OIDC provenance via npm Trusted Publisher.
+
+**One-time setup (per package):**
+> npmjs.com → `jfl` package → Settings → Publish Access → Add Provenance
+> - Repository: `402goose/jfl-cli`
+> - Workflow: `.github/workflows/release.yml`
 
 ---
 
@@ -693,7 +712,7 @@ jfl wallet                    # Wallet and day pass status
 - Feat: **Context Hub portfolio fan-out** — detects portfolio type, connects to child GTM hubs via SSE, bridges events, fans out search queries
 - Feat: **Cross-product event routing** — `flows.yaml` with `{{child.NAME.port}}` template variables, events route between child GTMs
 - Feat: **Eval API endpoints** — `/api/eval/leaderboard` and `/api/eval/trajectory` on Context Hub
-- Feat: CI/CD pipeline — GitHub Actions with strict TypeScript + Jest gate
+- Feat: CI/CD pipeline — GitHub Actions with strict TypeScript + Jest gate; CD via Changesets + npm Trusted Publisher (OIDC, no NPM_TOKEN)
 - Feat: Service agent templates (CLAUDE.md, settings.json, knowledge docs)
 - Feat: Session cleanup guard — prevents `rm -rf` on main when no worktrees exist
 - Fix: TypeScript strict mode build errors resolved
