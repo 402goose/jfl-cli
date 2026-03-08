@@ -9,7 +9,7 @@
 import { Command } from "commander"
 import chalk from "chalk"
 import { spawn, execSync } from "child_process"
-import { existsSync, symlinkSync, mkdirSync, unlinkSync } from "fs"
+import { existsSync, readFileSync, symlinkSync, mkdirSync, unlinkSync } from "fs"
 import { homedir } from "os"
 import { join } from "path"
 import * as path from "path"
@@ -176,10 +176,20 @@ program.configureHelp({
   },
 })
 
+function getVersion(): string {
+  try {
+    const pkgPath = new URL("../package.json", import.meta.url)
+    const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"))
+    return pkg.version ?? "0.0.0"
+  } catch {
+    return "0.0.0"
+  }
+}
+
 program
   .name("jfl")
   .description("Just Fucking Launch - AI gateway for GTM")
-  .version("0.2.5")
+  .version(getVersion())
   .option("--no-update", "Skip automatic update check")
   .action(async (options) => {
     // Always update on session start (unless --no-update flag)
