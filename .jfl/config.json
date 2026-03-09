@@ -22,6 +22,6 @@
     }
   },
   "contextHub": {
-    "port": 4521
+    "port": 4358
   }
 }

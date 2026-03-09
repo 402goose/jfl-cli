@@ -1,0 +1,32 @@
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: claude-pro-dev:latest
+    working_dir: /workspace
+    stdin_open: true
+    tty: true
+    environment:
+      SHELL: /bin/zsh
+      PNPM_HOME: /root/.local/share/pnpm
+      JFL_VERSION: ${JFL_VERSION:-0.3.0}
+      JFL_LOCAL_PATH: ${JFL_LOCAL_PATH:-}
+      JFL_TGZ_PATH: ${JFL_TGZ_PATH:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    volumes:
+      - .:/workspace
+      - ${HOME}/.config/claude:/root/.config/claude
+      - ${HOME}/.ssh:/root/.ssh:ro
+      - claude_npm:/root/.npm
+      - claude_pnpm:/root/.pnpm-store
+      - claude_cache:/root/.cache
+      - ../jfl:/opt/jfl-local:ro
+    command: zsh
+
+volumes:
+  claude_npm:
+  claude_pnpm:
+  claude_cache:

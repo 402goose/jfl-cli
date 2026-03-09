@@ -36,3 +36,11 @@ coverage/
 .jfl/current-session-branch.txt
 .jfl/current-worktree.txt
 .jfl/worktree-path.txt
+
+# Generated peer agent files — machine-specific absolute paths, never commit
+.claude/agents/peer-service-*.md
+
+# Python bytecode
+*.pyc
+*.pyo
+__pycache__/
