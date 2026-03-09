@@ -27,6 +27,7 @@
     "test:watch": "jest --watch",
     "test:coverage": "jest --coverage",
     "changeset": "changeset",
+    "changeset:auto": "./scripts/generate-changesets.sh",
     "version-packages": "changeset version",
     "prepublishOnly": "npm run build",
     "postinstall": "node scripts/postinstall.js"

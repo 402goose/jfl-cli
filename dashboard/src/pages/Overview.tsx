@@ -1,6 +1,6 @@
 import { WorkspaceStatus, api, HubEvent, DiscoveredService, ContextItem, EvalAgent } from "@/api"
-import { MetricCard, EventFeed, StatusDot, Sparkline, ActivityChart } from "@/components"
-import { usePolling } from "@/lib/hooks"
+import { MetricCard, StatusDot, Sparkline, ActivityChart } from "@/components"
+import { usePolling, timeAgo, cn } from "@/lib/hooks"
 
 interface OverviewProps {
   status: WorkspaceStatus | null
@@ -193,11 +193,7 @@ export function OverviewPage({ status }: OverviewProps) {
           Recent Activity
         </h2>
         <div class="bg-card rounded-lg border border-border">
-          {events.loading ? (
-            <div class="p-4 text-sm text-muted-foreground">Loading events...</div>
-          ) : (
-            <EventFeed events={eventList} maxItems={20} />
-          )}
+          <RecentActivity events={eventList} journal={journalItems} />
         </div>
       </section>
     </div>
@@ -281,6 +277,94 @@ function LeaderboardTable({ title, agents }: { title: string; agents: EvalAgent[
           })}
         </tbody>
       </table>
+    </div>
+  )
+}
+
+interface ActivityItem {
+  kind: "event" | "journal"
+  ts: string
+  type: string
+  label: string
+  detail?: string
+  source?: string
+}
+
+const eventTypeColors: Record<string, string> = {
+  "eval:scored": "text-info",
+  "flow:triggered": "text-warning",
+  "journal:entry": "text-success",
+  "onboard": "text-purple-400",
+  "error": "text-destructive",
+}
+
+function RecentActivity({ events, journal }: { events: HubEvent[]; journal: ContextItem[] }) {
+  const items: ActivityItem[] = []
+
+  const nonSessionEvents = events.filter((e) => !e.type.startsWith("session:"))
+  for (const ev of nonSessionEvents.slice(0, 30)) {
+    const d = ev.data || {}
+    items.push({
+      kind: "event",
+      ts: ev.ts,
+      type: ev.type,
+      label: (d.title || d.message || d.agent || d.service || ev.source || ev.type) as string,
+      detail: d.composite != null
+        ? `score: ${Number(d.composite).toFixed(4)}`
+        : d.description as string || undefined,
+      source: ev.source,
+    })
+  }
+
+  for (const j of journal.slice(0, 20)) {
+    items.push({
+      kind: "journal",
+      ts: j.timestamp || j.ts,
+      type: j.type || "entry",
+      label: j.title,
+      detail: j.summary || j.content?.slice(0, 100),
+      source: j.source,
+    })
+  }
+
+  items.sort((a, b) => new Date(b.ts).getTime() - new Date(a.ts).getTime())
+  const shown = items.slice(0, 25)
+
+  if (!shown.length) {
+    return <div class="text-sm text-muted-foreground py-8 text-center">No activity yet</div>
+  }
+
+  return (
+    <div class="space-y-0.5">
+      {shown.map((item, i) => (
+        <div
+          key={i}
+          class="flex items-start gap-3 py-2 px-3 rounded hover:bg-muted/30 transition-colors text-sm"
+        >
+          <span class="text-[10px] text-muted-foreground mono whitespace-nowrap mt-0.5 min-w-[4rem]">
+            {timeAgo(item.ts)}
+          </span>
+          {item.kind === "journal" ? (
+            <span class="w-1.5 h-1.5 rounded-full bg-success mt-1.5 shrink-0" />
+          ) : (
+            <span class="w-1.5 h-1.5 rounded-full bg-info mt-1.5 shrink-0" />
+          )}
+          <div class="min-w-0 flex-1">
+            <div class="flex items-center gap-2">
+              <span class={cn(
+                "text-xs mono font-medium whitespace-nowrap",
+                eventTypeColors[item.type] || (item.kind === "journal" ? "text-success" : "text-foreground"),
+              )}>
+                {item.type}
+              </span>
+              <span class="text-xs text-foreground truncate">{item.label}</span>
+            </div>
+            {item.detail && (
+              <div class="text-[10px] text-muted-foreground mt-0.5 truncate">{item.detail}</div>
+            )}
+          </div>
+        </div>
+      ))}
     </div>
   )
 }

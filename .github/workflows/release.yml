@@ -42,6 +42,16 @@ jobs:
 
       - run: npm ci
 
+      - name: Generate changesets from commit messages
+        run: |
+          chmod +x scripts/generate-changesets.sh
+          ./scripts/generate-changesets.sh
+          # Commit generated changesets so changesets/action can see them
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .changeset/ || true
+          git diff --cached --quiet || git commit -m "chore: auto-generate changesets from commits"
+
       - name: Create Release PR or Publish
         uses: changesets/action@v1
         with:
