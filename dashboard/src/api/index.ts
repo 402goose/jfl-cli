@@ -123,8 +123,11 @@ export interface ProjectHealth {
 
 export interface FlowDef {
   name: string
-  trigger: string
   description?: string
+  enabled: boolean
+  trigger: { pattern: string; source?: string } | string
+  actions: { type: string; message?: string; [key: string]: unknown }[]
+  gate?: { requires_approval?: boolean }
 }
 
 export interface FlowExecution {
@@ -173,6 +176,12 @@ export const api = {
   flows: () => apiFetch<FlowDef[]>("/api/flows"),
 
   flowExecutions: () => apiFetch<FlowExecution[]>("/api/flows/executions"),
+
+  approveFlow: (flowName: string, triggerEventId: string) =>
+    apiFetch<{ ok: boolean }>(`/api/flows/${encodeURIComponent(flowName)}/approve`, {
+      method: "POST",
+      body: JSON.stringify({ trigger_event_id: triggerEventId }),
+    }),
 
   memoryStatus: () => apiFetch<MemoryStatus>("/api/memory/status"),
 
