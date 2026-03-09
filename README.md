@@ -116,7 +116,7 @@ jfl context-hub stop          # Stop daemon
 jfl context-hub restart       # Restart daemon
 jfl context-hub doctor        # Diagnose all projects (OK/ZOMBIE/DOWN/STALE)
 jfl context-hub ensure-all    # Start for all GTM projects
-jfl context-hub dashboard     # Live web dashboard (opens browser)
+jfl context-hub dashboard     # Open web dashboard (opens browser)
 jfl context-hub install-daemon  # Auto-start on boot (launchd/systemd)
 jfl context-hub uninstall-daemon  # Remove auto-start
 jfl context-hub query         # Query context from CLI
@@ -124,14 +124,6 @@ jfl context-hub serve         # Run in foreground (daemon mode)
 ```
 
 **Per-project ports** assigned automatically (or set in `.jfl/config.json` > `contextHub.port`).
-
-**Web Dashboard** — mode-aware SPA served directly from Context Hub. Auto-detects workspace type (portfolio/gtm/service) and adapts layout:
-
-- **Portfolio mode:** Health grid across child GTMs, cross-product leaderboard, live event feed, metric cards
-- **GTM mode:** Command center with journal activity, decisions, eval velocity, command health
-- **Service mode:** Scoped journal view, filtered events, parent GTM context
-
-Pages: Overview, Journal, Agents, Evals, Events, Costs, Flows, Sessions, Scope, Projects.
 
 **MCP Tools** (available to Claude Code and any MCP client):
 
@@ -146,9 +138,29 @@ Pages: Overview, Journal, Agents, Evals, Events, Costs, Flows, Sessions, Scope, 
 | `memory_add` | Add manual memory entry |
 | `query_experiment_history` | Query RL trajectories for agent experiments |
 
-**Portfolio fan-out:** In portfolio mode, Context Hub connects to child GTM hubs via SSE, bridges their events into the portfolio event bus, and fans out search queries across all children. Cross-product flows route events between child GTMs.
-
 **Resilience:** 5-layer system — MCP auto-recovery on ECONNREFUSED, health-check-before-ensure hooks, `ensure-all` for batch startup, `doctor` diagnostics, launchd/systemd daemon with keepalive.
+
+### Dashboard V2
+
+A pre-built Vite + Preact + Tailwind SPA served by Context Hub at `/dashboard/`. Auto-detects workspace type and adapts layout.
+
+**Pages:**
+
+| Page | What It Shows |
+|------|--------------|
+| **Overview** | Activity charts, product cards, metric cards |
+| **Journal** | Searchable journal entries with type filters |
+| **Events** | Live event feed with pattern filter presets (eval, session, flow, etc.) |
+| **Services** | Registered services with type badges, context scope visualization, data flows |
+| **Flows** | Flow definitions and execution history |
+| **Health** | System metrics, context sources, memory index, tracked projects |
+| **Agents** | Eval leaderboards grouped by product domain |
+
+**Features:** Sidebar with structured sections (Workspace / Infra / Eval), inline SVG icons, agent leaderboard in sidebar, sparkline charts, real-time polling.
+
+```bash
+jfl context-hub dashboard     # Opens /dashboard/ in browser
+```
 
 ### MAP Event Bus
 
@@ -191,13 +203,15 @@ jfl eval tuples               # Extract (state, action, reward) training tuples
 }
 ```
 
+**Leaderboard:** Agents grouped by metric domain. ProductRank agents scored on ndcg@10, mrr, precision@5. SEO agents scored on avg_rank, keywords_ranked. Dashboard Agents page shows leaderboards per domain.
+
 **Training tuples** extracted from journals for fine-tuning: `(state, action, reward)` — maps codebase state + experiment action to eval score delta.
 
 **API endpoints** on Context Hub:
 - `GET /api/eval/leaderboard` — all agents ranked by composite
 - `GET /api/eval/trajectory?agent=X&metric=composite` — score trajectory with timestamps
 
-### RL Infrastructure (Phase 1)
+### RL Infrastructure
 
 JFL generalizes the Karpathy nanochat pattern: structured journals are the replay buffer, eval scores are rewards, agents learn in-context from past trajectories.
 
@@ -213,6 +227,23 @@ Event Bus (Nervous System) > connects everything
 
 **TrajectoryLoader** — query, filter, and render experiment trajectories for agent context windows. Supports filtering by session, agent, outcome, score range.
 
+**Peter Parker** — model-routed orchestrator with cost/balanced/quality profiles. Routes tasks to haiku/sonnet/opus based on complexity. Subscribes to event bus for reactive dispatch.
+
+**Flow Engine** — declarative trigger-action automation in `.jfl/flows.yaml`:
+
+```yaml
+- name: eval-scored-trigger-analysis
+  trigger:
+    pattern: "eval:scored"
+  gate:
+    requires_approval: true
+  actions:
+    - type: spawn
+      command: "claude -p 'Analyze the latest eval results'"
+```
+
+Flow actions: `log`, `emit`, `journal`, `webhook`, `command`, `spawn`. Gates: `after` (time-gated), `before` (deadline), `requires_approval`.
+
 **MCP tool:** `query_experiment_history` — agents query past experiment trajectories to inform next proposals.
 
 ### Portfolio Management
@@ -227,6 +258,13 @@ jfl portfolio status                   # Portfolio health + eval summary
 jfl portfolio phone-home               # Report GTM health to portfolio parent
 ```
 
+**Portfolio Context Hub** operates in fan-out mode:
+- Connects to child GTM hubs via SSE
+- Bridges child events into portfolio event bus
+- Fans out search queries across all child hubs
+- Aggregates eval leaderboard across products
+- Enforces context scope (produces/consumes/denied) between GTMs
+
 **Cross-product flows** defined in `.jfl/flows.yaml`:
 
 ```yaml
@@ -240,6 +278,18 @@ jfl portfolio phone-home               # Report GTM health to portfolio parent
 ```
 
 Template variables: `{{child.NAME.port}}`, `{{child.NAME.token}}`
+
+**Context scope** — each child GTM declares what events it produces and consumes. Portfolio enforces boundaries:
+
+```json
+{
+  "context_scope": {
+    "produces": ["discovery:tool-trend", "eval:*"],
+    "consumes": ["strategy:*", "seo:serp-data"],
+    "denied": []
+  }
+}
+```
 
 ### Memory System
 
@@ -434,6 +484,22 @@ jfl services                  # Interactive TUI (no args)
 | `jfl dashboard` | Interactive service monitoring TUI |
 | `jfl events [-p pattern]` | Live MAP event bus dashboard |
 
+### Hooks & Flows
+
+| Command | Description |
+|---------|-------------|
+| `jfl hooks init` | Generate HTTP hooks + default flows |
+| `jfl hooks status` | Check hooks and hub connectivity |
+| `jfl hooks remove` | Remove HTTP hooks |
+| `jfl hooks deploy` | Deploy hooks to all registered services |
+| `jfl flows list` | List configured event-action flows |
+| `jfl flows add` | Interactive flow builder |
+| `jfl flows test <name>` | Test a flow with synthetic event |
+| `jfl flows enable/disable <name>` | Toggle flows |
+| `jfl scope list` | View service context scopes |
+| `jfl scope set` | Set scope declarations |
+| `jfl scope test` | Test scope enforcement |
+
 ### Platform
 
 | Command | Description |
@@ -451,7 +517,7 @@ jfl services                  # Interactive TUI (no args)
 |---------|-------------|
 | `jfl telemetry status` | Show telemetry status |
 | `jfl telemetry show` | Show queued events |
-| `jfl telemetry digest [--hours N] [--format json] [--platform]` | Cost breakdown, health analysis, suggestions |
+| `jfl telemetry digest [--hours N] [--format json] [--plots]` | Cost breakdown, health analysis, terminal charts |
 | `jfl telemetry reset` | Reset install ID |
 | `jfl telemetry track --category <c> --event <e>` | Emit event from shell scripts |
 | `jfl improve [--dry-run] [--auto] [--hours N]` | Self-improvement loop: analyze, suggest, create issues |
@@ -459,7 +525,7 @@ jfl services                  # Interactive TUI (no args)
 
 **Model cost tracking:** Every Stratus API call emits token counts and estimated cost. Covers claude-opus-4-6, claude-sonnet-4-6, claude-sonnet-4-5, claude-haiku-3-5, gpt-4o.
 
-**`jfl telemetry digest`** analyzes local events: per-model cost tables, command stats, error rates, hub/memory/session health. Flags issues like high MCP latency, cost concentration, crash rates.
+**`jfl telemetry digest`** analyzes local events: per-model cost tables, command stats, error rates, hub/memory/session health. `--plots` renders bar charts via kuva (falls back to ASCII).
 
 **`jfl improve`** generates actionable suggestions from the digest. `--dry-run` previews, `--auto` creates GitHub issues tagged `[jfl-improve]`.
 
@@ -624,7 +690,8 @@ SessionStart hook fires          You work normally                Stop hook fire
                     ├─ Bridges service events from file-drop
                     ├─ Watches journal/ for live entries
                     ├─ Portfolio mode: fans out to child hubs
-                    └─ Web dashboard at /dashboard
+                    ├─ Flow engine: reactive trigger→action
+                    └─ Web dashboard at /dashboard/
 ```
 
 **Everything is files.** No proprietary database. No lock-in. Context is git-native — version controlled, portable, model-agnostic.
@@ -647,23 +714,32 @@ Runs on every push and PR to `main`:
 
 Fires after CI passes on `main`. Uses [Changesets](https://github.com/changesets/changesets) for version management and npm Trusted Publisher (OIDC) for secretless publishing.
 
+**Auto-changeset generation:** `scripts/generate-changesets.sh` converts conventional commit messages into changesets automatically:
+- `feat:` = minor bump
+- `fix:` = patch bump
+- `feat!:` = major bump
+
+No manual `npx changeset` needed for most changes.
+
 **Release flow:**
 
 ```bash
-# 1. Document your change
-npx changeset         # pick bump level (patch/minor/major), write summary
+# Option A: Manual changeset
+npx changeset         # pick bump level, write summary
 
-# 2. Push to main — CI runs, then release.yml fires
-#    → changesets/action creates a "Version Packages" PR
+# Option B: Just use conventional commits — auto-generated on CI
 
-# 3. Merge the Version PR
-#    → release.yml fires again → npm publish --provenance --access public
+# Push to main — CI runs, then release.yml fires
+#   → changesets/action creates a "Version Packages" PR
+
+# Merge the Version PR
+#   → release.yml fires again → npm publish --provenance --access public
 ```
 
 No `NPM_TOKEN` needed. Publishing uses OIDC provenance via npm Trusted Publisher.
 
 **One-time setup (per package):**
-> npmjs.com → `jfl` package → Settings → Publish Access → Add Provenance
+> npmjs.com > `jfl` package > Settings > Publish Access > Add Provenance
 > - Repository: `402goose/jfl-cli`
 > - Workflow: `.github/workflows/release.yml`
 
@@ -705,14 +781,14 @@ jfl wallet                    # Wallet and day pass status
 ## What's New
 
 **0.3.0**
-- Feat: **Portfolio layer** — `jfl portfolio register/list/unregister/status/phone-home`. Coordinate multiple GTM workspaces under one portfolio with cross-product event routing and aggregated eval data
-- Feat: **Eval framework** — `jfl eval list/trajectory/log/compare/tuples`. Track agent metrics over time, dual-write up parent chain, extract training tuples
-- Feat: **RL infrastructure (Phase 1)** — `JournalEntry` type with 6 RL fields (hypothesis, outcome, score_delta, eval_snapshot, diff_hash, context_entries), `TrajectoryLoader` for querying experiment history, `query_experiment_history` MCP tool
-- Feat: **Web dashboard redesign** — Paperclip-inspired oklch monochromatic design system, mode-aware pages (portfolio/gtm/service), Preact+HTM SPA with eval charts, sparklines, health grid, live event feed
-- Feat: **Context Hub portfolio fan-out** — detects portfolio type, connects to child GTM hubs via SSE, bridges events, fans out search queries
-- Feat: **Cross-product event routing** — `flows.yaml` with `{{child.NAME.port}}` template variables, events route between child GTMs
-- Feat: **Eval API endpoints** — `/api/eval/leaderboard` and `/api/eval/trajectory` on Context Hub
-- Feat: CI/CD pipeline — GitHub Actions with strict TypeScript + Jest gate; CD via Changesets + npm Trusted Publisher (OIDC, no NPM_TOKEN)
+- Feat: **Portfolio workspace type** — `jfl portfolio register/list/unregister/status/phone-home`. Portfolios contain multiple GTM workspaces with cross-product event routing via SSE, context scope enforcement (produces/consumes/denied), fan-out queries to child hubs, and portfolio-level leaderboard aggregation
+- Feat: **Dashboard V2** — pre-built Vite + Preact + Tailwind SPA served at `/dashboard/`. Pages: Overview (activity charts, metric cards), Journal (search + type filters), Events (pattern filter presets), Services (type badges, context scope, data flows), Flows (definitions + execution history), Health (system metrics, memory index), Agents (eval leaderboards grouped by domain)
+- Feat: **Eval framework** — `jfl eval list/trajectory/log/compare/tuples`. Track agent metrics over time with composite scores, dual-write up parent chain, extract (state, action, reward) training tuples. Agents grouped by metric domain (ProductRank: ndcg@10/mrr/precision@5, SEO: avg_rank/keywords_ranked)
+- Feat: **RL infrastructure (Phase 1)** — `JournalEntry` type with 6 RL fields, `TrajectoryLoader` for querying experiment history, `query_experiment_history` MCP tool
+- Feat: **Flow engine** — declarative trigger-action automation in `.jfl/flows.yaml`. Actions: log, emit, journal, webhook, command, spawn. Gates: time-gated, deadline, requires_approval. Template interpolation with `{{child.NAME.port}}`
+- Feat: **HTTP hooks** — Claude Code lifecycle hooks (PostToolUse, Stop, PreCompact, SubagentStart/Stop) POST to Context Hub. `jfl hooks init/status/remove/deploy`
+- Feat: **Context scope enforcement** — produces/consumes/denied patterns. Event bus filters by scope declarations. `jfl scope list/set/test`
+- Feat: CI/CD pipeline — GitHub Actions CI (strict TypeScript + Jest gate) + CD via Changesets with auto-generation from conventional commits. npm Trusted Publisher with OIDC provenance
 - Feat: Service agent templates (CLAUDE.md, settings.json, knowledge docs)
 - Feat: Session cleanup guard — prevents `rm -rf` on main when no worktrees exist
 - Fix: TypeScript strict mode build errors resolved
