@@ -1,4 +1,5 @@
 import { WorkspaceStatus, api } from "@/api"
+import { Sparkline } from "@/components"
 import { cn, usePolling } from "@/lib/hooks"
 import { useState } from "preact/hooks"
 
@@ -18,36 +19,10 @@ function NavIcon({ name }: { name: string }) {
         <rect x="14" y="14" width="7" height="7" rx="1" />
       </>
     ),
-    journal: (
-      <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20" />
-    ),
     events: (
       <path d="M13 2 3 14h9l-1 8 10-12h-9z" />
     ),
-    services: (
-      <>
-        <path d="m12 2-10 5 10 5 10-5z" />
-        <path d="m2 17 10 5 10-5" />
-        <path d="m2 12 10 5 10-5" />
-      </>
-    ),
-    agents: (
-      <>
-        <circle cx="12" cy="8" r="5" />
-        <path d="M20 21a8 8 0 0 0-16 0" />
-      </>
-    ),
-    flows: (
-      <>
-        <rect x="3" y="3" width="8" height="8" rx="2" />
-        <rect x="13" y="13" width="8" height="8" rx="2" />
-        <path d="M7 11v4a2 2 0 0 0 2 2h4" />
-      </>
-    ),
-    health: (
-      <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
-    ),
-    experiments: (
+    loop: (
       <>
         <circle cx="7" cy="12" r="2" />
         <circle cx="12" cy="7" r="2" />
@@ -66,7 +41,7 @@ function NavIcon({ name }: { name: string }) {
         <path d="M7 6l5-2M14 4l5 4M5 8l2 10M12 6l5 11M9 18h8" />
       </>
     ),
-    telemetry: (
+    system: (
       <>
         <path d="M3 3v18h18" />
         <path d="m7 16 4-8 4 4 4-6" />
@@ -101,49 +76,27 @@ interface NavItemDef {
   id: string
   label: string
   icon: string
-  modes?: string[]
 }
 
-const sections: { label?: string; items: NavItemDef[] }[] = [
-  {
-    items: [
-      { id: "overview", label: "Dashboard", icon: "dashboard" },
-    ],
-  },
-  {
-    label: "Workspace",
-    items: [
-      { id: "journal", label: "Journal", icon: "journal" },
-      { id: "events", label: "Events", icon: "events" },
-      { id: "flows", label: "Flows", icon: "flows" },
-    ],
-  },
-  {
-    label: "Infra",
-    items: [
-      { id: "services", label: "Services", icon: "services" },
-      { id: "topology", label: "Topology", icon: "topology" },
-      { id: "health", label: "Health", icon: "health" },
-      { id: "telemetry", label: "Telemetry", icon: "telemetry" },
-    ],
-  },
-  {
-    label: "Eval",
-    items: [
-      { id: "agents", label: "Agents", icon: "agents" },
-      { id: "experiments", label: "Experiments", icon: "experiments" },
-    ],
-  },
+const navItems: NavItemDef[] = [
+  { id: "overview", label: "Overview", icon: "dashboard" },
+  { id: "activity", label: "Activity", icon: "events" },
+  { id: "loop", label: "Loop", icon: "loop" },
+  { id: "topology", label: "Topology", icon: "topology" },
+  { id: "system", label: "System", icon: "system" },
 ]
 
 export function Sidebar({ status, currentPage, setPage }: SidebarProps) {
-  const mode = status?.type || "standalone"
   const name = status?.config?.name || "JFL"
   const wsStatus = status?.status || "unknown"
+  const mode = status?.type || "standalone"
   const children = status?.children || []
 
   const leaderboard = usePolling(() => api.leaderboard(), 30000)
   const agents = leaderboard.data || []
+  const bestAgent = agents.length > 0
+    ? [...agents].sort((a, b) => (b.composite || 0) - (a.composite || 0))[0]
+    : null
 
   return (
     <aside class="w-56 h-screen bg-sidebar flex flex-col fixed left-0 top-0 z-10 border-r border-sidebar-border">
@@ -167,6 +120,20 @@ export function Sidebar({ status, currentPage, setPage }: SidebarProps) {
             </div>
           </div>
         </div>
+
+        {bestAgent?.trajectory && bestAgent.trajectory.length > 1 && (
+          <div class="mt-3 flex items-center gap-2">
+            <Sparkline
+              data={bestAgent.trajectory}
+              width={100}
+              height={20}
+              color={bestAgent.delta != null && bestAgent.delta > 0 ? "var(--success)" : "var(--info)"}
+            />
+            <span class="text-[10px] mono tabular-nums text-muted-foreground">
+              {bestAgent.composite?.toFixed(2)}
+            </span>
+          </div>
+        )}
       </div>
 
       <div class="px-3 pb-3">
@@ -174,37 +141,21 @@ export function Sidebar({ status, currentPage, setPage }: SidebarProps) {
       </div>
 
       <nav class="flex-1 overflow-y-auto pb-2">
-        {sections.map((section, si) => {
-          const filteredItems = section.items.filter(
-            (item) => !item.modes || item.modes.includes(mode),
-          )
-          if (!filteredItems.length) return null
-
-          return (
-            <div key={si} class={si > 0 ? "mt-5" : ""}>
-              {section.label && (
-                <div class="px-4 pb-1 text-[10px] uppercase tracking-widest text-muted-foreground font-medium">
-                  {section.label}
-                </div>
-              )}
-              {filteredItems.map((item) => (
-                <button
-                  key={item.id}
-                  onClick={() => setPage(item.id)}
-                  class={cn(
-                    "w-full flex items-center gap-2.5 px-4 py-1.5 text-[13px] transition-colors relative",
-                    currentPage === item.id
-                      ? "text-sidebar-foreground font-medium bg-accent/60 before:absolute before:left-0 before:top-[5px] before:bottom-[5px] before:w-[2px] before:bg-info before:rounded-r"
-                      : "text-muted-foreground hover:text-sidebar-foreground hover:bg-accent/30",
-                  )}
-                >
-                  <NavIcon name={item.icon} />
-                  {item.label}
-                </button>
-              ))}
-            </div>
-          )
-        })}
+        {navItems.map((item) => (
+          <button
+            key={item.id}
+            onClick={() => setPage(item.id)}
+            class={cn(
+              "w-full flex items-center gap-2.5 px-4 py-1.5 text-[13px] transition-colors relative",
+              currentPage === item.id
+                ? "text-sidebar-foreground font-medium bg-accent/60 before:absolute before:left-0 before:top-[5px] before:bottom-[5px] before:w-[2px] before:bg-info before:rounded-r"
+                : "text-muted-foreground hover:text-sidebar-foreground hover:bg-accent/30",
+            )}
+          >
+            <NavIcon name={item.icon} />
+            {item.label}
+          </button>
+        ))}
 
         {agents.length > 0 && (
           <div class="mt-5">
@@ -213,13 +164,13 @@ export function Sidebar({ status, currentPage, setPage }: SidebarProps) {
             </div>
             {agents
               .sort((a, b) => (b.composite || 0) - (a.composite || 0))
-              .slice(0, 8)
+              .slice(0, 6)
               .map((agent) => {
                 const improving = agent.delta != null && agent.delta > 0
                 return (
                   <button
                     key={agent.agent}
-                    onClick={() => setPage("agents")}
+                    onClick={() => setPage("loop")}
                     class="w-full flex items-center gap-2.5 px-4 py-1 text-[13px] text-muted-foreground hover:text-sidebar-foreground transition-colors"
                   >
                     <span class={cn(
@@ -289,7 +240,7 @@ function SearchBox({ setPage }: { setPage: (p: string) => void }) {
         <NavIcon name="search" />
         <input
           type="text"
-          placeholder="Search journals..."
+          placeholder="Search..."
           value={query}
           onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
           onKeyDown={(e) => e.key === "Enter" && doSearch()}
@@ -302,7 +253,7 @@ function SearchBox({ setPage }: { setPage: (p: string) => void }) {
           {results.map((r: any, i: number) => (
             <button
               key={i}
-              onClick={() => { setResults([]); setQuery(""); setPage("journal") }}
+              onClick={() => { setResults([]); setQuery(""); setPage("activity") }}
               class="w-full text-left px-3 py-2 hover:bg-muted/30 transition-colors border-b border-border/30 last:border-0"
             >
               <div class="text-xs font-medium truncate">{r.title || r.content?.slice(0, 60)}</div>

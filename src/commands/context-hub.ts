@@ -224,7 +224,11 @@ function readKnowledgeDocs(projectRoot: string): ContextItem[] {
     "NARRATIVE.md",
     "THESIS.md",
     "BRAND_DECISIONS.md",
-    "TASKS.md"
+    "TASKS.md",
+    "ARCHITECTURE.md",
+    "SERVICE_SPEC.md",
+    "DEPLOYMENT.md",
+    "RUNBOOK.md",
   ]
 
   for (const filename of priorityFiles) {
@@ -237,7 +241,7 @@ function readKnowledgeDocs(projectRoot: string): ContextItem[] {
         source: "knowledge",
         type: "doc",
         title,
-        content: content.slice(0, 2000), // Truncate for context
+        content: content.slice(0, 2000),
         path: filePath
       })
     }
@@ -546,7 +550,7 @@ function getUnifiedContext(projectRoot: string, query?: string, taskType?: strin
       journal: journalItems.length > 0,
       knowledge: knowledgeItems.length > 0,
       code: codeItems.length > 0,
-      memory: false
+      memory: fs.existsSync(path.join(projectRoot, ".jfl", "memory.db")),
     },
     query,
     taskType
@@ -2058,6 +2062,31 @@ export async function contextHubCommand(
     }
 
     case "serve": {
+      // Load .env files for API keys (hub runs as detached process)
+      for (const envFile of [
+        path.join(projectRoot, ".env"),
+        path.join(projectRoot, ".env.local"),
+        path.join(process.env.HOME || "/tmp", ".env"),
+      ]) {
+        if (fs.existsSync(envFile)) {
+          const envContent = fs.readFileSync(envFile, "utf-8")
+          for (const line of envContent.split("\n")) {
+            const trimmed = line.trim()
+            if (!trimmed || trimmed.startsWith("#")) continue
+            const eqIdx = trimmed.indexOf("=")
+            if (eqIdx === -1) continue
+            const key = trimmed.slice(0, eqIdx).trim()
+            let val = trimmed.slice(eqIdx + 1).trim()
+            if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+              val = val.slice(1, -1)
+            }
+            if (!process.env[key]) {
+              process.env[key] = val
+            }
+          }
+        }
+      }
+
       // Run server in foreground (used by daemon)
       const serviceEventsPath = path.join(projectRoot, ".jfl", "service-events.jsonl")
       const mapPersistPath = path.join(projectRoot, ".jfl", "map-events.jsonl")

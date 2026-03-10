@@ -4,32 +4,22 @@ import { api, WorkspaceStatus } from "./api"
 import { Sidebar } from "./components/Sidebar"
 import {
   OverviewPage,
-  AgentsPage,
-  JournalPage,
-  EventsPage,
+  ActivityPage,
+  LoopPage,
+  SystemPage,
   ServicesPage,
-  FlowsPage,
-  HealthPage,
-  ExperimentsPage,
-  TelemetryPage,
-  TopologyPage,
 } from "./pages"
 import { usePolling } from "./lib/hooks"
 import "./index.css"
 
-type PageId = "overview" | "agents" | "journal" | "events" | "services" | "flows" | "health" | "experiments" | "telemetry" | "topology"
+type PageId = "overview" | "activity" | "loop" | "topology" | "system"
 
 const pageMap: Record<PageId, (props: { status: WorkspaceStatus | null }) => preact.JSX.Element> = {
   overview: OverviewPage,
-  agents: () => <AgentsPage />,
-  journal: () => <JournalPage />,
-  events: () => <EventsPage />,
-  services: ServicesPage,
-  flows: () => <FlowsPage />,
-  health: HealthPage,
-  experiments: () => <ExperimentsPage />,
-  telemetry: () => <TelemetryPage />,
-  topology: () => <TopologyPage />,
+  activity: () => <ActivityPage />,
+  loop: () => <LoopPage />,
+  topology: ServicesPage,
+  system: SystemPage,
 }
 
 function App() {

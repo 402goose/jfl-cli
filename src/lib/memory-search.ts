@@ -129,29 +129,57 @@ async function computeEmbedding(text: string): Promise<{
   embedding: Float32Array
   model: string
 } | null> {
-  const apiKey = process.env.OPENAI_API_KEY
+  const openaiKey = process.env.OPENAI_API_KEY
+  const openrouterKey = process.env.OPENROUTER_API_KEY
 
-  if (!apiKey) {
+  if (!openaiKey && !openrouterKey) {
     return null
   }
 
-  try {
-    const openai = new OpenAI({ apiKey })
-
-    const response = await openai.embeddings.create({
-      model: 'text-embedding-3-small',
-      input: text,
-      encoding_format: 'float'
-    })
-
-    return {
-      embedding: new Float32Array(response.data[0].embedding),
-      model: 'text-embedding-3-small'
+  // Try OpenAI first, fall back to OpenRouter
+  if (openaiKey) {
+    try {
+      const openai = new OpenAI({ apiKey: openaiKey })
+      const response = await openai.embeddings.create({
+        model: 'text-embedding-3-small',
+        input: text,
+        encoding_format: 'float'
+      })
+      return {
+        embedding: new Float32Array(response.data[0].embedding),
+        model: 'text-embedding-3-small'
+      }
+    } catch (error: any) {
+      if (error?.status === 429 || error?.code === 'insufficient_quota') {
+        // OpenAI quota exceeded — fall through to OpenRouter
+      } else {
+        console.error('OpenAI embedding failed:', error?.message || error)
+        return null
+      }
     }
-  } catch (error) {
-    console.error('Failed to compute embedding:', error)
-    return null
   }
+
+  if (openrouterKey) {
+    try {
+      const openai = new OpenAI({
+        apiKey: openrouterKey,
+        baseURL: 'https://openrouter.ai/api/v1',
+      })
+      const response = await openai.embeddings.create({
+        model: 'openai/text-embedding-3-small',
+        input: text,
+        encoding_format: 'float'
+      })
+      return {
+        embedding: new Float32Array(response.data[0].embedding),
+        model: 'openrouter/text-embedding-3-small'
+      }
+    } catch (error: any) {
+      console.error('OpenRouter embedding failed:', error?.message || error)
+    }
+  }
+
+  return null
 }
 
 /**

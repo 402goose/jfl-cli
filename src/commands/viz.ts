@@ -5,6 +5,9 @@
 
 import chalk from "chalk"
 import type { Command } from "commander"
+import { readFileSync, existsSync } from "fs"
+import { join } from "path"
+import { execSync } from "child_process"
 import { hubFetch, getHubConfig } from "../lib/hub-client.js"
 import type {
   EvalAgent,
@@ -15,7 +18,8 @@ import type {
   WorkspaceStatus,
 } from "../lib/hub-client.js"
 import { linePlot, sparkline, renderBars, asciiBars } from "../lib/kuva.js"
-import type { BarEntry } from "../lib/kuva.js"
+import type { BarEntry, TimeSeriesPoint } from "../lib/kuva.js"
+import { TrainingBuffer } from "../lib/training-buffer.js"
 
 function formatTable(headers: string[], rows: string[][]): string {
   const colWidths = headers.map((h, i) =>
@@ -449,6 +453,29 @@ async function dashCommand(options: { json?: boolean }): Promise<void> {
     console.log(chalk.gray("\n  Events: unavailable"))
   }
 
+  // Self-driving loop summary
+  try {
+    const since7d = new Date(Date.now() - 7 * 86400000).toISOString()
+    const evtData7d = await hubFetch<{ events: HubEvent[] }>(`/api/events?limit=500&since=${encodeURIComponent(since7d)}`)
+    const allEvents = evtData7d.events
+    const evalEvents = allEvents.filter(e => e.type === "eval:scored")
+    const mergedCount = evalEvents.filter(e => {
+      const d = e.data as Record<string, unknown> | undefined
+      return d?.improved === "true" || d?.improved === true
+    }).length
+    const rejectedCount = evalEvents.length - mergedCount
+    const detectCount = allEvents.filter(e => e.type === "telemetry:insight").length
+
+    if (evalEvents.length > 0 || detectCount > 0) {
+      console.log(chalk.bold("\n  Loop (7d)\n"))
+      const loopParts: string[] = []
+      if (mergedCount > 0) loopParts.push(chalk.green(`${mergedCount} merged`))
+      if (rejectedCount > 0) loopParts.push(chalk.red(`${rejectedCount} rejected`))
+      if (detectCount > 0) loopParts.push(`${detectCount} detected`)
+      console.log(`  ${loopParts.join("  |  ")}`)
+    }
+  } catch {}
+
   // Hub status
   try {
     const hubStatus = await hubFetch<WorkspaceStatus>("/api/context/status")
@@ -467,6 +494,450 @@ async function dashCommand(options: { json?: boolean }): Promise<void> {
 
   console.log(chalk.gray("\n  " + "\u2500".repeat(50)))
   console.log(chalk.gray("  Use jfl viz <subcommand> for details\n"))
+}
+
+// ── Loop: self-driving pipeline view ──────────────────────────────────
+
+interface LoopCycle {
+  detect_event?: HubEvent
+  propose_event?: HubEvent
+  eval_event?: HubEvent
+  merge_event?: HubFlowExecution
+  pr_number?: number
+  branch?: string
+  delta?: number
+  improved?: boolean
+  ts: string
+}
+
+function buildCycles(events: HubEvent[], executions: HubFlowExecution[]): LoopCycle[] {
+  const evals = events.filter(e => e.type === "eval:scored")
+  const cycles: LoopCycle[] = []
+
+  for (const ev of evals) {
+    const d = ev.data as Record<string, unknown> | undefined
+    const prNum = d?.pr_number as number | undefined
+    const branch = d?.branch as string | undefined
+    const delta = d?.delta as number | undefined
+    const improved = d?.improved === "true" || d?.improved === true
+
+    const detect = events.find(e =>
+      e.type === "telemetry:insight" && e.ts < ev.ts
+      && (!branch || (e.data as Record<string, unknown>)?.branch === branch)
+    )
+
+    const propose = events.find(e =>
+      (e.type === "peter:pr-created" || e.type === "peter:pr-proposed")
+      && e.ts <= ev.ts
+      && ((e.data as Record<string, unknown>)?.pr_number === prNum
+        || (e.data as Record<string, unknown>)?.branch === branch)
+    )
+
+    const merge = executions.find(ex =>
+      (ex.flow === "auto-merge-on-improvement" || ex.flow === "flag-regression")
+      && ex.trigger_event_type === "eval:scored"
+      && ex.started_at >= ev.ts
+    )
+
+    cycles.push({
+      detect_event: detect,
+      propose_event: propose,
+      eval_event: ev,
+      merge_event: merge,
+      pr_number: prNum,
+      branch,
+      delta,
+      improved,
+      ts: ev.ts,
+    })
+  }
+
+  return cycles.sort((a, b) => b.ts.localeCompare(a.ts))
+}
+
+async function loopCommand(options: { days?: string; json?: boolean }): Promise<void> {
+  ensureHub()
+
+  const days = parseInt(options.days ?? "7", 10)
+  const since = new Date(Date.now() - days * 86400000).toISOString()
+
+  let events: HubEvent[] = []
+  let executions: HubFlowExecution[] = []
+  let agents: EvalAgent[] = []
+
+  try {
+    const evtData = await hubFetch<{ events: HubEvent[] }>(`/api/events?limit=500&since=${encodeURIComponent(since)}`)
+    events = evtData.events
+    const execData = await hubFetch<{ executions: HubFlowExecution[] }>("/api/flows/executions")
+    executions = execData.executions
+    agents = await hubFetch<EvalAgent[]>("/api/eval/leaderboard")
+  } catch (err: any) {
+    console.log(chalk.red(`\n  ${err.message}\n`))
+    return
+  }
+
+  const cycles = buildCycles(events, executions)
+
+  const detectCount = events.filter(e => e.type === "telemetry:insight").length
+  const proposeCount = events.filter(e => e.type.startsWith("peter:")).length
+  const evalCount = events.filter(e => e.type === "eval:scored").length
+  const mergeCount = cycles.filter(c => c.improved).length
+  const rejectCount = cycles.filter(c => c.improved === false).length
+
+  // Score trajectory
+  const bestAgent = agents.sort((a, b) => (b.latest_composite ?? 0) - (a.latest_composite ?? 0))[0]
+  const firstScore = bestAgent?.trend?.[0]
+  const lastScore = bestAgent?.latest_composite
+
+  // Training buffer stats
+  const tb = new TrainingBuffer()
+  const tbStats = tb.stats()
+
+  // Policy weights
+  let policyTrained = 0
+  try {
+    const weightsPath = join(process.cwd(), ".jfl", "policy-weights.json")
+    if (existsSync(weightsPath)) {
+      const w = JSON.parse(readFileSync(weightsPath, "utf-8"))
+      policyTrained = w.trained_on ?? 0
+    }
+  } catch {}
+
+  const retrainDelta = tbStats.total - policyTrained
+  const retrainNeeded = retrainDelta >= 20
+
+  if (options.json) {
+    console.log(JSON.stringify({
+      days,
+      detect: detectCount, propose: proposeCount, eval: evalCount,
+      merge: mergeCount, reject: rejectCount,
+      score_start: firstScore, score_end: lastScore,
+      tuples: tbStats.total, retrain_delta: retrainDelta,
+      cycles: cycles.slice(0, 20),
+    }, null, 2))
+    return
+  }
+
+  console.log(chalk.bold("\n\u2501".repeat(52)))
+  console.log(chalk.bold(`  Self-Driving Loop \u2014 Last ${days} days`))
+  console.log(chalk.bold("\u2501".repeat(52)))
+
+  // Score line
+  if (firstScore !== undefined && lastScore !== undefined) {
+    const scoreDelta = lastScore - firstScore
+    const arrow = scoreDelta >= 0 ? chalk.green(`\u25b2+${scoreDelta.toFixed(2)}`) : chalk.red(`\u25bc${scoreDelta.toFixed(2)}`)
+    const pct = Math.round(lastScore * 100)
+    const filled = Math.round(pct / 10)
+    const bar = chalk.green("\u2588".repeat(filled)) + chalk.gray("\u2591".repeat(10 - filled))
+    console.log(`\n  Score: ${firstScore.toFixed(2)} \u2192 ${lastScore.toFixed(2)}  ${arrow}  ${bar} ${pct}%`)
+  } else {
+    console.log(chalk.gray("\n  Score: no eval data yet"))
+  }
+
+  // Pipeline
+  console.log()
+  console.log(`  ${chalk.cyan("DETECT")}  \u2192  ${chalk.yellow("PROPOSE")}  \u2192  ${chalk.blue("EVAL")}  \u2192  ${chalk.green("MERGE")}  \u2192  ${chalk.magenta("LEARN")}`)
+
+  const skipCount = proposeCount > 0 ? Math.max(0, proposeCount - evalCount) : 0
+
+  console.log(
+    `    ${detectCount}` +
+    `        ${proposeCount}` +
+    `          ${evalCount}` +
+    `        ${mergeCount}` +
+    `         ${retrainNeeded ? chalk.yellow(`${retrainDelta} new`) : `${tbStats.total} tuples`}`
+  )
+
+  if (skipCount > 0 || rejectCount > 0) {
+    const parts: string[] = []
+    if (skipCount > 0) parts.push(`${skipCount} skip`)
+    if (rejectCount > 0) parts.push(`${rejectCount} reject`)
+    console.log(chalk.gray(`              ${parts.join("     ")}`))
+  }
+
+  // Pipeline health
+  const stuckStages: string[] = []
+  if (detectCount > 0 && proposeCount === 0) stuckStages.push("propose")
+  if (proposeCount > 0 && evalCount === 0) stuckStages.push("eval")
+  if (evalCount > 0 && mergeCount === 0 && rejectCount === 0) stuckStages.push("merge")
+  if (stuckStages.length === 0 && evalCount > 0) {
+    console.log(chalk.green(`\n  Pipeline health: ${"█".repeat(10)} 100%  (no stuck stages)`))
+  } else if (stuckStages.length > 0) {
+    console.log(chalk.yellow(`\n  Pipeline health: stuck at ${stuckStages.join(", ")}`))
+  }
+
+  // Last cycle
+  if (cycles.length > 0) {
+    const last = cycles[0]
+    const ago = timeAgo(last.ts)
+    const source = last.detect_event ? "telemetry:insight" : "cron"
+    const outcome = last.improved ? chalk.green("merged") : chalk.red("rejected")
+    const deltaStr = last.delta !== undefined ? (last.delta >= 0 ? `+${last.delta.toFixed(3)}` : last.delta.toFixed(3)) : "?"
+    console.log(chalk.gray(`\n  Last cycle: ${ago} \u2014 ${source} \u2192 ${last.branch ?? "?"} \u2192 ${deltaStr} \u2192 ${outcome}`))
+  }
+
+  // Recent cycles table
+  if (cycles.length > 1) {
+    console.log(chalk.bold("\n  Recent Cycles\n"))
+    const headers = ["Time", "Branch", "Delta", "Result"]
+    const rows = cycles.slice(0, 8).map(c => {
+      const deltaStr = c.delta !== undefined
+        ? (c.delta >= 0 ? chalk.green(`+${c.delta.toFixed(4)}`) : chalk.red(c.delta.toFixed(4)))
+        : chalk.gray("?")
+      const result = c.improved ? chalk.green("merged") : chalk.red("rejected")
+      return [
+        c.ts.replace("T", " ").slice(0, 16),
+        c.branch ?? "\u2014",
+        deltaStr,
+        result,
+      ]
+    })
+    console.log(formatTable(headers, rows))
+  }
+
+  console.log(chalk.bold("\n\u2501".repeat(52) + "\n"))
+}
+
+function timeAgo(ts: string): string {
+  const diff = Date.now() - new Date(ts).getTime()
+  const mins = Math.floor(diff / 60000)
+  if (mins < 60) return `${mins}m ago`
+  const hrs = Math.floor(mins / 60)
+  if (hrs < 24) return `${hrs}h ago`
+  const days = Math.floor(hrs / 24)
+  return `${days}d ago`
+}
+
+// ── Learning: policy head progress ───────────────────────────────────
+
+async function learningCommand(options: { json?: boolean }): Promise<void> {
+  const tb = new TrainingBuffer()
+  const tbStats = tb.stats()
+  const entries = tb.read()
+
+  // Load policy weights
+  let weights: {
+    trained_on: number
+    direction_accuracy: number
+    rank_correlation: number
+    trained_at: string
+    target_mean: number
+    target_std: number
+  } | null = null
+
+  const weightsPath = join(process.cwd(), ".jfl", "policy-weights.json")
+  if (existsSync(weightsPath)) {
+    try {
+      weights = JSON.parse(readFileSync(weightsPath, "utf-8"))
+    } catch {}
+  }
+
+  // Compute action type reward stats
+  const actionRewards: Record<string, { count: number; totalReward: number }> = {}
+  for (const e of entries) {
+    const t = e.action.type
+    if (!actionRewards[t]) actionRewards[t] = { count: 0, totalReward: 0 }
+    actionRewards[t].count++
+    actionRewards[t].totalReward += e.reward.composite_delta
+  }
+
+  const topActions = Object.entries(actionRewards)
+    .map(([type, stats]) => ({ type, avgReward: stats.totalReward / stats.count, count: stats.count }))
+    .sort((a, b) => b.avgReward - a.avgReward)
+
+  // Reward timeline for sparkline
+  const rewardTimeline = entries
+    .sort((a, b) => a.ts.localeCompare(b.ts))
+    .map(e => e.reward.composite_delta)
+
+  if (options.json) {
+    console.log(JSON.stringify({
+      tuples: tbStats,
+      weights: weights ? {
+        trained_on: weights.trained_on,
+        direction_accuracy: weights.direction_accuracy,
+        rank_correlation: weights.rank_correlation,
+        trained_at: weights.trained_at,
+      } : null,
+      top_actions: topActions.slice(0, 5),
+      reward_timeline: rewardTimeline,
+    }, null, 2))
+    return
+  }
+
+  console.log(chalk.bold("\n\u2501".repeat(52)))
+  console.log(chalk.bold("  Policy Head \u2014 Learning Curve"))
+  console.log(chalk.bold("\u2501".repeat(52)))
+
+  // Tuple stats
+  console.log(`\n  Tuples: ${chalk.bold(String(tbStats.total))}`)
+  console.log(`  Avg reward: ${tbStats.avgReward >= 0 ? chalk.green(`+${tbStats.avgReward.toFixed(4)}`) : chalk.red(tbStats.avgReward.toFixed(4))}`)
+  console.log(`  Improvement rate: ${(tbStats.improvedRate * 100).toFixed(1)}%`)
+
+  if (rewardTimeline.length > 2) {
+    console.log(`  Reward trend: ${sparkline(rewardTimeline)}`)
+  }
+
+  // Policy head stats
+  if (weights) {
+    const retrainDelta = tbStats.total - weights.trained_on
+    const retrainNeeded = retrainDelta >= 20
+
+    console.log()
+    console.log(chalk.bold("  Policy Head"))
+    console.log(`  Trained on: ${weights.trained_on} tuples`)
+    console.log(`  Rank correlation: ${weights.rank_correlation.toFixed(3)}`)
+    console.log(`  Direction accuracy: ${weights.direction_accuracy.toFixed(3)}`)
+    console.log(`  Last trained: ${weights.trained_at.replace("T", " ").slice(0, 19)}`)
+
+    if (retrainNeeded) {
+      console.log(chalk.yellow(`\n  ${retrainDelta} new tuples since last train (threshold: 20)`))
+      console.log(chalk.gray("  Retrain: python3 scripts/train-policy-head.py --epochs 200"))
+    } else {
+      console.log(chalk.gray(`\n  Next retrain: ${20 - retrainDelta} tuples away (threshold: 20)`))
+    }
+  } else {
+    console.log(chalk.gray("\n  No policy weights found — using heuristic selection"))
+    if (tbStats.total >= 20) {
+      console.log(chalk.yellow(`  ${tbStats.total} tuples available — ready to train!`))
+      console.log(chalk.gray("  Train: python3 scripts/train-policy-head.py --epochs 200"))
+    } else {
+      console.log(chalk.gray(`  Need ${20 - tbStats.total} more tuples before first train`))
+    }
+  }
+
+  // Top action types
+  if (topActions.length > 0) {
+    console.log(chalk.bold("\n  Top Action Types (by avg reward)\n"))
+    const headers = ["#", "Type", "Avg Reward", "Count"]
+    const rows = topActions.slice(0, 6).map((a, i) => [
+      String(i + 1),
+      a.type,
+      a.avgReward >= 0 ? chalk.green(`+${a.avgReward.toFixed(4)}`) : chalk.red(a.avgReward.toFixed(4)),
+      String(a.count),
+    ])
+    console.log(formatTable(headers, rows))
+
+    // Bar chart
+    const barEntries: BarEntry[] = topActions.slice(0, 6).map(a => ({
+      label: a.type,
+      value: Math.max(0, a.avgReward * 1000),
+    }))
+    if (barEntries.some(b => b.value > 0)) {
+      console.log()
+      console.log(renderBars(barEntries, "Avg Reward (×1000)"))
+    }
+  }
+
+  // Source breakdown
+  if (Object.keys(tbStats.bySource).length > 0) {
+    console.log(chalk.bold("\n  Tuple Sources\n"))
+    const sourceEntries: BarEntry[] = Object.entries(tbStats.bySource)
+      .sort(([, a], [, b]) => b - a)
+      .map(([source, count]) => ({ label: source, value: count }))
+    console.log(renderBars(sourceEntries, "By Source"))
+  }
+
+  console.log(chalk.bold("\n\u2501".repeat(52) + "\n"))
+}
+
+// ── Fleet: parallel VM agent status ──────────────────────────────────
+
+async function fleetCommand(options: { wave?: string; json?: boolean }): Promise<void> {
+  // Check if prlctl is available
+  let hasPrlctl = false
+  try {
+    execSync("which prlctl", { stdio: "ignore" })
+    hasPrlctl = true
+  } catch {}
+
+  if (!hasPrlctl) {
+    console.log(chalk.gray("\n  prlctl not found — Parallels Desktop Pro required for VM fleet."))
+    console.log(chalk.gray("  See: scripts/spawn-fleet.sh\n"))
+    return
+  }
+
+  // List VMs
+  let vmListOutput: string
+  try {
+    vmListOutput = execSync("prlctl list -a --json 2>/dev/null", { encoding: "utf-8" })
+  } catch {
+    console.log(chalk.gray("\n  No VMs found.\n"))
+    return
+  }
+
+  let vms: Array<{ name: string; status: string; uuid: string }>
+  try {
+    vms = JSON.parse(vmListOutput)
+  } catch {
+    console.log(chalk.gray("\n  Could not parse VM list.\n"))
+    return
+  }
+
+  // Filter to agent VMs
+  const agentVms = vms.filter(v => v.name.startsWith("agent-"))
+
+  if (agentVms.length === 0) {
+    console.log(chalk.gray("\n  No agent VMs found."))
+    console.log(chalk.gray("  Spawn a fleet: ./scripts/spawn-fleet.sh [size] [repo]\n"))
+    return
+  }
+
+  // Group by wave
+  const waves: Record<string, typeof agentVms> = {}
+  for (const vm of agentVms) {
+    const match = vm.name.match(/^agent-(\d+)-/)
+    const waveId = match ? match[1] : "unknown"
+    if (options.wave && waveId !== options.wave) continue
+    if (!waves[waveId]) waves[waveId] = []
+    waves[waveId].push(vm)
+  }
+
+  if (Object.keys(waves).length === 0) {
+    console.log(chalk.gray(`\n  No agent VMs found for wave ${options.wave}.\n`))
+    return
+  }
+
+  if (options.json) {
+    console.log(JSON.stringify(waves, null, 2))
+    return
+  }
+
+  for (const [waveId, waveVms] of Object.entries(waves)) {
+    const running = waveVms.filter(v => v.status === "running").length
+    const stopped = waveVms.filter(v => v.status === "stopped").length
+    const other = waveVms.length - running - stopped
+
+    console.log(chalk.bold(`\n\u2501`.repeat(52)))
+    console.log(chalk.bold(`  Fleet \u2014 Wave ${waveId} (${waveVms.length} agents)`))
+    console.log(chalk.bold("\u2501".repeat(52)))
+
+    for (const vm of waveVms.sort((a, b) => a.name.localeCompare(b.name))) {
+      const statusIcon = vm.status === "running" ? chalk.green("\u25cf") : vm.status === "stopped" ? chalk.gray("\u25cb") : chalk.red("\u25cf")
+      const statusText = vm.status === "running" ? chalk.green("running") : vm.status === "stopped" ? chalk.gray("done   ") : chalk.red(vm.status.padEnd(7))
+
+      // Try to get tuple count from VM if running
+      let tupleInfo = ""
+      if (vm.status === "running") {
+        try {
+          const countStr = execSync(
+            `prlctl exec "${vm.name}" -- bash -c "wc -l < /tmp/workspace/.jfl/training-buffer.jsonl 2>/dev/null || echo 0" 2>/dev/null`,
+            { encoding: "utf-8", timeout: 5000 }
+          ).trim()
+          tupleInfo = `${countStr} tuples`
+        } catch {
+          tupleInfo = ""
+        }
+      }
+
+      console.log(`  ${statusIcon} ${vm.name.padEnd(28)} ${statusText}  ${chalk.gray(tupleInfo)}`)
+    }
+
+    console.log(`\n  ${chalk.green(String(running))} running  ${chalk.gray(String(stopped))} done  ${other > 0 ? chalk.red(`${other} error`) : ""}`)
+    console.log(chalk.gray(`\n  collect:  ./scripts/collect-tuples.sh ${waveId}`))
+    console.log(chalk.gray(`  destroy:  ./scripts/destroy-fleet.sh ${waveId}`))
+    console.log(chalk.bold("\u2501".repeat(52) + "\n"))
+  }
 }
 
 export function registerVizCommand(program: Command): void {
@@ -513,6 +984,26 @@ export function registerVizCommand(program: Command): void {
     .description("Composite dashboard — leaderboard, pending flows, events, status")
     .option("--json", "Output as JSON")
     .action(dashCommand)
+
+  vizCmd
+    .command("loop")
+    .description("Self-driving loop pipeline — detect, propose, eval, merge, learn")
+    .option("--days <n>", "Lookback period in days", "7")
+    .option("--json", "Output as JSON")
+    .action(loopCommand)
+
+  vizCmd
+    .command("learning")
+    .description("Policy head learning curve — tuples, accuracy, action rewards")
+    .option("--json", "Output as JSON")
+    .action(learningCommand)
+
+  vizCmd
+    .command("fleet")
+    .description("VM fleet status — parallel agent waves and tuple collection")
+    .option("--wave <id>", "Filter to a specific wave ID")
+    .option("--json", "Output as JSON")
+    .action(fleetCommand)
 
   vizCmd.action(async () => {
     await dashCommand({})
