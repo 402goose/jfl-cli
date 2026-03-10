@@ -87,7 +87,7 @@ program.hook('postAction', (_thisCommand, actionCommand) => {
 const HELP_GROUPS: Record<string, string[]> = {
   "Getting Started": ["init", "status", "hud", "doctor"],
   "Daily Use": ["synopsis", "ask", "improve", "events", "voice"],
-  "Management": ["services", "portfolio", "flows", "hooks", "scope", "memory", "eval", "telemetry", "context-hub", "skills"],
+  "Management": ["services", "portfolio", "flows", "hooks", "scope", "memory", "eval", "viz", "telemetry", "context-hub", "skills"],
   "Platform": ["login", "deploy", "wallet", "preferences"],
   "Advanced": ["peter", "orchestrate", "openclaw", "ralph", "agent"],
 }
@@ -262,10 +262,12 @@ program
 program
   .command("flows")
   .description("Manage declarative event flows")
-  .argument("[action]", "list, add, test, enable, disable")
+  .argument("[action]", "list, add, test, enable, disable, approve")
   .argument("[name]", "Flow name (for test/enable/disable)")
-  .action(async (action, name) => {
-    await flowsCommand(action, name)
+  .option("--flow <name>", "Filter approvals to a specific flow")
+  .option("--all", "Approve all pending gated executions")
+  .action(async (action, name, options) => {
+    await flowsCommand(action, name, options)
   })
 
 program
@@ -856,7 +858,7 @@ program
 program
   .command("peter")
   .description("Peter Parker - model-routed agent orchestrator")
-  .argument("[action]", "setup, run, or status")
+  .argument("[action]", "setup, run, pr, status, or dashboard")
   .option("--cost", "Cost-optimized model routing (haiku-heavy)")
   .option("--balanced", "Balanced model routing (default)")
   .option("--quality", "Quality-first model routing (opus-heavy)")
@@ -1033,7 +1035,9 @@ openclaw
 // ============================================================================
 
 registerEvalCommand(program)
+registerPredictCommand(program)
 registerPortfolioCommand(program)
+registerVizCommand(program)
 
 // ============================================================================
 // TELEMETRY
@@ -1044,6 +1048,8 @@ const telemetryCmd = program.command("telemetry").description("Manage anonymous 
 import { registerDigestCommand } from "./commands/digest.js"
 import { registerEvalCommand } from "./commands/eval.js"
 import { registerPortfolioCommand } from "./commands/portfolio.js"
+import { registerPredictCommand } from "./commands/predict.js"
+import { registerVizCommand } from "./commands/viz.js"
 registerDigestCommand(telemetryCmd)
 
 telemetryCmd

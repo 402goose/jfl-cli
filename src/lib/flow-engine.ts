@@ -81,6 +81,33 @@ export class FlowEngine {
     return [...this.executions]
   }
 
+  toggleFlow(name: string, enabled?: boolean): FlowDefinition | null {
+    const flow = this.flows.find(f => f.name === name)
+    if (!flow) return null
+    flow.enabled = enabled ?? !flow.enabled
+
+    if (flow.enabled) {
+      const existing = this.subscriptionIds.find(id => id.includes(name))
+      if (!existing) {
+        const sub = this.eventBus.subscribe({
+          clientId: `flow:${flow.name}`,
+          patterns: [flow.trigger.pattern],
+          transport: "poll",
+          callback: (event) => this.handleEvent(flow, event),
+        })
+        this.subscriptionIds.push(sub.id)
+      }
+    } else {
+      const subIdx = this.subscriptionIds.findIndex(id => id.includes(name))
+      if (subIdx !== -1) {
+        this.eventBus.unsubscribe(this.subscriptionIds[subIdx])
+        this.subscriptionIds.splice(subIdx, 1)
+      }
+    }
+
+    return flow
+  }
+
   async approveGated(flowName: string, triggerEventId: string): Promise<FlowExecution | null> {
     const execIdx = this.executions.findIndex(
       e => e.flow === flowName && e.trigger_event_id === triggerEventId && e.gated

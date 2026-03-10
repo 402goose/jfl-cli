@@ -10,11 +10,12 @@ import {
   ServicesPage,
   FlowsPage,
   HealthPage,
+  ExperimentsPage,
 } from "./pages"
 import { usePolling } from "./lib/hooks"
 import "./index.css"
 
-type PageId = "overview" | "agents" | "journal" | "events" | "services" | "flows" | "health"
+type PageId = "overview" | "agents" | "journal" | "events" | "services" | "flows" | "health" | "experiments"
 
 const pageMap: Record<PageId, (props: { status: WorkspaceStatus | null }) => preact.JSX.Element> = {
   overview: OverviewPage,
@@ -24,6 +25,7 @@ const pageMap: Record<PageId, (props: { status: WorkspaceStatus | null }) => pre
   services: ServicesPage,
   flows: () => <FlowsPage />,
   health: HealthPage,
+  experiments: () => <ExperimentsPage />,
 }
 
 function App() {

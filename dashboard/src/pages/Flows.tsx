@@ -1,6 +1,13 @@
 import { api, FlowDef, FlowExecution } from "@/api"
 import { usePolling, timeAgo, cn } from "@/lib/hooks"
 
+function execStatus(e: FlowExecution): string {
+  if (e.gated) return "pending_approval"
+  if (e.error || (e.actions_failed && e.actions_failed > 0)) return "failed"
+  if (e.completed_at) return "completed"
+  return "running"
+}
+
 export function FlowsPage() {
   const flows = usePolling(() => api.flows(), 10000)
   const executions = usePolling(() => api.flowExecutions(), 10000)
@@ -11,7 +18,7 @@ export function FlowsPage() {
     ? rawExecs
     : (rawExecs as Record<string, unknown>)?.executions as FlowExecution[] || []
 
-  const pendingApprovals = execs.filter((e) => e.status === "pending_approval")
+  const pendingApprovals = execs.filter((e) => execStatus(e) === "pending_approval")
 
   return (
     <div class="space-y-6">
@@ -72,18 +79,19 @@ export function FlowsPage() {
               </thead>
               <tbody>
                 {execs.slice(0, 25).map((exec, i) => {
+                  const status = execStatus(exec)
                   const sc =
-                    exec.status === "completed" ? "text-success"
-                      : exec.status === "running" ? "text-info animate-pulse-dot"
-                      : exec.status === "failed" ? "text-destructive"
-                      : exec.status === "pending_approval" ? "text-warning"
+                    status === "completed" ? "text-success"
+                      : status === "running" ? "text-info animate-pulse-dot"
+                      : status === "failed" ? "text-destructive"
+                      : status === "pending_approval" ? "text-warning"
                       : "text-muted-foreground"
                   return (
                     <tr key={i} class="border-b border-border/50 hover:bg-muted/20 transition-colors">
                       <td class="py-2 px-3 font-medium">{exec.flow}</td>
-                      <td class={`py-2 px-3 mono text-xs ${sc}`}>{exec.status}</td>
+                      <td class={`py-2 px-3 mono text-xs ${sc}`}>{status}</td>
                       <td class="py-2 px-3 mono text-xs text-muted-foreground hidden md:table-cell truncate max-w-48">
-                        {exec.trigger_event_id}
+                        {exec.trigger_event_type || exec.trigger_event_id}
                       </td>
                       <td class="py-2 px-3 mono text-xs text-muted-foreground text-right">
                         {timeAgo(exec.started_at)}
@@ -127,12 +135,22 @@ function FlowCard({ flow, execCount }: { flow: FlowDef; execCount: number }) {
               gated
             </span>
           )}
-          <span class={cn(
-            "text-[10px] mono px-1.5 py-0.5 rounded uppercase",
-            enabled ? "bg-success/10 text-success" : "bg-muted text-muted-foreground",
-          )}>
+          <button
+            onClick={async (e) => {
+              e.stopPropagation()
+              try {
+                await api.toggleFlow(flow.name, !enabled)
+              } catch (err) {
+                console.error("Failed to toggle:", err)
+              }
+            }}
+            class={cn(
+              "text-[10px] mono px-1.5 py-0.5 rounded uppercase cursor-pointer transition-colors",
+              enabled ? "bg-success/10 text-success hover:bg-success/20" : "bg-muted text-muted-foreground hover:bg-muted/80",
+            )}
+          >
             {enabled ? "on" : "off"}
-          </span>
+          </button>
         </div>
       </div>
 
@@ -182,7 +200,7 @@ function PendingApprovalCard({ exec }: { exec: FlowExecution }) {
             <span class="text-[10px] mono text-warning uppercase">needs approval</span>
           </div>
           <div class="text-xs mono text-muted-foreground">
-            trigger: {exec.trigger_event_id} — {timeAgo(exec.started_at)}
+            {exec.trigger_event_type || exec.trigger_event_id} — {timeAgo(exec.started_at)}
           </div>
         </div>
         <button

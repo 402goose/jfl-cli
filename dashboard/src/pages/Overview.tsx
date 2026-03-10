@@ -1,6 +1,7 @@
 import { WorkspaceStatus, api, HubEvent, DiscoveredService, ContextItem, EvalAgent } from "@/api"
 import { MetricCard, StatusDot, Sparkline, ActivityChart } from "@/components"
 import { usePolling, timeAgo, cn } from "@/lib/hooks"
+import { useState } from "preact/hooks"
 
 interface OverviewProps {
   status: WorkspaceStatus | null
@@ -45,11 +46,14 @@ export function OverviewPage({ status }: OverviewProps) {
 
   return (
     <div class="space-y-6">
-      <div>
-        <h1 class="text-xl font-semibold">{config?.name || "Dashboard"}</h1>
-        {config?.description && (
-          <p class="text-sm text-muted-foreground mt-1">{config.description}</p>
-        )}
+      <div class="flex items-center justify-between">
+        <div>
+          <h1 class="text-xl font-semibold">{config?.name || "Dashboard"}</h1>
+          {config?.description && (
+            <p class="text-sm text-muted-foreground mt-1">{config.description}</p>
+          )}
+        </div>
+        <QuickActions />
       </div>
 
       <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -196,6 +200,50 @@ export function OverviewPage({ status }: OverviewProps) {
           <RecentActivity events={eventList} journal={journalItems} />
         </div>
       </section>
+    </div>
+  )
+}
+
+function QuickActions() {
+  const [feedback, setFeedback] = useState<string | null>(null)
+
+  const actions: { label: string; event?: string; data?: Record<string, unknown>; spawn?: boolean; command?: string; args?: string[] }[] = [
+    { label: "run eval", event: "eval:run-requested", data: { source: "dashboard" } },
+    { label: "health check", event: "custom", data: { title: "Manual health check", source: "dashboard" } },
+    { label: "run peter", spawn: true, command: "jfl", args: ["peter", "run"] },
+  ]
+
+  const handleAction = async (action: typeof actions[0]) => {
+    try {
+      if (action.spawn) {
+        await api.spawnAction(action.command!, action.args!, action.event)
+      } else {
+        await api.publishEvent(action.event!, action.data || {})
+      }
+      setFeedback(action.label)
+      setTimeout(() => setFeedback(null), 2000)
+    } catch (err) {
+      console.error("Action failed:", err)
+    }
+  }
+
+  return (
+    <div class="flex items-center gap-2">
+      <span class="text-xs text-muted-foreground">Actions:</span>
+      {actions.map((a) => (
+        <button
+          key={a.label}
+          onClick={() => handleAction(a)}
+          class={cn(
+            "text-[10px] mono px-2 py-1 rounded transition-colors",
+            feedback === a.label
+              ? "bg-success/15 text-success"
+              : "bg-muted text-muted-foreground hover:text-foreground hover:bg-muted/80",
+          )}
+        >
+          {feedback === a.label ? "done" : a.label}
+        </button>
+      ))}
     </div>
   )
 }

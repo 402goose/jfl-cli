@@ -133,9 +133,13 @@ export interface FlowDef {
 export interface FlowExecution {
   flow: string
   trigger_event_id: string
-  status: string
+  trigger_event_type?: string
   started_at: string
   completed_at?: string
+  actions_executed?: number
+  actions_failed?: number
+  error?: string
+  gated?: "time" | "approval"
 }
 
 export interface MemoryStatus {
@@ -193,4 +197,22 @@ export const api = {
       body: JSON.stringify(body),
     })
   },
+
+  publishEvent: (type: string, data: Record<string, unknown>, source = "dashboard") =>
+    apiFetch<{ id: string }>("/api/events", {
+      method: "POST",
+      body: JSON.stringify({ type, source, data }),
+    }),
+
+  toggleFlow: (flowName: string, enabled: boolean) =>
+    apiFetch<{ ok: boolean; enabled: boolean }>(`/api/flows/${encodeURIComponent(flowName)}/toggle`, {
+      method: "POST",
+      body: JSON.stringify({ enabled }),
+    }),
+
+  spawnAction: (command: string, args: string[], eventType?: string) =>
+    apiFetch<{ ok: boolean; pid: number }>("/api/actions/spawn", {
+      method: "POST",
+      body: JSON.stringify({ command, args, event_type: eventType }),
+    }),
 }

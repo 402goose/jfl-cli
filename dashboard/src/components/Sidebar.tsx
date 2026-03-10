@@ -46,6 +46,15 @@ function NavIcon({ name }: { name: string }) {
     health: (
       <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
     ),
+    experiments: (
+      <>
+        <circle cx="7" cy="12" r="2" />
+        <circle cx="12" cy="7" r="2" />
+        <circle cx="17" cy="10" r="2" />
+        <circle cx="12" cy="17" r="2" />
+        <path d="M7 12l5-5M12 7l5 3M17 10l-5 7" />
+      </>
+    ),
   }
 
   return (
@@ -97,6 +106,7 @@ const sections: { label?: string; items: NavItemDef[] }[] = [
     label: "Eval",
     items: [
       { id: "agents", label: "Agents", icon: "agents" },
+      { id: "experiments", label: "Experiments", icon: "experiments" },
     ],
   },
 ]

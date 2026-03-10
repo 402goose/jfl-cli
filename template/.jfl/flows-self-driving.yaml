@@ -1,0 +1,67 @@
+# Self-driving loop flows
+# Enable with: jfl agent enable
+# These flows close the autonomous improvement loop:
+#   Peter Parker creates PR -> CI runs eval -> auto-merge if improved
+#
+# Required secrets (set in GitHub repo settings):
+#   JFL_HUB_URL   - Context Hub URL (e.g. http://localhost:3001)
+#   JFL_HUB_TOKEN - Auth token for hub API
+#
+# Required CLI tools:
+#   gh - GitHub CLI (for merge/review operations)
+
+flows:
+  - name: auto-merge-on-improvement
+    description: "Auto-merge Peter Parker PRs when eval score improves"
+    enabled: true
+    trigger:
+      pattern: "eval:scored"
+      condition: 'data.improved == "true"'
+    gate:
+      requires_approval: false
+    actions:
+      - type: log
+        message: "Eval passed: {{data.agent}} on PR #{{data.pr_number}} delta={{data.delta}} ({{data.baseline}} -> {{data.composite}})"
+      - type: command
+        command: |
+          if [ "{{data.improved}}" = "true" ] && [ -n "{{data.pr_number}}" ]; then
+            gh pr merge {{data.pr_number}} --merge --delete-branch \
+              --body "Auto-merged by JFL: test_pass_rate improved by {{data.delta}} ({{data.baseline}} -> {{data.composite}})"
+          fi
+      - type: journal
+        entry_type: "milestone"
+        title: "Auto-merged PP PR #{{data.pr_number}}"
+        summary: "Peter Parker PR auto-merged. test_pass_rate: {{data.baseline}} -> {{data.composite}} (delta: {{data.delta}})"
+
+  - name: flag-regression
+    description: "Request changes on Peter Parker PRs when eval regresses"
+    enabled: true
+    trigger:
+      pattern: "eval:scored"
+      condition: 'data.improved == "false"'
+    actions:
+      - type: log
+        message: "Eval regression: {{data.agent}} on PR #{{data.pr_number}} delta={{data.delta}} ({{data.baseline}} -> {{data.composite}})"
+      - type: command
+        command: |
+          if [ "{{data.improved}}" = "false" ] && [ -n "{{data.pr_number}}" ]; then
+            gh pr review {{data.pr_number}} --request-changes \
+              --body "JFL eval regression: test_pass_rate dropped by {{data.delta}} ({{data.baseline}} -> {{data.composite}}). Run URL: {{data.run_url}}"
+          fi
+      - type: journal
+        entry_type: "fix"
+        title: "Regression flagged: PP PR #{{data.pr_number}}"
+        summary: "Peter Parker PR flagged for regression. test_pass_rate: {{data.baseline}} -> {{data.composite}} (delta: {{data.delta}})"
+
+  - name: log-training-tuple
+    description: "Log training tuple after every eval:scored for RL improvement"
+    enabled: true
+    trigger:
+      pattern: "eval:scored"
+    actions:
+      - type: journal
+        entry_type: "discovery"
+        title: "Training tuple: {{data.agent}} delta={{data.delta}}"
+        summary: "State: score={{data.baseline}}, Action: PR #{{data.pr_number}} ({{data.branch}}), Reward: delta={{data.delta}} improved={{data.improved}}"
+      - type: log
+        message: "Training tuple logged: state={{data.baseline}} action=PR#{{data.pr_number}} reward={{data.delta}}"

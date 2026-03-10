@@ -8,7 +8,8 @@ import chalk from "chalk"
 import * as fs from "fs"
 import * as path from "path"
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml"
-import type { FlowDefinition, FlowsConfig } from "../types/flows.js"
+import type { FlowDefinition, FlowsConfig, FlowExecution } from "../types/flows.js"
+import { getProjectPort } from "../utils/context-hub-port.js"
 
 function findProjectRoot(): string | null {
   let dir = process.cwd()
@@ -269,7 +270,182 @@ async function toggleFlow(name: string, enabled: boolean): Promise<void> {
   console.log(`\n  Flow "${name}" ${status}.\n`)
 }
 
-export async function flowsCommand(action?: string, nameOrArgs?: string): Promise<void> {
+function getHubAuth(projectRoot: string): { url: string; token: string | null } {
+  const port = getProjectPort(projectRoot)
+  const tokenPath = path.join(projectRoot, ".jfl", "context-hub.token")
+  const token = fs.existsSync(tokenPath)
+    ? fs.readFileSync(tokenPath, "utf-8").trim()
+    : null
+  return { url: `http://localhost:${port}`, token }
+}
+
+async function fetchExecutions(hubUrl: string, token: string | null): Promise<FlowExecution[]> {
+  const headers: Record<string, string> = {}
+  if (token) headers["Authorization"] = `Bearer ${token}`
+
+  const res = await fetch(`${hubUrl}/api/flows/executions`, {
+    headers,
+    signal: AbortSignal.timeout(5000),
+  })
+
+  if (!res.ok) {
+    throw new Error(`Hub returned ${res.status}: ${await res.text()}`)
+  }
+
+  const data = (await res.json()) as { executions: FlowExecution[] }
+  return data.executions
+}
+
+async function callApprove(
+  hubUrl: string,
+  token: string | null,
+  flowName: string,
+  triggerEventId: string
+): Promise<FlowExecution> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" }
+  if (token) headers["Authorization"] = `Bearer ${token}`
+
+  const res = await fetch(`${hubUrl}/api/flows/${encodeURIComponent(flowName)}/approve`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ trigger_event_id: triggerEventId }),
+    signal: AbortSignal.timeout(10000),
+  })
+
+  if (!res.ok) {
+    const body = await res.text()
+    throw new Error(`Approve failed (${res.status}): ${body}`)
+  }
+
+  return (await res.json()) as FlowExecution
+}
+
+function printExecution(exec: FlowExecution, index?: number): void {
+  const prefix = index !== undefined ? chalk.bold(`  ${index + 1}.`) : " "
+  console.log(`${prefix} ${chalk.bold(exec.flow)}`)
+  console.log(chalk.gray(`     trigger: ${exec.trigger_event_type} (${exec.trigger_event_id.slice(0, 8)}…)`))
+  console.log(chalk.yellow(`     gated: ${exec.gated}`))
+  console.log(chalk.gray(`     started: ${exec.started_at}`))
+}
+
+async function approveFlows(options: { flow?: string; all?: boolean }): Promise<void> {
+  const root = findProjectRoot()
+  if (!root) {
+    console.log(chalk.red("\n  Not in a JFL project.\n"))
+    return
+  }
+
+  const { url: hubUrl, token } = getHubAuth(root)
+
+  let executions: FlowExecution[]
+  try {
+    executions = await fetchExecutions(hubUrl, token)
+  } catch (err: any) {
+    console.log(chalk.red(`\n  Could not reach Context Hub: ${err.message}\n`))
+    return
+  }
+
+  let pending = executions.filter((e) => !!e.gated)
+  if (options.flow) {
+    pending = pending.filter((e) => e.flow === options.flow)
+  }
+
+  if (pending.length === 0) {
+    const suffix = options.flow ? ` for flow "${options.flow}"` : ""
+    console.log(chalk.gray(`\n  No pending approvals${suffix}.\n`))
+    return
+  }
+
+  const readline = await import("readline")
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+  const ask = (q: string): Promise<string> =>
+    new Promise((resolve) => rl.question(q, resolve))
+
+  if (options.all) {
+    console.log(chalk.bold(`\n  ${pending.length} pending approval(s):\n`))
+    for (let i = 0; i < pending.length; i++) {
+      printExecution(pending[i], i)
+    }
+    console.log()
+    const confirm = await ask(chalk.yellow(`  Approve all ${pending.length}? (y/N) `))
+    if (confirm.trim().toLowerCase() !== "y") {
+      console.log(chalk.gray("  Cancelled.\n"))
+      rl.close()
+      return
+    }
+
+    for (const exec of pending) {
+      try {
+        const result = await callApprove(hubUrl, token, exec.flow, exec.trigger_event_id)
+        console.log(chalk.green(`  ✓ ${exec.flow}`) + chalk.gray(` — ${result.actions_executed} action(s) executed`))
+      } catch (err: any) {
+        console.log(chalk.red(`  ✗ ${exec.flow}: ${err.message}`))
+      }
+    }
+    console.log()
+    rl.close()
+    return
+  }
+
+  if (pending.length === 1) {
+    const exec = pending[0]
+    console.log(chalk.bold("\n  Pending approval:\n"))
+    printExecution(exec)
+    console.log()
+    const confirm = await ask(chalk.yellow("  Approve? (y/N) "))
+    if (confirm.trim().toLowerCase() !== "y") {
+      console.log(chalk.gray("  Cancelled.\n"))
+      rl.close()
+      return
+    }
+
+    try {
+      const result = await callApprove(hubUrl, token, exec.flow, exec.trigger_event_id)
+      console.log(chalk.green(`\n  Approved.`) + chalk.gray(` ${result.actions_executed} action(s) executed, ${result.actions_failed} failed.\n`))
+    } catch (err: any) {
+      console.log(chalk.red(`\n  ${err.message}\n`))
+    }
+    rl.close()
+    return
+  }
+
+  console.log(chalk.bold(`\n  ${pending.length} pending approval(s):\n`))
+  for (let i = 0; i < pending.length; i++) {
+    printExecution(pending[i], i)
+  }
+  console.log()
+  const choice = await ask(chalk.yellow(`  Approve which? (1-${pending.length}, or "all") `))
+  rl.close()
+
+  if (choice.trim().toLowerCase() === "all") {
+    for (const exec of pending) {
+      try {
+        const result = await callApprove(hubUrl, token, exec.flow, exec.trigger_event_id)
+        console.log(chalk.green(`  ✓ ${exec.flow}`) + chalk.gray(` — ${result.actions_executed} action(s) executed`))
+      } catch (err: any) {
+        console.log(chalk.red(`  ✗ ${exec.flow}: ${err.message}`))
+      }
+    }
+    console.log()
+    return
+  }
+
+  const idx = parseInt(choice.trim(), 10) - 1
+  if (isNaN(idx) || idx < 0 || idx >= pending.length) {
+    console.log(chalk.red(`  Invalid selection.\n`))
+    return
+  }
+
+  const selected = pending[idx]
+  try {
+    const result = await callApprove(hubUrl, token, selected.flow, selected.trigger_event_id)
+    console.log(chalk.green(`\n  Approved.`) + chalk.gray(` ${result.actions_executed} action(s) executed, ${result.actions_failed} failed.\n`))
+  } catch (err: any) {
+    console.log(chalk.red(`\n  ${err.message}\n`))
+  }
+}
+
+export async function flowsCommand(action?: string, nameOrArgs?: string, options?: { flow?: string; all?: boolean }): Promise<void> {
   switch (action) {
     case "list":
       await listFlows()
@@ -286,6 +462,9 @@ export async function flowsCommand(action?: string, nameOrArgs?: string): Promis
     case "disable":
       await toggleFlow(nameOrArgs || "", false)
       break
+    case "approve":
+      await approveFlows(options || {})
+      break
     default:
       console.log(chalk.bold("\n  jfl flows — Declarative event flows\n"))
       console.log(chalk.gray("  Commands:"))
@@ -294,6 +473,9 @@ export async function flowsCommand(action?: string, nameOrArgs?: string): Promis
       console.log("    jfl flows test <name>       Test a flow with a synthetic event")
       console.log("    jfl flows enable <name>     Enable a flow")
       console.log("    jfl flows disable <name>    Disable a flow")
+      console.log("    jfl flows approve           Approve gated flow executions")
+      console.log(chalk.gray("      --flow <name>             Filter to a specific flow"))
+      console.log(chalk.gray("      --all                     Approve all pending"))
       console.log()
   }
 }

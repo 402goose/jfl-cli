@@ -112,6 +112,7 @@ export function AgentsPage() {
 function PeterParkerSection() {
   const [activeProfile, setActiveProfile] = useState<CostProfile>("balanced")
   const [showRouting, setShowRouting] = useState(false)
+  const [justSpawned, setJustSpawned] = useState(false)
   const peterEvents = usePolling(
     () => api.events(50, "peter:*").then((r) => {
       const evts = r?.events || []
@@ -196,6 +197,25 @@ function PeterParkerSection() {
             {p}
           </button>
         ))}
+        <button
+          onClick={async () => {
+            try {
+              await api.spawnAction("jfl", ["peter", "run", "--profile", activeProfile], "peter:started")
+              setJustSpawned(true)
+              setTimeout(() => setJustSpawned(false), 3000)
+            } catch (err) {
+              console.error("Failed to spawn:", err)
+            }
+          }}
+          class={cn(
+            "text-[10px] mono px-2 py-1 rounded transition-colors",
+            justSpawned
+              ? "bg-success/15 text-success"
+              : "bg-info/15 text-info hover:bg-info/25",
+          )}
+        >
+          {justSpawned ? "spawned" : "run peter"}
+        </button>
         <button
           onClick={() => setShowRouting(!showRouting)}
           class="ml-auto text-[10px] mono text-muted-foreground hover:text-foreground transition-colors"

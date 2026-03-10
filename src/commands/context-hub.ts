@@ -1274,6 +1274,77 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus,
       return
     }
 
+    if (url.pathname.match(/^\/api\/flows\/[^/]+\/toggle$/) && req.method === "POST") {
+      if (!flowEngine) {
+        res.writeHead(503, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ error: "Flow engine not initialized" }))
+        return
+      }
+      const flowName = decodeURIComponent(url.pathname.split("/")[3])
+      let body = ""
+      req.on("data", chunk => body += chunk)
+      req.on("end", () => {
+        try {
+          const { enabled } = JSON.parse(body || "{}")
+          const result = flowEngine.toggleFlow(flowName, enabled)
+          if (!result) {
+            res.writeHead(404, { "Content-Type": "application/json" })
+            res.end(JSON.stringify({ error: "Flow not found" }))
+            return
+          }
+          res.writeHead(200, { "Content-Type": "application/json" })
+          res.end(JSON.stringify({ ok: true, flow: flowName, enabled: result.enabled }))
+        } catch (err: any) {
+          res.writeHead(500, { "Content-Type": "application/json" })
+          res.end(JSON.stringify({ error: err.message }))
+        }
+      })
+      return
+    }
+
+    if (url.pathname === "/api/actions/spawn" && req.method === "POST") {
+      let body = ""
+      req.on("data", chunk => body += chunk)
+      req.on("end", () => {
+        try {
+          const { command, args, cwd, event_type, event_data } = JSON.parse(body || "{}")
+
+          if (!command) {
+            res.writeHead(400, { "Content-Type": "application/json" })
+            res.end(JSON.stringify({ error: "command required" }))
+            return
+          }
+
+          const env = { ...process.env }
+          delete env.ANTHROPIC_API_KEY
+          delete env.CLAUDE_CODE_ENTRYPOINT
+
+          const child = spawn(command, args || [], {
+            cwd: cwd || projectRoot,
+            detached: true,
+            stdio: "ignore",
+            env,
+          })
+          child.unref()
+
+          if (event_type && eventBus) {
+            eventBus.emit({
+              type: event_type as any,
+              source: "dashboard:action",
+              data: event_data || { command, args, pid: child.pid },
+            })
+          }
+
+          res.writeHead(200, { "Content-Type": "application/json" })
+          res.end(JSON.stringify({ ok: true, pid: child.pid }))
+        } catch (err: any) {
+          res.writeHead(500, { "Content-Type": "application/json" })
+          res.end(JSON.stringify({ error: err.message }))
+        }
+      })
+      return
+    }
+
     // 404
     res.writeHead(404, { "Content-Type": "application/json" })
     res.end(JSON.stringify({ error: "Not found" }))
