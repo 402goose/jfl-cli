@@ -5,6 +5,36 @@ on:
     types: [opened, synchronize]
     branches: [main]
 
+  workflow_call:
+    inputs:
+      test-command:
+        description: 'Command to run tests (must output JSON with numPassedTests/numTotalTests)'
+        type: string
+        default: 'npx jest --json --silent'
+      branch-prefix:
+        description: 'Branch prefix to auto-trigger on (e.g. pp/)'
+        type: string
+        default: 'pp/'
+      auto-merge:
+        description: 'Auto-merge PRs that improve eval score'
+        type: boolean
+        default: true
+      retrain-threshold:
+        description: 'Retrain policy head after this many new tuples (0 = disabled)'
+        type: number
+        default: 50
+    secrets:
+      STRATUS_API_KEY:
+        required: false
+      OPENAI_API_KEY:
+        required: false
+      OPENROUTER_API_KEY:
+        required: false
+      JFL_HUB_URL:
+        required: false
+      JFL_HUB_TOKEN:
+        required: false
+
 permissions:
   contents: write
   pull-requests: write
@@ -14,13 +44,16 @@ jobs:
     name: Run JFL Eval
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    if: startsWith(github.head_ref, 'pp/') || contains(github.event.pull_request.labels.*.name, 'run-eval')
+    if: >-
+      startsWith(github.head_ref, inputs.branch-prefix || 'pp/')
+      || contains(github.event.pull_request.labels.*.name, 'run-eval')
 
     env:
       JFL_HUB_URL: ${{ secrets.JFL_HUB_URL }}
       JFL_HUB_TOKEN: ${{ secrets.JFL_HUB_TOKEN }}
       JFL_TELEMETRY: 'off'
       NODE_OPTIONS: '--experimental-vm-modules'
+      TEST_COMMAND: ${{ inputs.test-command || 'npx jest --json --silent' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -36,7 +69,7 @@ jobs:
         run: npm ci
 
       - name: Build
-        run: npx tsc --build --noEmit
+        run: npm run build
 
       - name: Predict eval delta (Stratus, optional)
         id: predict
@@ -79,7 +112,7 @@ jobs:
           git clean -fd
           npm ci --ignore-scripts 2>/dev/null || true
 
-          RESULT=$(npx jest --json --silent 2>/dev/null || echo '{}')
+          RESULT=$($TEST_COMMAND 2>/dev/null || echo '{}')
           PASSING=$(echo "$RESULT" | node -e "
             let d=''; process.stdin.on('data',c=>d+=c); process.stdin.on('end',()=>{
               try { const j=JSON.parse(d); console.log(j.numPassedTests||0); }
@@ -107,7 +140,7 @@ jobs:
         run: |
           npm ci --ignore-scripts 2>/dev/null || true
 
-          RESULT=$(npx jest --json --silent 2>/dev/null || echo '{}')
+          RESULT=$($TEST_COMMAND 2>/dev/null || echo '{}')
           PASSING=$(echo "$RESULT" | node -e "
             let d=''; process.stdin.on('data',c=>d+=c); process.stdin.on('end',()=>{
               try { const j=JSON.parse(d); console.log(j.numPassedTests||0); }
@@ -396,6 +429,34 @@ jobs:
               }
             }' || echo "Warning: could not post to hub (hub may not be running)"
 
+      - name: Auto-retrain policy head (if enough new tuples)
+        if: env.STRATUS_API_KEY != ''
+        continue-on-error: true
+        env:
+          STRATUS_API_KEY: ${{ secrets.STRATUS_API_KEY }}
+          RETRAIN_THRESHOLD: ${{ inputs.retrain-threshold || '50' }}
+        run: |
+          TUPLE_COUNT=$(wc -l < .jfl/training-buffer.jsonl 2>/dev/null | tr -d ' ' || echo "0")
+          TRAINED_ON=$(node -e "try{console.log(JSON.parse(require('fs').readFileSync('.jfl/policy-weights.json','utf8')).trained_on)}catch{console.log(0)}" 2>/dev/null || echo "0")
+          NEW_TUPLES=$((TUPLE_COUNT - TRAINED_ON))
+
+          echo "Tuples: $TUPLE_COUNT total, $TRAINED_ON trained on, $NEW_TUPLES new (threshold: $RETRAIN_THRESHOLD)"
+
+          if [ "$NEW_TUPLES" -ge "$RETRAIN_THRESHOLD" ]; then
+            echo "Threshold met — retraining policy head..."
+            pip install numpy --quiet 2>/dev/null
+            python scripts/train-policy-head.py --epochs 200 --lr 0.0003
+
+            if [ -f .jfl/policy-weights.json ]; then
+              git add .jfl/policy-weights.json
+              git commit -m "retrain: policy head on $TUPLE_COUNT tuples (was $TRAINED_ON)"
+              git push origin ${{ github.head_ref }}
+              echo "Policy head retrained and committed"
+            fi
+          else
+            echo "Below threshold, skipping retrain"
+          fi
+
       - name: Comment on PR
         uses: actions/github-script@v7
         with:
@@ -509,9 +570,15 @@ jobs:
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
+          AUTO_MERGE: ${{ inputs.auto-merge || 'true' }}
         run: |
           PR_NUMBER=${{ github.event.pull_request.number }}
           IMPROVED="${{ steps.delta.outputs.improved }}"
+
+          if [ "$AUTO_MERGE" != "true" ]; then
+            echo "Auto-merge disabled by workflow input"
+            exit 0
+          fi
 
           if [ "$IMPROVED" = "true" ]; then
             # Check if AI review requested changes

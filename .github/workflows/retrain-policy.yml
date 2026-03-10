@@ -1,0 +1,92 @@
+name: Retrain Policy Head
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'  # Weekly Monday 6am UTC
+  workflow_dispatch:
+    inputs:
+      epochs:
+        description: 'Training epochs'
+        type: number
+        default: 200
+      force:
+        description: 'Force retrain even if below threshold'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  retrain:
+    name: Retrain Policy Head
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      STRATUS_API_KEY: ${{ secrets.STRATUS_API_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install numpy
+        run: pip install numpy
+
+      - name: Check tuple count
+        id: check
+        run: |
+          TUPLE_COUNT=$(wc -l < .jfl/training-buffer.jsonl 2>/dev/null | tr -d ' ' || echo "0")
+          TRAINED_ON=$(python -c "import json; print(json.load(open('.jfl/policy-weights.json'))['trained_on'])" 2>/dev/null || echo "0")
+          NEW_TUPLES=$((TUPLE_COUNT - TRAINED_ON))
+          FORCE="${{ inputs.force || 'false' }}"
+
+          echo "total=$TUPLE_COUNT" >> $GITHUB_OUTPUT
+          echo "trained_on=$TRAINED_ON" >> $GITHUB_OUTPUT
+          echo "new=$NEW_TUPLES" >> $GITHUB_OUTPUT
+
+          if [ "$FORCE" = "true" ] || [ "$NEW_TUPLES" -ge 20 ]; then
+            echo "should_train=true" >> $GITHUB_OUTPUT
+            echo "Training: $TUPLE_COUNT tuples ($NEW_TUPLES new since last train of $TRAINED_ON)"
+          else
+            echo "should_train=false" >> $GITHUB_OUTPUT
+            echo "Skipping: only $NEW_TUPLES new tuples (need 20+)"
+          fi
+
+      - name: Train policy head
+        if: steps.check.outputs.should_train == 'true'
+        run: |
+          EPOCHS=${{ inputs.epochs || '200' }}
+          echo "Training on ${{ steps.check.outputs.total }} tuples for $EPOCHS epochs..."
+          python scripts/train-policy-head.py --epochs $EPOCHS --lr 0.0003
+
+      - name: Commit updated weights
+        if: steps.check.outputs.should_train == 'true'
+        run: |
+          if [ -f .jfl/policy-weights.json ]; then
+            TRAINED_ON=$(python -c "import json; w=json.load(open('.jfl/policy-weights.json')); print(w['trained_on'])")
+            RANK_CORR=$(python -c "import json; w=json.load(open('.jfl/policy-weights.json')); print(f\"{w['rank_correlation']:.4f}\")")
+
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add .jfl/policy-weights.json .jfl/policy-embeddings.json
+            git commit -m "retrain: policy head on $TRAINED_ON tuples (rank_corr=$RANK_CORR)"
+            git push origin main
+            echo "### Policy Head Retrained" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "- Tuples: $TRAINED_ON" >> $GITHUB_STEP_SUMMARY
+            echo "- Rank correlation: $RANK_CORR" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Training produced no weights file"
+            exit 1
+          fi
+
+      - name: Skip summary
+        if: steps.check.outputs.should_train != 'true'
+        run: |
+          echo "### Policy Head Retrain Skipped" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Only ${{ steps.check.outputs.new }} new tuples since last train (${{ steps.check.outputs.trained_on }}). Need 20+." >> $GITHUB_STEP_SUMMARY
