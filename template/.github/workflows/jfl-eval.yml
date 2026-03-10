@@ -1,0 +1,437 @@
+name: JFL Eval Suite
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  eval:
+    name: Run JFL Eval
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: startsWith(github.head_ref, 'pp/') || contains(github.event.pull_request.labels.*.name, 'run-eval')
+
+    env:
+      JFL_HUB_URL: ${{ secrets.JFL_HUB_URL }}
+      JFL_HUB_TOKEN: ${{ secrets.JFL_HUB_TOKEN }}
+      JFL_TELEMETRY: 'off'
+      NODE_OPTIONS: '--experimental-vm-modules'
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npx tsc --build --noEmit
+
+      - name: Run tests (baseline from main)
+        id: baseline
+        run: |
+          # Clean switch to main — remove PR-only files, restore main state
+          PR_SHA=$(git rev-parse HEAD)
+          git checkout origin/main --force
+          git clean -fd
+          npm ci --ignore-scripts 2>/dev/null || true
+
+          RESULT=$(npx jest --json --silent 2>/dev/null || echo '{}')
+          PASSING=$(echo "$RESULT" | node -e "
+            let d=''; process.stdin.on('data',c=>d+=c); process.stdin.on('end',()=>{
+              try { const j=JSON.parse(d); console.log(j.numPassedTests||0); }
+              catch(e) { console.log(0); }
+            })
+          ")
+          TOTAL=$(echo "$RESULT" | node -e "
+            let d=''; process.stdin.on('data',c=>d+=c); process.stdin.on('end',()=>{
+              try { const j=JSON.parse(d); console.log(j.numTotalTests||1); }
+              catch(e) { console.log(1); }
+            })
+          ")
+          SCORE=$(node -e "console.log(($TOTAL>0?$PASSING/$TOTAL:0).toFixed(4))")
+          echo "score=$SCORE" >> $GITHUB_OUTPUT
+          echo "passing=$PASSING" >> $GITHUB_OUTPUT
+          echo "total=$TOTAL" >> $GITHUB_OUTPUT
+          echo "Baseline: $SCORE ($PASSING/$TOTAL)"
+
+          # Switch back to PR branch
+          git checkout $PR_SHA --force
+          git clean -fd
+
+      - name: Run tests (PR branch)
+        id: pr_eval
+        run: |
+          npm ci --ignore-scripts 2>/dev/null || true
+
+          RESULT=$(npx jest --json --silent 2>/dev/null || echo '{}')
+          PASSING=$(echo "$RESULT" | node -e "
+            let d=''; process.stdin.on('data',c=>d+=c); process.stdin.on('end',()=>{
+              try { const j=JSON.parse(d); console.log(j.numPassedTests||0); }
+              catch(e) { console.log(0); }
+            })
+          ")
+          TOTAL=$(echo "$RESULT" | node -e "
+            let d=''; process.stdin.on('data',c=>d+=c); process.stdin.on('end',()=>{
+              try { const j=JSON.parse(d); console.log(j.numTotalTests||1); }
+              catch(e) { console.log(1); }
+            })
+          ")
+          SCORE=$(node -e "console.log(($TOTAL>0?$PASSING/$TOTAL:0).toFixed(4))")
+          echo "score=$SCORE" >> $GITHUB_OUTPUT
+          echo "passing=$PASSING" >> $GITHUB_OUTPUT
+          echo "total=$TOTAL" >> $GITHUB_OUTPUT
+          echo "PR score: $SCORE ($PASSING/$TOTAL)"
+
+      - name: Compute delta
+        id: delta
+        run: |
+          BASELINE=${{ steps.baseline.outputs.score }}
+          PR_SCORE=${{ steps.pr_eval.outputs.score }}
+          BASELINE_TOTAL=${{ steps.baseline.outputs.total }}
+          PR_TOTAL=${{ steps.pr_eval.outputs.total }}
+          BASELINE_PASSING=${{ steps.baseline.outputs.passing }}
+          PR_PASSING=${{ steps.pr_eval.outputs.passing }}
+
+          # Pass rate delta
+          DELTA=$(node -e "console.log(($PR_SCORE - $BASELINE).toFixed(4))")
+
+          # Test count delta
+          TESTS_ADDED=$(node -e "console.log($PR_TOTAL - $BASELINE_TOTAL)")
+          TESTS_PASSING_ADDED=$(node -e "console.log($PR_PASSING - $BASELINE_PASSING)")
+
+          # Improved = pass_rate up OR (pass_rate maintained at 1.0 AND more passing tests)
+          IMPROVED=$(node -e "
+            const prScore = $PR_SCORE;
+            const baseline = $BASELINE;
+            const testsAdded = $PR_PASSING - $BASELINE_PASSING;
+            const passRateUp = prScore > baseline;
+            const passRateMaintained = prScore >= 1.0 && baseline >= 1.0;
+            const moreTests = testsAdded > 0;
+            const noRegression = prScore >= baseline;
+            console.log(passRateUp || (passRateMaintained && moreTests) || (noRegression && moreTests));
+          ")
+
+          echo "delta=$DELTA" >> $GITHUB_OUTPUT
+          echo "improved=$IMPROVED" >> $GITHUB_OUTPUT
+          echo "tests_added=$TESTS_ADDED" >> $GITHUB_OUTPUT
+          echo "tests_passing_added=$TESTS_PASSING_ADDED" >> $GITHUB_OUTPUT
+          echo "Delta: $DELTA, tests_added=$TESTS_ADDED (improved=$IMPROVED)"
+
+      - name: AI quality assessment
+        id: ai_eval
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          # Get diff for AI assessment
+          git diff origin/main...HEAD -- '*.ts' '*.tsx' '*.js' '*.jsx' | head -3000 > /tmp/eval-diff.txt
+          DIFF_SIZE=$(wc -c < /tmp/eval-diff.txt | tr -d ' ')
+
+          if [ "$DIFF_SIZE" -lt 10 ]; then
+            echo "quality_score=0.5" >> $GITHUB_OUTPUT
+            echo "quality_reason=No code diff to assess" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Gather context (same as review workflow)
+          node -e "
+            const fs = require('fs');
+            const sections = [];
+            try { const c = JSON.parse(fs.readFileSync('.jfl/config.json','utf8')); sections.push('Project: ' + (c.name||'unknown') + ' - ' + (c.description||'')); } catch(e) {}
+            try { sections.push(fs.readFileSync('knowledge/ARCHITECTURE.md','utf8').substring(0,1500)); } catch(e) {}
+            try { sections.push(fs.readFileSync('knowledge/SERVICE_SPEC.md','utf8').substring(0,800)); } catch(e) {}
+            fs.writeFileSync('/tmp/eval-context.txt', sections.join('\n'));
+          "
+
+          # Build AI eval payload
+          node -e "
+            const fs = require('fs');
+            const diff = fs.readFileSync('/tmp/eval-diff.txt', 'utf8').substring(0, 8000);
+            const context = fs.readFileSync('/tmp/eval-context.txt', 'utf8').substring(0, 2000);
+            const title = process.env.PR_TITLE || '';
+
+            const testMetrics = {
+              baseline_pass_rate: ${{ steps.baseline.outputs.score }},
+              pr_pass_rate: ${{ steps.pr_eval.outputs.score }},
+              baseline_tests: ${{ steps.baseline.outputs.total }},
+              pr_tests: ${{ steps.pr_eval.outputs.total }},
+              tests_added: ${{ steps.delta.outputs.tests_added }},
+            };
+
+            const payload = {
+              model: 'gpt-4o-mini',
+              messages: [
+                {
+                  role: 'system',
+                  content: [
+                    'You are an AI eval scorer for a software project. Score this PR on overall quality improvement.',
+                    '',
+                    '--- PROJECT CONTEXT ---',
+                    context,
+                    '--- END CONTEXT ---',
+                    '',
+                    'Test metrics: ' + JSON.stringify(testMetrics),
+                    '',
+                    'Score the PR from 0.0 to 1.0 on these dimensions:',
+                    '- correctness: Does the code work? Any bugs?',
+                    '- coverage: Did it add meaningful tests?',
+                    '- architecture: Does it follow project patterns?',
+                    '- value: Does it add real value to the project?',
+                    '',
+                    'Respond in this exact JSON format (no markdown):',
+                    '{\"quality_score\": 0.0-1.0, \"dimensions\": {\"correctness\": 0.0-1.0, \"coverage\": 0.0-1.0, \"architecture\": 0.0-1.0, \"value\": 0.0-1.0}, \"reason\": \"1-2 sentence summary\"}',
+                  ].join('\\n')
+                },
+                { role: 'user', content: 'PR: ' + title + '\\n\\n' + diff }
+              ],
+              max_tokens: 300,
+              temperature: 0.1
+            };
+
+            fs.writeFileSync('/tmp/eval-payload.json', JSON.stringify(payload));
+          "
+
+          # Try OpenAI
+          RESULT=""
+          if [ -n "$OPENAI_API_KEY" ]; then
+            RESPONSE=$(curl -s -X POST https://api.openai.com/v1/chat/completions \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer $OPENAI_API_KEY" \
+              -d @/tmp/eval-payload.json 2>/dev/null)
+            RESULT=$(echo "$RESPONSE" | node -e "
+              let d=''; process.stdin.on('data',c=>d+=c); process.stdin.on('end',()=>{
+                try { console.log(JSON.parse(d).choices[0].message.content); }
+                catch(e) { console.log(''); }
+              })
+            ")
+          fi
+
+          # Fallback to OpenRouter
+          if [ -z "$RESULT" ] && [ -n "$OPENROUTER_API_KEY" ]; then
+            node -e "
+              const fs = require('fs');
+              const p = JSON.parse(fs.readFileSync('/tmp/eval-payload.json', 'utf8'));
+              p.model = 'anthropic/claude-sonnet-4';
+              fs.writeFileSync('/tmp/eval-payload-or.json', JSON.stringify(p));
+            "
+            RESPONSE=$(curl -s -X POST https://openrouter.ai/api/v1/chat/completions \
+              -H "Content-Type: application/json" \
+              -H "Authorization: Bearer $OPENROUTER_API_KEY" \
+              -d @/tmp/eval-payload-or.json 2>/dev/null)
+            RESULT=$(echo "$RESPONSE" | node -e "
+              let d=''; process.stdin.on('data',c=>d+=c); process.stdin.on('end',()=>{
+                try { console.log(JSON.parse(d).choices[0].message.content); }
+                catch(e) { console.log(''); }
+              })
+            ")
+          fi
+
+          # Parse AI eval result
+          node -e "
+            const raw = \`$RESULT\` || '{}';
+            try {
+              const parsed = JSON.parse(raw.match(/\{[\s\S]*\}/)?.[0] || '{}');
+              const score = Math.max(0, Math.min(1, parsed.quality_score || 0.5));
+              const reason = (parsed.reason || 'AI eval unavailable').replace(/\n/g, ' ');
+              const dims = parsed.dimensions || {};
+              console.log('quality_score=' + score.toFixed(2));
+              console.log('quality_reason=' + reason);
+              console.log('dim_correctness=' + (dims.correctness || 0.5).toFixed(2));
+              console.log('dim_coverage=' + (dims.coverage || 0.5).toFixed(2));
+              console.log('dim_architecture=' + (dims.architecture || 0.5).toFixed(2));
+              console.log('dim_value=' + (dims.value || 0.5).toFixed(2));
+            } catch(e) {
+              console.log('quality_score=0.50');
+              console.log('quality_reason=AI eval parse error');
+              console.log('dim_correctness=0.50');
+              console.log('dim_coverage=0.50');
+              console.log('dim_architecture=0.50');
+              console.log('dim_value=0.50');
+            }
+          " >> $GITHUB_OUTPUT
+
+      - name: Commit eval entry to PR branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Checkout the actual PR branch (not detached HEAD)
+          git checkout ${{ github.head_ref }}
+
+          # Write eval entry
+          mkdir -p .jfl/eval
+          cat >> .jfl/eval/eval.jsonl << EOF
+          {"v":1,"ts":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","agent":"peter-parker","dataset":"ci-eval","metrics":{"test_pass_rate":${{ steps.pr_eval.outputs.score }},"tests_passed":${{ steps.pr_eval.outputs.passing }},"tests_total":${{ steps.pr_eval.outputs.total }}},"composite":${{ steps.pr_eval.outputs.score }},"delta":{"composite":${{ steps.delta.outputs.delta }}},"model_version":"pp-run","improved":${{ steps.delta.outputs.improved }},"pr_number":${{ github.event.pull_request.number }},"branch":"${{ github.head_ref }}"}
+          EOF
+
+          # Write eval:scored event for hub file watcher
+          cat >> .jfl/service-events.jsonl << EOF
+          {"ts":"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)","type":"eval:scored","source":"ci","data":{"agent":"peter-parker","composite":${{ steps.pr_eval.outputs.score }},"baseline":${{ steps.baseline.outputs.score }},"delta":${{ steps.delta.outputs.delta }},"improved":"${{ steps.delta.outputs.improved }}","pr_number":${{ github.event.pull_request.number }},"branch":"${{ github.head_ref }}","run_url":"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}","quality_score":${{ steps.ai_eval.outputs.quality_score }},"dim_correctness":${{ steps.ai_eval.outputs.dim_correctness }},"dim_coverage":${{ steps.ai_eval.outputs.dim_coverage }},"dim_architecture":${{ steps.ai_eval.outputs.dim_architecture }},"dim_value":${{ steps.ai_eval.outputs.dim_value }}}}
+          EOF
+
+          git add .jfl/eval/eval.jsonl .jfl/service-events.jsonl
+          git commit -m "eval: scored PR #${{ github.event.pull_request.number }} (composite=${{ steps.pr_eval.outputs.score }}, delta=${{ steps.delta.outputs.delta }})"
+          git push origin ${{ github.head_ref }}
+
+      - name: Post eval:scored event to hub (best-effort)
+        if: env.JFL_HUB_URL != ''
+        continue-on-error: true
+        run: |
+          curl -sf -X POST "${JFL_HUB_URL}/api/events" \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${JFL_HUB_TOKEN}" \
+            -d '{
+              "type": "eval:scored",
+              "source": "github-actions",
+              "data": {
+                "pr_number": ${{ github.event.pull_request.number }},
+                "pr_url": "${{ github.event.pull_request.html_url }}",
+                "branch": "${{ github.head_ref }}",
+                "commit_sha": "${{ github.sha }}",
+                "agent": "peter-parker",
+                "metrics": {
+                  "test_pass_rate": ${{ steps.pr_eval.outputs.score }},
+                  "test_count": ${{ steps.pr_eval.outputs.total }},
+                  "tests_passing": ${{ steps.pr_eval.outputs.passing }}
+                },
+                "baseline": ${{ steps.baseline.outputs.score }},
+                "baseline_total": ${{ steps.baseline.outputs.total }},
+                "baseline_passing": ${{ steps.baseline.outputs.passing }},
+                "composite": ${{ steps.pr_eval.outputs.score }},
+                "delta": ${{ steps.delta.outputs.delta }},
+                "tests_added": ${{ steps.delta.outputs.tests_added }},
+                "tests_passing_added": ${{ steps.delta.outputs.tests_passing_added }},
+                "improved": ${{ steps.delta.outputs.improved }},
+                "run_id": "${{ github.run_id }}",
+                "run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+              }
+            }' || echo "Warning: could not post to hub (hub may not be running)"
+
+      - name: Comment on PR
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const delta = parseFloat('${{ steps.delta.outputs.delta }}');
+            const improved = '${{ steps.delta.outputs.improved }}' === 'true';
+            const baseline = '${{ steps.baseline.outputs.score }}';
+            const prScore = '${{ steps.pr_eval.outputs.score }}';
+            const baselineTotal = parseInt('${{ steps.baseline.outputs.total }}');
+            const prTotal = parseInt('${{ steps.pr_eval.outputs.total }}');
+            const baselinePassing = parseInt('${{ steps.baseline.outputs.passing }}');
+            const prPassing = parseInt('${{ steps.pr_eval.outputs.passing }}');
+            const testsAdded = parseInt('${{ steps.delta.outputs.tests_added }}');
+            const testsPassingAdded = parseInt('${{ steps.delta.outputs.tests_passing_added }}');
+            const runUrl = '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}';
+
+            const emoji = improved ? ':green_circle:' : (delta < 0 ? ':red_circle:' : ':yellow_circle:');
+            let verdict = 'UNCHANGED';
+            if (delta > 0) verdict = 'IMPROVED';
+            else if (delta < 0) verdict = 'REGRESSED';
+            else if (testsPassingAdded > 0) verdict = 'IMPROVED (more tests)';
+
+            const testsDeltaStr = testsAdded > 0 ? `+${testsAdded}` : `${testsAdded}`;
+            const qualityScore = parseFloat('${{ steps.ai_eval.outputs.quality_score }}') || 0.5;
+            const qualityReason = '${{ steps.ai_eval.outputs.quality_reason }}' || 'N/A';
+            const dimCorrectness = '${{ steps.ai_eval.outputs.dim_correctness }}' || '—';
+            const dimCoverage = '${{ steps.ai_eval.outputs.dim_coverage }}' || '—';
+            const dimArchitecture = '${{ steps.ai_eval.outputs.dim_architecture }}' || '—';
+            const dimValue = '${{ steps.ai_eval.outputs.dim_value }}' || '—';
+
+            const body = [
+              `## JFL Eval Results ${emoji}`,
+              '',
+              '| Metric | Baseline (main) | PR | Delta |',
+              '|--------|-----------------|-----|-------|',
+              `| test_pass_rate | ${baseline} (${baselinePassing}/${baselineTotal}) | ${prScore} (${prPassing}/${prTotal}) | ${delta > 0 ? '+' : ''}${delta.toFixed(4)} |`,
+              `| test_count | ${baselineTotal} | ${prTotal} | ${testsDeltaStr} |`,
+              `| tests_passing | ${baselinePassing} | ${prPassing} | ${testsPassingAdded > 0 ? '+' : ''}${testsPassingAdded} |`,
+              '',
+              `### AI Quality Score: ${qualityScore.toFixed(2)}`,
+              '',
+              '| Dimension | Score |',
+              '|-----------|-------|',
+              `| Correctness | ${dimCorrectness} |`,
+              `| Coverage | ${dimCoverage} |`,
+              `| Architecture | ${dimArchitecture} |`,
+              `| Value | ${dimValue} |`,
+              '',
+              `> ${qualityReason}`,
+              '',
+              `**Verdict: ${verdict}**`,
+              '',
+              improved
+                ? 'Auto-merge eligible via JFL flow.'
+                : (delta < 0
+                  ? 'Regression detected. Manual review required.'
+                  : 'No improvement detected. Manual review recommended.'),
+              '',
+              '---',
+              `[View run](${runUrl}) | *Evaluated by JFL self-driving loop*`,
+            ].join('\n');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+
+            const existing = comments.find(c =>
+              c.user.type === 'Bot' && c.body.includes('JFL Eval Results')
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+      - name: Auto-merge or flag regression
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ steps.delta.outputs.improved }}" = "true" ]; then
+            echo "Eval passed — auto-merging PR #${{ github.event.pull_request.number }}"
+            gh pr merge ${{ github.event.pull_request.number }} --merge --delete-branch \
+              --body "Auto-merged by JFL eval: test_pass_rate improved by ${{ steps.delta.outputs.delta }} (${{ steps.baseline.outputs.score }} → ${{ steps.pr_eval.outputs.score }})"
+          elif [ "${{ steps.delta.outputs.improved }}" = "false" ]; then
+            echo "Eval regression — requesting changes on PR #${{ github.event.pull_request.number }}"
+            gh pr review ${{ github.event.pull_request.number }} --request-changes \
+              --body "JFL eval regression: test_pass_rate dropped by ${{ steps.delta.outputs.delta }} (${{ steps.baseline.outputs.score }} → ${{ steps.pr_eval.outputs.score }}). Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          fi
+
+      - name: Eval Summary
+        if: always()
+        run: |
+          echo "### JFL Eval Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Baseline | PR | Delta |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|----------|-----|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| test_pass_rate | ${{ steps.baseline.outputs.score }} | ${{ steps.pr_eval.outputs.score }} | ${{ steps.delta.outputs.delta }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| test_count | ${{ steps.baseline.outputs.total }} | ${{ steps.pr_eval.outputs.total }} | ${{ steps.delta.outputs.tests_added }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| tests_passing | ${{ steps.baseline.outputs.passing }} | ${{ steps.pr_eval.outputs.passing }} | ${{ steps.delta.outputs.tests_passing_added }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Improved: ${{ steps.delta.outputs.improved }}" >> $GITHUB_STEP_SUMMARY
