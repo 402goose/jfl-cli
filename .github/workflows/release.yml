@@ -68,6 +68,8 @@ jobs:
           git tag "v${{ steps.check.outputs.local }}" || true
           git push origin "v${{ steps.check.outputs.local }}" || true
           echo "Published jfl@${{ steps.check.outputs.local }}"
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create GitHub Release
         if: steps.check.outputs.needs_publish == 'true'
