@@ -1,5 +1,11 @@
 # jfl
 
+## 0.4.1
+
+### Patch Changes
+
+- 2a2a4d0: fix: HTTP hook port correction ensures telemetry flows to correct hub
+
 ## 0.4.0
 
 ### Minor Changes
