@@ -56,6 +56,16 @@ function NavIcon({ name }: { name: string }) {
         <path d="M7 12l5-5M12 7l5 3M17 10l-5 7" />
       </>
     ),
+    topology: (
+      <>
+        <circle cx="5" cy="6" r="2" />
+        <circle cx="12" cy="4" r="2" />
+        <circle cx="19" cy="8" r="2" />
+        <circle cx="7" cy="18" r="2" />
+        <circle cx="17" cy="17" r="2" />
+        <path d="M7 6l5-2M14 4l5 4M5 8l2 10M12 6l5 11M9 18h8" />
+      </>
+    ),
     telemetry: (
       <>
         <path d="M3 3v18h18" />
@@ -112,6 +122,7 @@ const sections: { label?: string; items: NavItemDef[] }[] = [
     label: "Infra",
     items: [
       { id: "services", label: "Services", icon: "services" },
+      { id: "topology", label: "Topology", icon: "topology" },
       { id: "health", label: "Health", icon: "health" },
       { id: "telemetry", label: "Telemetry", icon: "telemetry" },
     ],

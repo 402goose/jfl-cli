@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "sessionId": "45f4c34b-5497-4b6a-ae52-d9e93e829fc0",
+  "status": "running",
+  "startedAt": "2026-03-10T05:57:42.985Z",
+  "updatedAt": "2026-03-10T05:57:42.989Z",
+  "currentIteration": 0,
+  "maxIterations": 10,
+  "tasksCompleted": 0,
+  "isPaused": false,
+  "agentPlugin": "claude",
+  "trackerState": {
+    "plugin": "json",
+    "prdPath": "/Users/alectaggart/CascadeProjects/jfl-cli/.ralph-tui/peter-task.json",
+    "totalTasks": 1,
+    "tasks": [
+      {
+        "id": "US-001",
+        "title": "Fix telemetry issue: Error rate spike: 15%. Details: Error rate jumped from 2% t",
+        "status": "open",
+        "completedInSession": false
+      }
+    ]
+  },
+  "iterations": [],
+  "skippedTaskIds": [],
+  "cwd": "/Users/alectaggart/CascadeProjects/jfl-cli",
+  "activeTaskIds": [
+    "US-001"
+  ],
+  "subagentPanelVisible": false
+}

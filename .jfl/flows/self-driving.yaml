@@ -133,3 +133,41 @@ flows:
         entry_type: "discovery"
         title: "Quality tuple: {{data.agent}} quality={{data.quality_score}}"
         summary: "Enriched tuple — State: baseline={{data.baseline}}, Action: PR #{{data.pr_number}}, Reward: delta={{data.delta}} quality={{data.quality_score}}. Dims: correctness={{data.dim_correctness}} coverage={{data.dim_coverage}} architecture={{data.dim_architecture}} value={{data.dim_value}}"
+
+  # Autonomous trigger: telemetry insight -> Peter Parker
+  - name: insight-triggers-pp
+    description: "Spawn Peter Parker when telemetry agent detects a high-severity actionable insight"
+    enabled: true
+    trigger:
+      pattern: "telemetry:insight"
+      condition: 'data.severity == "high"'
+    gate:
+      requires_approval: false
+    actions:
+      - type: log
+        message: "Telemetry insight triggering PP: [{{data.severity}}] {{data.title}} — {{data.description}}"
+      - type: spawn
+        command: jfl
+        args: ["peter", "pr", "--task", "Fix telemetry issue: {{data.title}}. Details: {{data.description}}. Suggested fix: {{data.suggested_fix}}"]
+        detach: true
+      - type: journal
+        entry_type: "milestone"
+        title: "Autonomous PP dispatch: {{data.title}}"
+        summary: "Telemetry agent detected [{{data.severity}}] issue: {{data.description}}. Peter Parker spawned to create fix PR. Suggested fix: {{data.suggested_fix}}"
+
+  # Prediction gate: predict before PP acts (emit predict:result for downstream)
+  - name: predict-before-pr
+    description: "Run Stratus prediction before Peter Parker creates a PR"
+    enabled: true
+    trigger:
+      pattern: "peter:pr-proposed"
+    actions:
+      - type: log
+        message: "Running Stratus prediction for proposed PR: {{data.task}}"
+      - type: command
+        command: |
+          jfl predict --description "{{data.task}}" --change-type "{{data.change_type}}" --scope "{{data.scope}}" --json 2>/dev/null || echo '{"recommendation":"proceed","confidence":0}'
+      - type: journal
+        entry_type: "discovery"
+        title: "Stratus prediction for PP task"
+        summary: "Prediction run before PP creates PR. Task: {{data.task}}"

@@ -1,0 +1,14 @@
+{
+  "id": "45f4c34b-5497-4b6a-ae52-d9e93e829fc0",
+  "status": "running",
+  "startedAt": "2026-03-10T05:57:42.524Z",
+  "updatedAt": "2026-03-10T05:57:42.524Z",
+  "agentPlugin": "claude",
+  "trackerPlugin": "json",
+  "prdPath": "/Users/alectaggart/CascadeProjects/jfl-cli/.ralph-tui/peter-task.json",
+  "currentIteration": 0,
+  "maxIterations": 10,
+  "totalTasks": 0,
+  "tasksCompleted": 0,
+  "cwd": "/Users/alectaggart/CascadeProjects/jfl-cli"
+}
