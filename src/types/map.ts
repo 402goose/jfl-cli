@@ -27,6 +27,7 @@ export type MAPEventType =
   | "stratus:prediction" | "stratus:prediction-delta"
   | "telemetry:insight" | "telemetry:agent-report"
   | "pr:created" | "review:findings"
+  | "cron:daily" | "cron:hourly" | "cron:every-30-minutes"
   | "custom"
 
 export interface HookPayload {

@@ -858,7 +858,7 @@ program
 program
   .command("peter")
   .description("Peter Parker - model-routed agent orchestrator")
-  .argument("[action]", "setup, run, pr, status, or dashboard")
+  .argument("[action]", "setup, run, pr, experiment, status, or dashboard")
   .option("--cost", "Cost-optimized model routing (haiku-heavy)")
   .option("--balanced", "Balanced model routing (default)")
   .option("--quality", "Quality-first model routing (opus-heavy)")

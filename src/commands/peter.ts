@@ -3,8 +3,9 @@
  *
  * Orchestrator that wraps ralph-tui with model routing and event bridging.
  * Spidey-sense for which model to use per agent role.
+ * Includes proactive experiment selection — PP picks its own next task.
  *
- * @purpose CLI command for Peter Parker orchestrator — setup, run, status
+ * @purpose CLI command for Peter Parker orchestrator — setup, run, status, experiment
  */
 
 import chalk from "chalk"
@@ -15,6 +16,9 @@ import type { CostProfile } from "../types/map.js"
 import { writePeterParkerConfig, readCurrentProfile } from "../lib/peter-parker-config.js"
 import { PeterParkerBridge } from "../lib/peter-parker-bridge.js"
 import { getProjectHubUrl } from "../utils/context-hub-port.js"
+import { TrajectoryLoader } from "../lib/trajectory-loader.js"
+import { readEvals } from "../lib/eval-store.js"
+import type { EvalEntry } from "../types/eval.js"
 
 function hasRalphTui(): boolean {
   try {
@@ -424,6 +428,232 @@ async function runWithPR(projectRoot: string, task?: string): Promise<void> {
   console.log(chalk.green("  PP: Done\n"))
 }
 
+interface ExperimentProposal {
+  task: string
+  predicted_delta: number
+  reasoning: string
+  risk: string
+}
+
+function writeJournalEntry(projectRoot: string, entry: Record<string, unknown>): void {
+  const journalDir = path.join(projectRoot, ".jfl", "journal")
+  if (!fs.existsSync(journalDir)) {
+    fs.mkdirSync(journalDir, { recursive: true })
+  }
+  const journalFile = path.join(journalDir, "peter-experiment.jsonl")
+  fs.appendFileSync(journalFile, JSON.stringify(entry) + "\n")
+}
+
+function buildEvalSummary(evals: EvalEntry[], limit: number = 10): string {
+  if (evals.length === 0) return "No eval entries found."
+
+  const recent = evals
+    .sort((a, b) => b.ts.localeCompare(a.ts))
+    .slice(0, limit)
+
+  const lines: string[] = []
+  for (const e of recent) {
+    const metricsStr = Object.entries(e.metrics)
+      .map(([k, v]) => `${k}=${typeof v === "number" ? v.toFixed(4) : v}`)
+      .join(", ")
+    lines.push(
+      `[${e.ts}] agent=${e.agent} composite=${e.composite?.toFixed(4) ?? "N/A"} ${metricsStr}`
+    )
+  }
+  return lines.join("\n")
+}
+
+function findLowestDimension(evals: EvalEntry[]): { dimension: string; score: number } | null {
+  if (evals.length === 0) return null
+
+  const latest = evals
+    .sort((a, b) => b.ts.localeCompare(a.ts))[0]
+
+  if (!latest.metrics || Object.keys(latest.metrics).length === 0) return null
+
+  let lowestDim = ""
+  let lowestScore = Infinity
+  for (const [dim, score] of Object.entries(latest.metrics)) {
+    if (typeof score === "number" && score < lowestScore) {
+      lowestScore = score
+      lowestDim = dim
+    }
+  }
+
+  if (!lowestDim) return null
+  return { dimension: lowestDim, score: lowestScore }
+}
+
+function findRegressedDimensions(evals: EvalEntry[]): Array<{ dimension: string; delta: number }> {
+  if (evals.length < 2) return []
+
+  const sorted = evals.sort((a, b) => b.ts.localeCompare(a.ts))
+  const latest = sorted[0]
+  const previous = sorted[1]
+
+  const regressed: Array<{ dimension: string; delta: number }> = []
+  for (const [dim, score] of Object.entries(latest.metrics)) {
+    const prevScore = previous.metrics[dim]
+    if (typeof score === "number" && typeof prevScore === "number" && score < prevScore) {
+      regressed.push({ dimension: dim, delta: score - prevScore })
+    }
+  }
+
+  return regressed.sort((a, b) => a.delta - b.delta)
+}
+
+async function runExperiment(projectRoot: string): Promise<void> {
+  console.log(chalk.bold("\n  Peter Parker - Proactive Experiment Selection\n"))
+
+  const loader = new TrajectoryLoader(projectRoot)
+  const evals = readEvals(projectRoot)
+
+  if (evals.length === 0) {
+    console.log(chalk.yellow("  No eval history yet -- run `jfl peter pr` first to build a baseline.\n"))
+    return
+  }
+
+  const trajectoryEntries = loader.load({ maxAge: "30d", limit: 50 })
+  const experimentEntries = loader.load({ type: "experiment", maxAge: "30d", limit: 20 })
+  const pastTitles = experimentEntries.map(e => e.title)
+
+  console.log(chalk.gray(`  Loaded ${evals.length} eval entries, ${trajectoryEntries.length} trajectory entries`))
+
+  let proposal: ExperimentProposal | null = null
+
+  const stratusKey = process.env.STRATUS_API_KEY
+  const stratusUrl = process.env.STRATUS_API_URL || "https://api.stratus.run"
+
+  if (stratusKey) {
+    console.log(chalk.gray("  Using Stratus to rank experiment proposals...\n"))
+
+    try {
+      const { StratusClient } = await import("../lib/stratus-client.js")
+      const stratus = new StratusClient({
+        baseUrl: stratusUrl,
+        apiKey: stratusKey,
+        model: "stratus-x1ac-base-claude-sonnet-4-6",
+        timeout: 60000,
+      })
+
+      const evalSummary = buildEvalSummary(evals, 15)
+      const trajectoryContext = loader.renderForContext(
+        loader.deduplicate(experimentEntries.slice(0, 10))
+      )
+
+      const prompt = `Given the following experiment trajectory and eval history, suggest the top 3 improvements that would most increase the composite eval score.
+
+Recent eval entries:
+${evalSummary}
+
+Recent experiment outcomes:
+${trajectoryContext}
+
+What has been tried (avoid repeats):
+${pastTitles.length > 0 ? pastTitles.map(t => `- ${t}`).join("\n") : "Nothing yet"}
+
+For each suggestion, provide a JSON array with objects having these fields:
+- task: one-line description of what to implement
+- predicted_delta: estimated score improvement (0.0 to 1.0)
+- reasoning: why this would help
+- risk: what could go wrong
+
+Respond with ONLY a JSON array, no other text.`
+
+      const response = await stratus.reason(prompt, {
+        temperature: 0.7,
+        maxTokens: 1500,
+        featureContext: "experiment-selection",
+      })
+
+      const content = response.choices[0]?.message?.content || ""
+
+      const jsonMatch = content.match(/\[[\s\S]*\]/)
+      if (jsonMatch) {
+        const proposals: ExperimentProposal[] = JSON.parse(jsonMatch[0])
+        if (proposals.length > 0) {
+          proposals.sort((a, b) => b.predicted_delta - a.predicted_delta)
+
+          console.log(chalk.bold("  Top 3 Proposals:\n"))
+          for (let i = 0; i < Math.min(3, proposals.length); i++) {
+            const p = proposals[i]
+            const rank = i + 1
+            console.log(chalk.cyan(`  ${rank}. ${p.task}`))
+            console.log(chalk.gray(`     Delta: +${p.predicted_delta.toFixed(4)}  |  Risk: ${p.risk}`))
+            console.log(chalk.gray(`     Reasoning: ${p.reasoning}\n`))
+          }
+
+          proposal = proposals[0]
+        }
+      }
+
+      if (!proposal) {
+        console.log(chalk.yellow("  Stratus returned no parseable proposals, falling back to heuristic"))
+      }
+    } catch (err: any) {
+      console.log(chalk.yellow(`  Stratus call failed: ${err.message}`))
+      console.log(chalk.gray("  Falling back to heuristic approach\n"))
+    }
+  }
+
+  if (!proposal) {
+    console.log(chalk.gray("  Using heuristic: targeting lowest-scoring eval dimension\n"))
+
+    const regressed = findRegressedDimensions(evals)
+    const lowest = findLowestDimension(evals)
+
+    if (regressed.length > 0) {
+      const worst = regressed[0]
+      proposal = {
+        task: `Improve ${worst.dimension} score which regressed by ${worst.delta.toFixed(4)} in the latest eval. Analyze recent changes that may have caused the regression and fix them.`,
+        predicted_delta: Math.abs(worst.delta),
+        reasoning: `${worst.dimension} regressed by ${worst.delta.toFixed(4)} -- recovering this regression is the highest-value action`,
+        risk: "Fix may not fully recover the regression if root cause is structural",
+      }
+      console.log(chalk.cyan(`  Target: ${worst.dimension} (regressed by ${worst.delta.toFixed(4)})`))
+    } else if (lowest) {
+      proposal = {
+        task: `Improve ${lowest.dimension} score (currently ${lowest.score.toFixed(4)}) which is the lowest-performing eval dimension. Focus changes on improving this specific metric.`,
+        predicted_delta: Math.max(0.01, (1 - lowest.score) * 0.1),
+        reasoning: `${lowest.dimension} at ${lowest.score.toFixed(4)} is the weakest dimension -- improving it has the most room for composite score gains`,
+        risk: "Improvements to one dimension may trade off against others",
+      }
+      console.log(chalk.cyan(`  Target: ${lowest.dimension} (score: ${lowest.score.toFixed(4)})`))
+    } else {
+      console.log(chalk.yellow("  Could not determine a target dimension from eval history.\n"))
+      return
+    }
+  }
+
+  console.log(chalk.bold(`\n  Selected experiment:`))
+  console.log(chalk.white(`  Task: ${proposal.task}`))
+  console.log(chalk.gray(`  Predicted delta: +${proposal.predicted_delta.toFixed(4)}`))
+  console.log(chalk.gray(`  Risk: ${proposal.risk}\n`))
+
+  writeJournalEntry(projectRoot, {
+    v: 1,
+    ts: new Date().toISOString(),
+    session: "peter-experiment",
+    type: "experiment",
+    status: "incomplete",
+    title: `Experiment: ${proposal.task.slice(0, 80)}`,
+    summary: `Proactive experiment selected. Predicted delta: +${proposal.predicted_delta.toFixed(4)}. ${proposal.reasoning}`,
+    detail: `Task: ${proposal.task}\nRisk: ${proposal.risk}`,
+    hypothesis: `Implementing "${proposal.task}" will improve composite score by ~${proposal.predicted_delta.toFixed(4)}`,
+    agent_id: "peter-parker",
+  })
+
+  await postHubEvent(projectRoot, "peter:task-selected", {
+    task: proposal.task,
+    predicted_delta: proposal.predicted_delta,
+    source: "experiment",
+    reasoning: proposal.reasoning,
+  })
+
+  console.log(chalk.cyan("  Dispatching to Peter Parker PR workflow...\n"))
+  await runWithPR(projectRoot, proposal.task)
+}
+
 export async function peterCommand(
   action?: string,
   options: { cost?: boolean; quality?: boolean; balanced?: boolean; task?: string } = {}
@@ -461,12 +691,18 @@ export async function peterCommand(
       break
     }
 
+    case "experiment": {
+      await runExperiment(projectRoot)
+      break
+    }
+
     default: {
       console.log(chalk.bold("\n  Peter Parker - Model-Routed Agent Orchestrator\n"))
       console.log(chalk.gray("  Commands:"))
       console.log("    jfl peter setup [--cost|--balanced|--quality]  Generate agent config")
       console.log("    jfl peter run [--task <task>]                  Run orchestrator")
       console.log("    jfl peter pr --task <task>                     Run + branch + PR")
+      console.log("    jfl peter experiment                           Proactive: pick + execute next experiment")
       console.log("    jfl peter status                               Show status + recent events")
       console.log("    jfl peter dashboard                            Live event stream dashboard")
       console.log()

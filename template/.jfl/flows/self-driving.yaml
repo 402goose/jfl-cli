@@ -66,6 +66,26 @@ flows:
       - type: log
         message: "Training tuple logged: state={{data.baseline}} action=PR#{{data.pr_number}} reward={{data.delta}}"
 
+  # Proactive experiment trigger — PP picks its own next task
+  - name: proactive-experiment
+    description: "Pick and execute the highest-value experiment from trajectory history"
+    enabled: true
+    trigger:
+      pattern: "cron:daily"
+    gate:
+      requires_approval: true
+    actions:
+      - type: log
+        message: "Proactive experiment trigger: evaluating next best action"
+      - type: spawn
+        command: jfl
+        args: ["peter", "experiment"]
+        detach: true
+      - type: journal
+        entry_type: "milestone"
+        title: "Proactive experiment dispatched"
+        summary: "Autonomous experiment selection triggered. PP will analyze trajectory history and propose next improvement."
+
   # Review → Fix loop flows
   - name: block-merge-on-blockers
     description: "Request changes when AI review finds red (blocker) findings"

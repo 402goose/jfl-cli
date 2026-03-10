@@ -31,6 +31,7 @@ export class FlowEngine {
   private maxExecutions = 200
   private children: ChildHubInfo[] = []
   private childAbortControllers: AbortController[] = []
+  private cronTimers: ReturnType<typeof setInterval>[] = []
 
   constructor(eventBus: MAPEventBus, projectRoot: string) {
     this.eventBus = eventBus
@@ -59,6 +60,8 @@ export class FlowEngine {
       this.connectToChildren()
     }
 
+    this.startCronEmitters(enabled)
+
     return enabled.length
   }
 
@@ -71,6 +74,10 @@ export class FlowEngine {
       ac.abort()
     }
     this.childAbortControllers = []
+    for (const timer of this.cronTimers) {
+      clearInterval(timer)
+    }
+    this.cronTimers = []
   }
 
   getFlows(): FlowDefinition[] {
@@ -160,6 +167,47 @@ export class FlowEngine {
     })
 
     return exec
+  }
+
+  private startCronEmitters(enabledFlows: FlowDefinition[]): void {
+    const cronPatterns = new Set<string>()
+    for (const flow of enabledFlows) {
+      if (flow.trigger.pattern.startsWith("cron:")) {
+        cronPatterns.add(flow.trigger.pattern)
+      }
+    }
+
+    if (cronPatterns.size === 0) return
+
+    const cronIntervals: Record<string, number> = {
+      "cron:daily": 24 * 60 * 60 * 1000,
+      "cron:hourly": 60 * 60 * 1000,
+      "cron:every-30-minutes": 30 * 60 * 1000,
+    }
+
+    for (const pattern of cronPatterns) {
+      const intervalMs = cronIntervals[pattern]
+      if (!intervalMs) {
+        console.warn(`[FlowEngine] Unknown cron pattern: ${pattern}`)
+        continue
+      }
+
+      console.log(`[FlowEngine] Cron emitter registered: ${pattern} (every ${intervalMs / 1000}s)`)
+
+      const emitCron = () => {
+        this.eventBus.emit({
+          type: pattern as MAPEventType,
+          source: "cron",
+          data: { time: new Date().toISOString(), pattern },
+        })
+      }
+
+      const timer = setInterval(emitCron, intervalMs)
+      this.cronTimers.push(timer)
+
+      // Emit once on startup after a short delay so flows are ready
+      setTimeout(emitCron, 5000)
+    }
   }
 
   private connectToChildren(): void {
