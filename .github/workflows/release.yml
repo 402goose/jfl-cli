@@ -4,11 +4,8 @@ name: Release
 # - If version is bumped vs npm: publishes directly
 # - Otherwise: generates changesets + creates Version Packages PR
 #
-# npm Trusted Publisher (OIDC — no token needed):
-#   npmjs.com → jfl → Settings → Publishing access → Trusted publishers
-#   Repository: 402goose/jfl-cli
-#   Workflow:   release.yml
-#   Environment: (blank)
+# Required secret: NPM_TOKEN (granular access token scoped to jfl package)
+# Trusted publisher configured for provenance attestation.
 
 on:
   workflow_run:
@@ -38,6 +35,7 @@ jobs:
         with:
           node-version: '22'
           cache: 'npm'
+          registry-url: 'https://registry.npmjs.org'
 
       - run: npm ci
 
@@ -62,8 +60,7 @@ jobs:
           npm run build
           npm publish --provenance --access public
         env:
-          # Prefer NPM_TOKEN if set, otherwise OIDC trusted publisher handles auth
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN || '' }}
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Tag and release
         if: steps.check.outputs.needs_publish == 'true'
