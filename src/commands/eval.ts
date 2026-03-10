@@ -384,6 +384,64 @@ async function mineCommand(options: { all?: boolean; telemetry?: boolean; dryRun
   console.log(chalk.gray(`  Improved rate: ${Math.round(allStats.improvedRate * 100)}%\n`))
 }
 
+async function trainCommand(options: { epochs?: string; lr?: string }): Promise<void> {
+  const { execSync: exec } = await import("child_process")
+  const { existsSync: exists } = await import("fs")
+  const { join } = await import("path")
+
+  const bufferPath = join(process.cwd(), ".jfl", "training-buffer.jsonl")
+  if (!exists(bufferPath)) {
+    console.log(chalk.yellow("\n  No training buffer. Run: jfl eval mine --all\n"))
+    return
+  }
+
+  const tb = new TrainingBuffer()
+  const count = tb.read().length
+  if (count < 10) {
+    console.log(chalk.yellow(`\n  Need at least 10 tuples, got ${count}. Run: jfl eval mine --all\n`))
+    return
+  }
+
+  if (!process.env.STRATUS_API_KEY) {
+    console.log(chalk.yellow("\n  STRATUS_API_KEY not set."))
+    console.log(chalk.gray("  export STRATUS_API_KEY=stratus_sk_live_...\n"))
+    return
+  }
+
+  const scriptPath = join(process.cwd(), "scripts", "train-policy-head.py")
+  if (!exists(scriptPath)) {
+    console.log(chalk.yellow("\n  Training script not found: scripts/train-policy-head.py\n"))
+    return
+  }
+
+  const epochs = options.epochs ?? "50"
+  const lr = options.lr ?? "0.0001"
+
+  console.log(chalk.bold(`\n  Training policy head (${count} tuples, ${epochs} epochs)\n`))
+
+  try {
+    exec(
+      `python3 "${scriptPath}" --epochs ${epochs} --lr ${lr}`,
+      { cwd: process.cwd(), stdio: "inherit", env: process.env }
+    )
+
+    const weightsPath = join(process.cwd(), ".jfl", "policy-weights.json")
+    if (exists(weightsPath)) {
+      const { PolicyHeadInference } = await import("../lib/policy-head.js")
+      const ph = new PolicyHeadInference(process.cwd())
+      const stats = ph.stats
+      if (stats) {
+        console.log(chalk.green("  Policy head trained successfully"))
+        console.log(chalk.gray(`  Direction accuracy: ${(stats.direction_accuracy * 100).toFixed(1)}%`))
+        console.log(chalk.gray(`  Rank correlation: ${stats.rank_correlation.toFixed(4)}`))
+        console.log(chalk.gray(`  Trained on: ${stats.trained_on} tuples\n`))
+      }
+    }
+  } catch (err: any) {
+    console.log(chalk.red(`\n  Training failed: ${err.message}\n`))
+  }
+}
+
 export function registerEvalCommand(program: Command): void {
   const evalCmd = program
     .command("eval")
@@ -445,6 +503,13 @@ export function registerEvalCommand(program: Command): void {
     .option("--dry-run", "Show what would be mined without writing")
     .option("--dir <path>", "Specific directory to mine")
     .action(mineCommand)
+
+  evalCmd
+    .command("train")
+    .description("Train policy head from training buffer (requires STRATUS_API_KEY)")
+    .option("--epochs <n>", "Training epochs", "50")
+    .option("--lr <rate>", "Learning rate", "0.0001")
+    .action(trainCommand)
 
   evalCmd.action(async () => {
     // Default: show list
