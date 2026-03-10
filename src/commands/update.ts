@@ -22,7 +22,7 @@ import {
   restartCoreServices,
   validateCoreServices
 } from "../lib/service-utils.js"
-import { persistProjectPort } from "../utils/context-hub-port.js"
+import { persistProjectPort, getProjectPort } from "../utils/context-hub-port.js"
 
 const TEMPLATE_REPO = "https://github.com/402goose/jfl-template.git"
 const TEMP_DIR = ".jfl-update-temp"
@@ -35,7 +35,8 @@ const SYNC_PATHS = [
   ".mcp.json",
   "context-hub",
   "templates/",
-  "scripts/"
+  "scripts/",
+  ".jfl/flows/"
 ]
 
 // Files that should NOT be overwritten if they already exist and have been customized.
@@ -43,6 +44,12 @@ const SYNC_PATHS = [
 const SKIP_IF_CUSTOMIZED = [
   "CLAUDE.md",
   ".mcp.json"
+]
+
+// Directories where only NEW files are copied (existing files are never overwritten).
+// This is for user-customizable config that ships with defaults.
+const MERGE_ONLY_PATHS = [
+  ".jfl/flows/"
 ]
 
 // Files/folders to NEVER overwrite (project-specific)
@@ -315,12 +322,22 @@ export async function updateCommand(options: { dry?: boolean; autoUpdate?: boole
       const isDir = fs.statSync(sourcePath).isDirectory()
 
       if (isDir) {
-        // For directories, sync contents but don't delete project-specific files
         if (!fs.existsSync(destPath)) {
           fs.mkdirSync(destPath, { recursive: true })
         }
-        copyDirRecursive(sourcePath, destPath)
-        updated.push(syncPath)
+
+        if (MERGE_ONLY_PATHS.includes(syncPath)) {
+          const mergeResult = copyDirMergeOnly(sourcePath, destPath)
+          if (mergeResult.copied.length > 0) {
+            updated.push(`${syncPath} (${mergeResult.copied.length} new)`)
+          }
+          for (const s of mergeResult.skipped) {
+            skipped.push(`${syncPath}${s}`)
+          }
+        } else {
+          copyDirRecursive(sourcePath, destPath)
+          updated.push(syncPath)
+        }
       } else {
         // For files, check if this is a project-customized file
         if (SKIP_IF_CUSTOMIZED.includes(syncPath) && fs.existsSync(destPath)) {
@@ -370,9 +387,19 @@ export async function updateCommand(options: { dry?: boolean; autoUpdate?: boole
       }
     }
 
+    // Ensure HTTP hooks are configured (added in v0.3.x)
+    ensureHttpHooks(cwd)
+
     console.log(chalk.white("\n  Synced from jfl-template:"))
     for (const p of updated) {
       console.log(chalk.gray(`    ✓ ${p}`))
+    }
+
+    if (skipped.length > 0) {
+      console.log(chalk.white("\n  Skipped (already exist):"))
+      for (const s of skipped) {
+        console.log(chalk.gray(`    • ${s}`))
+      }
     }
 
     console.log(chalk.gray("\n  Preserved (project-specific):"))
@@ -433,6 +460,92 @@ export async function updateCommand(options: { dry?: boolean; autoUpdate?: boole
     spinner.fail("Update failed")
     console.error(chalk.red(err.message))
   }
+}
+
+const HTTP_HOOK_EVENTS = ["PostToolUse", "Stop", "PreCompact", "SubagentStart", "SubagentStop"]
+
+function ensureHttpHooks(cwd: string): void {
+  const settingsPath = path.join(cwd, ".claude", "settings.json")
+  if (!fs.existsSync(settingsPath)) return
+
+  try {
+    const port = getProjectPort(cwd)
+    if (!port) return
+
+    const hookUrl = `http://localhost:${port}/api/hooks`
+    const settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"))
+    if (!settings.hooks) settings.hooks = {}
+
+    let added = 0
+    let fixed = 0
+    for (const event of HTTP_HOOK_EVENTS) {
+      if (!settings.hooks[event]) settings.hooks[event] = []
+
+      const existingIdx = settings.hooks[event].findIndex(
+        (entry: any) => entry.hooks?.some((h: any) => h.type === "http" && h.url?.includes("/api/hooks"))
+      )
+
+      if (existingIdx >= 0) {
+        // HTTP hook exists — check if port is correct
+        const entry = settings.hooks[event][existingIdx]
+        const httpHook = entry.hooks.find((h: any) => h.type === "http" && h.url?.includes("/api/hooks"))
+        if (httpHook && httpHook.url !== hookUrl) {
+          httpHook.url = hookUrl
+          fixed++
+        }
+      } else {
+        settings.hooks[event].push({
+          matcher: "",
+          hooks: [{ type: "http", url: hookUrl }],
+        })
+        added++
+      }
+    }
+
+    if (added > 0 || fixed > 0) {
+      fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n")
+      if (added > 0) console.log(chalk.green(`\n  ✓ HTTP hooks added for ${added} events → ${hookUrl}`))
+      if (fixed > 0) console.log(chalk.green(`\n  ✓ HTTP hooks updated for ${fixed} events → ${hookUrl}`))
+    }
+  } catch {}
+}
+
+function copyDirMergeOnly(
+  src: string,
+  dest: string,
+  prefix = ""
+): { copied: string[]; skipped: string[] } {
+  const copied: string[] = []
+  const skipped: string[] = []
+  const entries = fs.readdirSync(src, { withFileTypes: true })
+
+  for (const entry of entries) {
+    const srcPath = path.join(src, entry.name)
+    const destPath = path.join(dest, entry.name)
+    const rel = prefix ? `${prefix}/${entry.name}` : entry.name
+
+    if (entry.isDirectory()) {
+      if (!fs.existsSync(destPath)) {
+        fs.mkdirSync(destPath, { recursive: true })
+      }
+      const sub = copyDirMergeOnly(srcPath, destPath, rel)
+      copied.push(...sub.copied)
+      skipped.push(...sub.skipped)
+    } else {
+      if (fs.existsSync(destPath)) {
+        skipped.push(rel)
+      } else {
+        const destDir = path.dirname(destPath)
+        if (!fs.existsSync(destDir)) {
+          fs.mkdirSync(destDir, { recursive: true })
+        }
+        fs.copyFileSync(srcPath, destPath)
+        copied.push(rel)
+      }
+    }
+  }
+
+  return { copied, skipped }
 }
 
 function copyDirRecursive(src: string, dest: string) {

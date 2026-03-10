@@ -1,0 +1,19 @@
+name: JFL Eval
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+    branches: [main]
+
+jobs:
+  eval:
+    uses: 402goose/jfl-cli/.github/workflows/jfl-eval.yml@main
+    with:
+      test-command: 'npx jest --json --silent'
+      branch-prefix: 'pp/'
+      auto-merge: true
+      retrain-threshold: 50
+    secrets:
+      STRATUS_API_KEY: ${{ secrets.STRATUS_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}

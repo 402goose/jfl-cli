@@ -75,6 +75,7 @@ export const JFL_FILES = {
   // Cache files
   updateCheck: join(JFL_PATHS.cache, 'last-update-check'),
   telemetryQueue: join(JFL_PATHS.cache, 'telemetry-queue.jsonl'),
+  telemetryArchive: join(JFL_PATHS.data, 'telemetry-archive.jsonl'),
 } as const
 
 /**

@@ -1,8 +1,10 @@
 # JFL - Just Fucking Launch
 
-**The context layer for AI-native teams.**
+[![npm version](https://img.shields.io/npm/v/jfl.svg)](https://www.npmjs.com/package/jfl)
 
-JFL provides persistent context for AI workflows. Agents read what happened in previous sessions, understand decisions made, and access project knowledge — eliminating the cold-start problem where each AI interaction begins from zero.
+**The engineering intelligence platform.**
+
+JFL provides persistent context, autonomous agents, and self-driving improvement loops for any project. Agents read past sessions, understand decisions, track eval scores, and propose improvements — all backed by structured files in git.
 
 Context lives in git as structured files (markdown, JSONL). Any AI tool can integrate via MCP.
 
@@ -16,8 +18,9 @@ AI agents are stateless. Each session starts from scratch:
 - Previous decisions aren't remembered
 - Work from other sessions isn't visible
 - Context has to be re-explained every time
+- Agent improvements aren't measured or tracked
 
-JFL provides a shared context layer that accumulates over time and is accessible to any AI tool.
+JFL provides a shared context layer that accumulates over time, measures agent performance, and enables autonomous improvement loops — accessible to any AI tool.
 
 ---
 
@@ -136,11 +139,13 @@ jfl context-hub serve         # Run in foreground (daemon mode)
 | `memory_search` | Search indexed journal memories |
 | `memory_status` | Memory system statistics |
 | `memory_add` | Add manual memory entry |
+| `events_publish` | Publish event to MAP event bus |
+| `events_recent` | Get recent events (with pattern filter) |
 | `query_experiment_history` | Query RL trajectories for agent experiments |
 
 **Resilience:** 5-layer system — MCP auto-recovery on ECONNREFUSED, health-check-before-ensure hooks, `ensure-all` for batch startup, `doctor` diagnostics, launchd/systemd daemon with keepalive.
 
-### Dashboard V2
+### Dashboard
 
 A pre-built Vite + Preact + Tailwind SPA served by Context Hub at `/dashboard/`. Auto-detects workspace type and adapts layout.
 
@@ -155,11 +160,15 @@ A pre-built Vite + Preact + Tailwind SPA served by Context Hub at `/dashboard/`.
 | **Flows** | Flow definitions and execution history |
 | **Health** | System metrics, context sources, memory index, tracked projects |
 | **Agents** | Eval leaderboards grouped by product domain |
+| **Experiments** | Experiment runs with dot plots — green (improved) / gray (no change) / red (regression) |
+| **Telemetry** | Cost breakdown, command usage, error rates, hub health metrics |
+| **Topology** | Service dependency graph and event flow visualization |
 
 **Features:** Sidebar with structured sections (Workspace / Infra / Eval), inline SVG icons, agent leaderboard in sidebar, sparkline charts, real-time polling.
 
 ```bash
 jfl context-hub dashboard     # Opens /dashboard/ in browser
+jfl viz dash                  # Terminal equivalent (no browser needed)
 ```
 
 ### MAP Event Bus
@@ -172,7 +181,7 @@ Metrics, Agents, Pipeline — an in-process event bus inside Context Hub.
 - **Pattern-matching subscriptions** (glob support)
 - **Transports:** SSE, WebSocket, HTTP polling
 - **Cross-product routing** — portfolio flows route events between child GTMs
-- **Event types:** `session:started`, `session:ended`, `eval:scored`, `journal:entry`, `flow:triggered`, `agent:iteration-complete`, `portfolio:phone-home`, and more
+- **Event types:** `session:started`, `session:ended`, `eval:scored`, `journal:entry`, `flow:triggered`, `agent:iteration-complete`, `portfolio:phone-home`, `review:findings`, `telemetry:insight`, `peter:pr-proposed`, and more
 
 Services emit events by appending to `.jfl/service-events.jsonl` — no auth needed, Context Hub watches the file automatically.
 
@@ -211,6 +220,58 @@ jfl eval tuples               # Extract (state, action, reward) training tuples
 - `GET /api/eval/leaderboard` — all agents ranked by composite
 - `GET /api/eval/trajectory?agent=X&metric=composite` — score trajectory with timestamps
 
+### Self-Driving Loop
+
+The autonomous improvement cycle. Agents detect issues, create fixes, and the system auto-merges if eval scores improve.
+
+```
+Telemetry Agent detects issue
+  → telemetry:insight event
+    → Flow engine routes to Peter Parker
+      → PP creates fix PR (pp/ branch)
+        → GitHub Action runs eval + AI review
+          → eval:scored event posted to hub
+            → Auto-merge if improved / flag if regressed
+              → Training tuple logged
+                → Cycle repeats
+```
+
+**9 declarative flows** in `.jfl/flows/self-driving.yaml`:
+
+| Flow | Trigger | Action |
+|------|---------|--------|
+| `auto-merge-on-improvement` | `eval:scored` (improved) | `gh pr merge` + journal milestone |
+| `flag-regression` | `eval:scored` (regressed) | `gh pr review --request-changes` |
+| `log-training-tuple` | `eval:scored` | Log (state, action, reward) to journal |
+| `log-quality-training-tuple` | `eval:scored` | Enriched tuple with AI quality dimensions |
+| `block-merge-on-blockers` | `review:findings` (red) | `gh pr review --request-changes` |
+| `log-review-training-data` | `review:findings` | Log review results as training data |
+| `pp-address-review-blockers` | `review:findings` (red) | Spawn PP to fix (gated, max 3 iterations) |
+| `insight-triggers-pp` | `telemetry:insight` (high) | Spawn PP to create fix PR |
+| `predict-before-pr` | `peter:pr-proposed` | Run Stratus prediction before acting |
+
+**Review gate:** Eval checks for AI review blockers before auto-merging. If the AI review requested changes (red findings), eval holds the merge even if tests improved. PRs must pass both eval AND review to auto-merge.
+
+**CI Workflows** that close the loop:
+
+- **`jfl-eval.yml`** — Runs on PP pull requests (`pp/` prefix). Checks out main for baseline, runs tests on PR, computes delta, runs AI quality assessment, posts `eval:scored` event to hub, comments on PR with eval results.
+- **`jfl-review.yml`** — Context-aware AI code review on PP PRs. Gathers project context + knowledge docs, reviews diff for bugs/security/architecture, extracts structured findings (red/yellow/blue severity), posts `review:findings` event to hub.
+
+### Stratus Prediction Engine
+
+Predict eval score deltas before executing changes using the Stratus world model (JEPA rollout + chat ensemble).
+
+```bash
+jfl predict run --proposal "Fix auth timeout" --goal "improve test pass rate" --type fix --scope small
+jfl predict resolve --id <id> --actual-delta 0.05 --actual-score 0.92 --eval-run <run-id>
+jfl predict accuracy            # Direction accuracy, mean delta error, calibration
+jfl predict history             # Recent predictions with sparkline trend
+```
+
+**Dual Stratus strategy:**
+- **Rollout API** (`/v1/rollout`) — JEPA world model, ~1.6s, ~$0.001. Fast state prediction for health trajectory.
+- **Chat API** (`/v1/chat/completions`) — Full reasoning, ~28s, ~$0.05. Human-readable insights when patterns detected.
+
 ### RL Infrastructure
 
 JFL generalizes the Karpathy nanochat pattern: structured journals are the replay buffer, eval scores are rewards, agents learn in-context from past trajectories.
@@ -221,15 +282,16 @@ Stratus (World Model)     > predicts outcomes, filters bad proposals
 Journals (Replay Buffer)  > structured experiment history
 Eval Framework (Reward)   > composite scores, score deltas
 Event Bus (Nervous System) > connects everything
+Telemetry Agent           > autonomous health monitoring + anomaly detection
 ```
 
 **JournalEntry type** — canonical schema with 6 RL fields: `hypothesis`, `outcome`, `score_delta`, `eval_snapshot`, `diff_hash`, `context_entries`.
 
 **TrajectoryLoader** — query, filter, and render experiment trajectories for agent context windows. Supports filtering by session, agent, outcome, score range.
 
-**Peter Parker** — model-routed orchestrator with cost/balanced/quality profiles. Routes tasks to haiku/sonnet/opus based on complexity. Subscribes to event bus for reactive dispatch.
+**Peter Parker** — model-routed orchestrator with cost/balanced/quality profiles. Routes tasks to haiku/sonnet/opus based on complexity. Subscribes to event bus for reactive dispatch. Creates PRs on `pp/` branches.
 
-**Flow Engine** — declarative trigger-action automation in `.jfl/flows.yaml`:
+**Flow Engine** — declarative trigger-action automation in `.jfl/flows.yaml` and `.jfl/flows/*.yaml`:
 
 ```yaml
 - name: eval-scored-trigger-analysis
@@ -245,6 +307,34 @@ Event Bus (Nervous System) > connects everything
 Flow actions: `log`, `emit`, `journal`, `webhook`, `command`, `spawn`. Gates: `after` (time-gated), `before` (deadline), `requires_approval`.
 
 **MCP tool:** `query_experiment_history` — agents query past experiment trajectories to inform next proposals.
+
+### Telemetry Agent
+
+Autonomous monitoring agent that runs inside Context Hub on a configurable interval.
+
+- Analyzes local telemetry events for patterns
+- Detects anomalies: cost spikes (2x baseline), error spikes (3x baseline)
+- Calls Stratus rollout API for JEPA health trajectory prediction
+- Tracks `brain_goal_proximity` over time (product health score)
+- Emits `telemetry:insight` events that trigger the self-driving loop
+- State persisted at `.jfl/telemetry-agent-state.json`
+
+**Insight types:** `anomaly`, `regression`, `cost_spike`, `pattern`, `stratus_prediction`
+
+### Terminal Visualizations
+
+Headless dashboard data rendered in the terminal via `jfl viz`. No browser needed — same data as the web dashboard.
+
+```bash
+jfl viz dash                  # Composite: leaderboard + flows + events + status
+jfl viz experiments           # Experiment runs with dot plot and sparklines
+jfl viz leaderboard           # Ranked agents with bar chart
+jfl viz flows                 # Flow definitions and pending executions
+jfl viz events                # Recent event stream with type coloring
+jfl viz status                # Hub health and sources
+```
+
+All subcommands support `--json` for programmatic consumption. Uses kuva for rich terminal plots with ASCII fallback.
 
 ### Portfolio Management
 
@@ -404,6 +494,7 @@ jfl services                  # Interactive TUI (no args)
 | `jfl validate-settings [--fix] [--json]` | Validate and repair .claude/settings.json |
 | `jfl preferences [--clear-ai] [--show]` | Manage JFL preferences |
 | `jfl profile [action]` | Manage profile (show, edit, export, import, generate) |
+| `jfl ci setup` | Deploy eval + review CI workflows to project |
 | `jfl test` | Test onboarding flow (isolated environment) |
 
 ### Context Hub
@@ -429,8 +520,28 @@ jfl services                  # Interactive TUI (no args)
 | `jfl eval list [-a agent] [-l limit]` | List recent eval entries |
 | `jfl eval trajectory -a <agent>` | Composite score trajectory with sparkline |
 | `jfl eval log -a <agent> -m <metrics>` | Log an eval entry |
-| `jfl eval compare` | Side-by-side agent comparison |
-| `jfl eval tuples [--limit N] [--format json]` | Extract training tuples from journals |
+| `jfl eval compare --agents <a,b>` | Side-by-side agent comparison |
+| `jfl eval tuples [--team N] [--since date]` | Extract training tuples from journals |
+
+### Prediction
+
+| Command | Description |
+|---------|-------------|
+| `jfl predict run --proposal <text> --goal <text>` | Predict eval delta for proposed change |
+| `jfl predict resolve --id <id> --actual-delta <n>` | Resolve prediction with actual results |
+| `jfl predict accuracy` | Prediction accuracy stats (direction, delta error, calibration) |
+| `jfl predict history [--limit N]` | Recent predictions with sparkline |
+
+### Visualization
+
+| Command | Description |
+|---------|-------------|
+| `jfl viz dash` | Composite terminal dashboard (default) |
+| `jfl viz experiments [--agent name]` | Experiment runs with dot plot and sparklines |
+| `jfl viz leaderboard` | Ranked agent leaderboard with bar chart |
+| `jfl viz flows [--pending]` | Flow definitions and pending executions |
+| `jfl viz events [--pattern glob] [--limit N]` | Recent events with type coloring |
+| `jfl viz status` | Hub health, children, sources |
 
 ### Portfolio
 
@@ -478,8 +589,14 @@ jfl services                  # Interactive TUI (no args)
 | `jfl agent init <name> [-d desc]` | Scaffold agent (manifest + policy + lifecycle flows) |
 | `jfl agent list` | List registered agents |
 | `jfl agent status <name>` | Show agent health and config |
+| `jfl peter setup [--cost\|--balanced\|--quality]` | Configure model routing profile |
+| `jfl peter run [--task text]` | Run orchestrator (interactive or headless) |
+| `jfl peter pr --task <text>` | Run agent, create PR on pp/ branch, emit event |
+| `jfl peter experiment` | Proactive: analyze trajectory, pick highest-value task, execute |
+| `jfl peter autoresearch [--rounds N]` | Tight loop: N experiments, only PR the winner |
+| `jfl peter status` | Show config and recent events |
+| `jfl peter dashboard` | Live event stream TUI |
 | `jfl ralph [args]` | Ralph-tui agent loop orchestrator |
-| `jfl peter [action]` | Peter Parker model-routed orchestrator (setup, run, status) |
 | `jfl orchestrate [name] [--list] [--create <n>]` | Multi-service orchestration workflows |
 | `jfl dashboard` | Interactive service monitoring TUI |
 | `jfl events [-p pattern]` | Live MAP event bus dashboard |
@@ -496,9 +613,11 @@ jfl services                  # Interactive TUI (no args)
 | `jfl flows add` | Interactive flow builder |
 | `jfl flows test <name>` | Test a flow with synthetic event |
 | `jfl flows enable/disable <name>` | Toggle flows |
+| `jfl flows approve [--flow name] [--all]` | Approve gated flow executions |
 | `jfl scope list` | View service context scopes |
 | `jfl scope set` | Set scope declarations |
 | `jfl scope test` | Test scope enforcement |
+| `jfl scope viz` | ASCII scope graph with access matrix |
 
 ### Platform
 
@@ -510,6 +629,8 @@ jfl services                  # Interactive TUI (no args)
 | `jfl deploy [-f]` | Deploy to JFL platform |
 | `jfl agents [action]` | Manage parallel agents (list, create, start, stop, destroy) |
 | `jfl feedback [action]` | Rate session (0-5), view or sync |
+| `jfl pi [--yolo] [--mode interactive\|rpc\|headless]` | Launch JFL in Pi runtime |
+| `jfl pi agents run [--team yaml]` | Spawn agent team as Pi subprocesses |
 
 ### Telemetry & Intelligence
 
@@ -616,6 +737,7 @@ Pre-installed slash commands for Claude Code:
 | `/remotion-best-practices` | Remotion video creation in React |
 | `/geo` | GEO-first SEO analysis for AI search engines |
 | `/geo-audit` | Full website GEO+SEO audit with parallel agents |
+| `/viz` | Terminal data visualization via kuva |
 
 ```bash
 # Install more skills
@@ -682,7 +804,9 @@ SessionStart hook fires          You work normally                Stop hook fire
 ├─ Create session branch         ├─ Journal entries auto-tracked  ├─ Auto-commit changes
 ├─ Recover crashed sessions      ├─ Auto-commit every 2 min       ├─ Merge to main
 ├─ Health-check Context Hub      ├─ Events flow to MAP bus        └─ Cleanup branch
-└─ Start auto-commit             └─ Memory indexes continuously
+└─ Start auto-commit             ├─ Memory indexes continuously
+                                 ├─ Telemetry agent monitors
+                                 └─ Flows react to events
 
                     Context Hub (always running)
                     ├─ Serves MCP tools to Claude Code
@@ -691,6 +815,7 @@ SessionStart hook fires          You work normally                Stop hook fire
                     ├─ Watches journal/ for live entries
                     ├─ Portfolio mode: fans out to child hubs
                     ├─ Flow engine: reactive trigger→action
+                    ├─ Telemetry agent: health monitoring
                     └─ Web dashboard at /dashboard/
 ```
 
@@ -700,7 +825,7 @@ SessionStart hook fires          You work normally                Stop hook fire
 
 ## CI/CD
 
-Two GitHub Actions workflows handle quality and releases.
+Two GitHub Actions workflows handle quality and releases. Two additional workflows close the self-driving loop.
 
 ### CI — `.github/workflows/ci.yml`
 
@@ -710,38 +835,46 @@ Runs on every push and PR to `main`:
 - Full test suite (~365 tests across 17 test files)
 - Coverage report uploaded as artifact
 
-### CD — `.github/workflows/release.yml`
+### Release — `.github/workflows/release.yml`
 
-Fires after CI passes on `main`. Uses [Changesets](https://github.com/changesets/changesets) for version management and npm Trusted Publisher (OIDC) for secretless publishing.
+Fires after CI passes on `main`. Two paths:
 
-**Auto-changeset generation:** `scripts/generate-changesets.sh` converts conventional commit messages into changesets automatically:
-- `feat:` = minor bump
-- `fix:` = patch bump
-- `feat!:` = major bump
-
-No manual `npx changeset` needed for most changes.
-
-**Release flow:**
+1. **Version bumped** (package.json differs from npm): Build, publish with provenance, create git tag, create GitHub Release with auto-generated notes.
+2. **Version matches npm**: Generate changesets from conventional commits, create "Version Packages" PR via changesets/action.
 
 ```bash
 # Option A: Manual changeset
 npx changeset         # pick bump level, write summary
 
 # Option B: Just use conventional commits — auto-generated on CI
+# feat: = minor, fix: = patch, feat!: = major
 
-# Push to main — CI runs, then release.yml fires
-#   → changesets/action creates a "Version Packages" PR
-
-# Merge the Version PR
-#   → release.yml fires again → npm publish --provenance --access public
+# Push to main → CI runs → Release publishes or creates Version PR
 ```
 
-No `NPM_TOKEN` needed. Publishing uses OIDC provenance via npm Trusted Publisher.
+**Secrets required:** `NPM_TOKEN` (granular access token scoped to jfl package). Provenance attestation via npm Trusted Publisher (OIDC).
 
-**One-time setup (per package):**
-> npmjs.com > `jfl` package > Settings > Publish Access > Add Provenance
-> - Repository: `402goose/jfl-cli`
-> - Workflow: `.github/workflows/release.yml`
+### Eval — `.github/workflows/jfl-eval.yml`
+
+Runs on PRs from Peter Parker (`pp/` prefix), any `agent/*` branch, or `run-eval` label:
+
+- Detects agent from branch prefix (`pp/` → peter-parker, `agent/name/` → name, fallback → PR author)
+- Baseline test pass rate from `main`
+- PR test pass rate + AI quality assessment (correctness, coverage, architecture, value)
+- Stratus prediction before eval, resolve after (optional, needs `STRATUS_API_KEY` secret)
+- Auto-merge if improved + no AI review blockers; request changes if regressed
+- Commits eval entry + service events to PR branch (file-drop pattern for hub)
+- PR comment with full eval table, AI quality dimensions, and prediction accuracy
+
+### AI Review — `.github/workflows/jfl-review.yml`
+
+Runs on PRs from Peter Parker (`pp/` prefix) or `ai-review` label:
+
+- Gathers project context (config, knowledge docs, journal)
+- Context-aware diff review (bugs, security, architecture, tests)
+- Structured findings with severity (red/yellow/blue)
+- Posts `review:findings` event to Context Hub
+- Comments on PR with findings
 
 ---
 
@@ -780,6 +913,51 @@ jfl wallet                    # Wallet and day pass status
 
 ## What's New
 
+**0.4.4**
+- Feat: **`jfl peter autoresearch --rounds N`** — tight inner loop: N experiments, branch/change/eval/keep|revert, only PRs the winner (Karpathy autoresearch pattern)
+- Feat: **Stratus predictor in CI** — predicts eval delta before running tests, resolves after. PR comments show predicted vs actual with direction accuracy
+- Feat: **Agent generalization** — CI detects agent from branch prefix (`pp/*` → peter-parker, `bot/*` → bot, `agent/name/*` → extracted). Any agent gets the self-driving loop
+- Fix: Eval path alignment — CI writes `.jfl/eval.jsonl` matching `readEvals()` (was `.jfl/eval/eval.jsonl`)
+- Feat: Eval entries include `prediction_id` and AI quality dimensions for dashboard linking
+
+**0.4.3**
+- Feat: **Self-driving loop proven end-to-end** — eval CI auto-merges improved PRs, requests changes on regressions. First auto-merged PP PR (#16) in 90 seconds
+- Feat: **`jfl peter experiment`** — proactive experiment selection. Analyzes trajectory history + eval trends, uses Stratus to rank proposals (heuristic fallback), picks highest-value task, spawns PP to execute
+- Feat: **`jfl ci setup`** — deploys eval + review CI workflows to any project with secret setup instructions
+- Feat: **Review gate** — eval checks for AI review blockers before auto-merging. PRs must pass both eval AND review
+- Feat: **Cron triggers** in flow engine — `cron:daily`, `cron:hourly`, `cron:every-30-minutes` patterns for proactive flows
+- Feat: **`jfl update` syncs flows** — new flow files deployed on update (merge-only, never overwrites customizations)
+- Fix: Eval CI self-sufficient — commits eval entries + service events to PR branch, no hub dependency for core loop
+- Test: 274 tests (up from 266)
+
+**0.4.2**
+- Fix: HTTP hook port correction — `jfl init` and `jfl update` now detect and fix hooks pointing to wrong Context Hub port
+- Fix: Release pipeline — direct publish when version bumped, changeset generation when version matches npm
+- Fix: npm auth — NPM_TOKEN required (OIDC trusted publisher is for provenance only)
+- Feat: Telemetry archive path fix — telemetry data properly flows to digest
+
+**0.4.1**
+- Feat: **Self-driving loop** — 9 declarative flows in `self-driving.yaml` for autonomous improvement (auto-merge, flag regression, training tuples, review response, telemetry-to-PP dispatch, Stratus prediction gate)
+- Feat: **`jfl predict`** — Stratus prediction engine with run/resolve/accuracy/history subcommands
+- Feat: **`jfl viz`** — terminal visualizations (experiments, leaderboard, flows, events, status, dash)
+- Feat: **`jfl-eval.yml`** — CI workflow for eval on Peter Parker PRs (baseline comparison, AI quality scoring, event posting)
+- Feat: **`jfl-review.yml`** — CI workflow for context-aware AI code review (structured findings, severity levels, event posting)
+- Feat: **Telemetry agent** — autonomous monitoring in Context Hub (anomaly detection, Stratus JEPA health prediction, insight events)
+- Feat: **`spawn` action type** in flow engine — spawn detached subprocesses with cleaned environment
+- Feat: **`flows approve`** subcommand — approve gated flow executions (interactive or batch)
+- Feat: Dashboard pages: **Experiments** (dot plots, sparklines), **Telemetry** (cost/usage/health), **Topology** (service dependency graph)
+- Feat: **`jfl pi`** — Pi AI runtime integration with extensions, skills, and agent team spawning
+- Feat: MCP tools: `events_publish`, `events_recent` for MAP event bus interaction
+
+**0.4.0**
+- Feat: **Peter Parker `pr` subcommand** — run agent, commit, push `pp/` branch, create PR, emit `pr:created` event
+- Feat: **Peter Parker `dashboard`** — live event stream TUI
+- Feat: Richer eval composite with AI quality dimensions (correctness, coverage, architecture, value)
+- Feat: `scope viz` — ASCII scope graph with access matrix and flow visualization
+- Feat: Context-aware AI review with structured findings + severity levels
+- Fix: Baseline eval uses clean checkout (git checkout --force + clean)
+- Test: Predictor unit tests, hub-client test coverage
+
 **0.3.0**
 - Feat: **Portfolio workspace type** — `jfl portfolio register/list/unregister/status/phone-home`. Portfolios contain multiple GTM workspaces with cross-product event routing via SSE, context scope enforcement (produces/consumes/denied), fan-out queries to child hubs, and portfolio-level leaderboard aggregation
 - Feat: **Dashboard V2** — pre-built Vite + Preact + Tailwind SPA served at `/dashboard/`. Pages: Overview (activity charts, metric cards), Journal (search + type filters), Events (pattern filter presets), Services (type badges, context scope, data flows), Flows (definitions + execution history), Health (system metrics, memory index), Agents (eval leaderboards grouped by domain)
@@ -788,7 +966,7 @@ jfl wallet                    # Wallet and day pass status
 - Feat: **Flow engine** — declarative trigger-action automation in `.jfl/flows.yaml`. Actions: log, emit, journal, webhook, command, spawn. Gates: time-gated, deadline, requires_approval. Template interpolation with `{{child.NAME.port}}`
 - Feat: **HTTP hooks** — Claude Code lifecycle hooks (PostToolUse, Stop, PreCompact, SubagentStart/Stop) POST to Context Hub. `jfl hooks init/status/remove/deploy`
 - Feat: **Context scope enforcement** — produces/consumes/denied patterns. Event bus filters by scope declarations. `jfl scope list/set/test`
-- Feat: CI/CD pipeline — GitHub Actions CI (strict TypeScript + Jest gate) + CD via Changesets with auto-generation from conventional commits. npm Trusted Publisher with OIDC provenance
+- Feat: CI/CD pipeline — GitHub Actions CI (strict TypeScript + Jest gate) + CD via Changesets with auto-generation from conventional commits
 - Feat: Service agent templates (CLAUDE.md, settings.json, knowledge docs)
 - Feat: Session cleanup guard — prevents `rm -rf` on main when no worktrees exist
 - Fix: TypeScript strict mode build errors resolved
@@ -847,6 +1025,7 @@ jfl wallet                    # Wallet and day pass status
 
 ```bash
 OPENAI_API_KEY=sk-...         # Optional: enables semantic embeddings for memory search
+STRATUS_API_KEY=stratus_...   # Optional: enables Stratus prediction engine + telemetry agent
 CONTEXT_HUB_PORT=4242         # Override per-project port
 CRM_SHEET_ID=your-sheet-id    # Google Sheets CRM integration
 JFL_PLATFORM_URL=...          # JFL platform URL (default: jfl.run)
@@ -864,4 +1043,4 @@ MIT License - see LICENSE file.
 
 Built by [@tagga](https://x.com/taggaoyl) (Alec Taggart)
 
-Powered by [Claude](https://claude.ai) (Anthropic), [x402](https://x402.org) (crypto micropayments), Commander.js, sql.js, and more.
+Powered by [Claude](https://claude.ai) (Anthropic), [Stratus](https://stratus.run) (JEPA world model), [x402](https://x402.org) (crypto micropayments), Commander.js, sql.js, and more.

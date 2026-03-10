@@ -898,6 +898,45 @@ export async function initCommand(options?: { name?: string }) {
       p.log.info("Skip service onboarding. Add services later with: jfl onboard <path|url>")
     }
 
+    // Configure HTTP hooks for telemetry
+    try {
+      const { getProjectPort } = await import("../utils/context-hub-port.js")
+      const port = getProjectPort(projectPath)
+      if (port) {
+        const hookUrl = `http://localhost:${port}/api/hooks`
+        const settingsPath = join(projectPath, ".claude", "settings.json")
+        if (existsSync(settingsPath)) {
+          const settings = JSON.parse(readFileSync(settingsPath, "utf-8"))
+          if (!settings.hooks) settings.hooks = {}
+          const hookEvents = ["PostToolUse", "Stop", "PreCompact", "SubagentStart", "SubagentStop"]
+          let added = 0
+          let fixed = 0
+          for (const event of hookEvents) {
+            if (!settings.hooks[event]) settings.hooks[event] = []
+            const existingIdx = settings.hooks[event].findIndex(
+              (e: any) => e.hooks?.some((h: any) => h.type === "http" && h.url?.includes("/api/hooks"))
+            )
+            if (existingIdx >= 0) {
+              const entry = settings.hooks[event][existingIdx]
+              const httpHook = entry.hooks.find((h: any) => h.type === "http" && h.url?.includes("/api/hooks"))
+              if (httpHook && httpHook.url !== hookUrl) {
+                httpHook.url = hookUrl
+                fixed++
+              }
+            } else {
+              settings.hooks[event].push({ matcher: "", hooks: [{ type: "http", url: hookUrl }] })
+              added++
+            }
+          }
+          if (added > 0 || fixed > 0) {
+            writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n")
+            if (added > 0) p.log.success(`HTTP hooks added for ${added} events → ${hookUrl}`)
+            if (fixed > 0) p.log.success(`HTTP hooks updated for ${fixed} events → ${hookUrl}`)
+          }
+        }
+      }
+    } catch {}
+
     // Success message
     let successMessage =
       `${projectName}/\n` +

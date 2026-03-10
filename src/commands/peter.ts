@@ -3,8 +3,9 @@
  *
  * Orchestrator that wraps ralph-tui with model routing and event bridging.
  * Spidey-sense for which model to use per agent role.
+ * Includes proactive experiment selection — PP picks its own next task.
  *
- * @purpose CLI command for Peter Parker orchestrator — setup, run, status
+ * @purpose CLI command for Peter Parker orchestrator — setup, run, status, experiment
  */
 
 import chalk from "chalk"
@@ -15,6 +16,12 @@ import type { CostProfile } from "../types/map.js"
 import { writePeterParkerConfig, readCurrentProfile } from "../lib/peter-parker-config.js"
 import { PeterParkerBridge } from "../lib/peter-parker-bridge.js"
 import { getProjectHubUrl } from "../utils/context-hub-port.js"
+import { TrajectoryLoader } from "../lib/trajectory-loader.js"
+import { readEvals } from "../lib/eval-store.js"
+import type { EvalEntry } from "../types/eval.js"
+import { TrainingBuffer } from "../lib/training-buffer.js"
+import { PolicyHeadInference } from "../lib/policy-head.js"
+import type { RLState, RLAction } from "../lib/training-buffer.js"
 
 function hasRalphTui(): boolean {
   try {
@@ -424,9 +431,692 @@ async function runWithPR(projectRoot: string, task?: string): Promise<void> {
   console.log(chalk.green("  PP: Done\n"))
 }
 
+interface ExperimentProposal {
+  task: string
+  predicted_delta: number
+  reasoning: string
+  risk: string
+}
+
+function buildRLState(evals: EvalEntry[], trajectoryLength: number, recentDeltas: number[]): RLState {
+  const latest = evals.sort((a, b) => b.ts.localeCompare(a.ts))[0]
+  return {
+    composite_score: latest?.composite ?? 0,
+    dimension_scores: latest?.metrics ?? {},
+    tests_passing: (latest?.metrics?.tests_passed as number) ?? 0,
+    tests_total: (latest?.metrics?.tests_total as number) ?? 1,
+    trajectory_length: trajectoryLength,
+    recent_deltas: recentDeltas,
+    agent: "peter-parker",
+  }
+}
+
+function proposalToRLAction(p: ExperimentProposal): RLAction {
+  return {
+    type: "experiment",
+    description: p.task,
+    files_affected: [],
+    scope: "medium",
+    branch: "",
+  }
+}
+
+async function rerankWithPolicyHead(
+  projectRoot: string,
+  proposals: ExperimentProposal[],
+  evals: EvalEntry[],
+  recentDeltas: number[],
+): Promise<ExperimentProposal[]> {
+  const ph = new PolicyHeadInference(projectRoot)
+  if (!ph.isLoaded || proposals.length < 2) return proposals
+
+  const state = buildRLState(evals, 0, recentDeltas)
+  const actions = proposals.map(proposalToRLAction)
+
+  try {
+    const ranked = await ph.rankActions(state, actions)
+    const reordered = ranked.map(r => proposals[actions.indexOf(r.action)])
+
+    const stats = ph.stats!
+    console.log(chalk.magenta(`  Policy head re-ranked ${proposals.length} proposals (trained on ${stats.trained_on} tuples, rank_corr=${stats.rank_correlation.toFixed(3)})`))
+
+    for (let i = 0; i < ranked.length; i++) {
+      const r = ranked[i]
+      const p = reordered[i]
+      console.log(chalk.gray(`    #${i + 1} [pred=${r.predictedReward.toFixed(4)}] ${p.task.slice(0, 60)}`))
+    }
+    console.log()
+
+    return reordered
+  } catch (err: any) {
+    console.log(chalk.yellow(`  Policy head ranking failed: ${err.message}`))
+    return proposals
+  }
+}
+
+function writeJournalEntry(projectRoot: string, entry: Record<string, unknown>): void {
+  const journalDir = path.join(projectRoot, ".jfl", "journal")
+  if (!fs.existsSync(journalDir)) {
+    fs.mkdirSync(journalDir, { recursive: true })
+  }
+  const journalFile = path.join(journalDir, "peter-experiment.jsonl")
+  fs.appendFileSync(journalFile, JSON.stringify(entry) + "\n")
+}
+
+function buildEvalSummary(evals: EvalEntry[], limit: number = 10): string {
+  if (evals.length === 0) return "No eval entries found."
+
+  const recent = evals
+    .sort((a, b) => b.ts.localeCompare(a.ts))
+    .slice(0, limit)
+
+  const lines: string[] = []
+  for (const e of recent) {
+    const metricsStr = Object.entries(e.metrics)
+      .map(([k, v]) => `${k}=${typeof v === "number" ? v.toFixed(4) : v}`)
+      .join(", ")
+    lines.push(
+      `[${e.ts}] agent=${e.agent} composite=${e.composite?.toFixed(4) ?? "N/A"} ${metricsStr}`
+    )
+  }
+  return lines.join("\n")
+}
+
+function findLowestDimension(evals: EvalEntry[]): { dimension: string; score: number } | null {
+  if (evals.length === 0) return null
+
+  const latest = evals
+    .sort((a, b) => b.ts.localeCompare(a.ts))[0]
+
+  if (!latest.metrics || Object.keys(latest.metrics).length === 0) return null
+
+  let lowestDim = ""
+  let lowestScore = Infinity
+  for (const [dim, score] of Object.entries(latest.metrics)) {
+    if (typeof score === "number" && score < lowestScore) {
+      lowestScore = score
+      lowestDim = dim
+    }
+  }
+
+  if (!lowestDim) return null
+  return { dimension: lowestDim, score: lowestScore }
+}
+
+function findRegressedDimensions(evals: EvalEntry[]): Array<{ dimension: string; delta: number }> {
+  if (evals.length < 2) return []
+
+  const sorted = evals.sort((a, b) => b.ts.localeCompare(a.ts))
+  const latest = sorted[0]
+  const previous = sorted[1]
+
+  const regressed: Array<{ dimension: string; delta: number }> = []
+  for (const [dim, score] of Object.entries(latest.metrics)) {
+    const prevScore = previous.metrics[dim]
+    if (typeof score === "number" && typeof prevScore === "number" && score < prevScore) {
+      regressed.push({ dimension: dim, delta: score - prevScore })
+    }
+  }
+
+  return regressed.sort((a, b) => a.delta - b.delta)
+}
+
+async function runExperiment(projectRoot: string): Promise<void> {
+  console.log(chalk.bold("\n  Peter Parker - Proactive Experiment Selection\n"))
+
+  const loader = new TrajectoryLoader(projectRoot)
+  const evals = readEvals(projectRoot)
+
+  if (evals.length === 0) {
+    console.log(chalk.yellow("  No eval history yet -- run `jfl peter pr` first to build a baseline.\n"))
+    return
+  }
+
+  const trajectoryEntries = loader.load({ maxAge: "30d", limit: 50 })
+  const experimentEntries = loader.load({ type: "experiment", maxAge: "30d", limit: 20 })
+  const pastTitles = experimentEntries.map(e => e.title)
+
+  console.log(chalk.gray(`  Loaded ${evals.length} eval entries, ${trajectoryEntries.length} trajectory entries`))
+
+  let proposal: ExperimentProposal | null = null
+
+  const stratusKey = process.env.STRATUS_API_KEY
+  const stratusUrl = process.env.STRATUS_API_URL || "https://api.stratus.run"
+
+  if (stratusKey) {
+    console.log(chalk.gray("  Using Stratus to rank experiment proposals...\n"))
+
+    try {
+      const { StratusClient } = await import("../lib/stratus-client.js")
+      const stratus = new StratusClient({
+        baseUrl: stratusUrl,
+        apiKey: stratusKey,
+        model: "stratus-x1ac-base-claude-sonnet-4-6",
+        timeout: 60000,
+      })
+
+      const evalSummary = buildEvalSummary(evals, 15)
+      const trajectoryContext = loader.renderForContext(
+        loader.deduplicate(experimentEntries.slice(0, 10))
+      )
+
+      const prompt = `Given the following experiment trajectory and eval history, suggest the top 3 improvements that would most increase the composite eval score.
+
+Recent eval entries:
+${evalSummary}
+
+Recent experiment outcomes:
+${trajectoryContext}
+
+What has been tried (avoid repeats):
+${pastTitles.length > 0 ? pastTitles.map(t => `- ${t}`).join("\n") : "Nothing yet"}
+
+For each suggestion, provide a JSON array with objects having these fields:
+- task: one-line description of what to implement
+- predicted_delta: estimated score improvement (0.0 to 1.0)
+- reasoning: why this would help
+- risk: what could go wrong
+
+Respond with ONLY a JSON array, no other text.`
+
+      const response = await stratus.reason(prompt, {
+        temperature: 0.7,
+        maxTokens: 1500,
+        featureContext: "experiment-selection",
+      })
+
+      const content = response.choices[0]?.message?.content || ""
+
+      const jsonMatch = content.match(/\[[\s\S]*\]/)
+      if (jsonMatch) {
+        let proposals: ExperimentProposal[] = JSON.parse(jsonMatch[0])
+        if (proposals.length > 0) {
+          proposals.sort((a, b) => b.predicted_delta - a.predicted_delta)
+
+          const recentDeltas = experimentEntries
+            .slice(0, 5)
+            .map(e => (e as any).score_delta ?? 0)
+            .filter((d: number) => typeof d === "number")
+
+          proposals = await rerankWithPolicyHead(projectRoot, proposals, evals, recentDeltas)
+
+          console.log(chalk.bold("  Top 3 Proposals:\n"))
+          for (let i = 0; i < Math.min(3, proposals.length); i++) {
+            const p = proposals[i]
+            const rank = i + 1
+            console.log(chalk.cyan(`  ${rank}. ${p.task}`))
+            console.log(chalk.gray(`     Delta: +${p.predicted_delta.toFixed(4)}  |  Risk: ${p.risk}`))
+            console.log(chalk.gray(`     Reasoning: ${p.reasoning}\n`))
+          }
+
+          proposal = proposals[0]
+        }
+      }
+
+      if (!proposal) {
+        console.log(chalk.yellow("  Stratus returned no parseable proposals, falling back to heuristic"))
+      }
+    } catch (err: any) {
+      console.log(chalk.yellow(`  Stratus call failed: ${err.message}`))
+      console.log(chalk.gray("  Falling back to heuristic approach\n"))
+    }
+  }
+
+  if (!proposal) {
+    console.log(chalk.gray("  Using heuristic: targeting lowest-scoring eval dimension\n"))
+
+    const regressed = findRegressedDimensions(evals)
+    const lowest = findLowestDimension(evals)
+
+    if (regressed.length > 0) {
+      const worst = regressed[0]
+      proposal = {
+        task: `Improve ${worst.dimension} score which regressed by ${worst.delta.toFixed(4)} in the latest eval. Analyze recent changes that may have caused the regression and fix them.`,
+        predicted_delta: Math.abs(worst.delta),
+        reasoning: `${worst.dimension} regressed by ${worst.delta.toFixed(4)} -- recovering this regression is the highest-value action`,
+        risk: "Fix may not fully recover the regression if root cause is structural",
+      }
+      console.log(chalk.cyan(`  Target: ${worst.dimension} (regressed by ${worst.delta.toFixed(4)})`))
+    } else if (lowest) {
+      proposal = {
+        task: `Improve ${lowest.dimension} score (currently ${lowest.score.toFixed(4)}) which is the lowest-performing eval dimension. Focus changes on improving this specific metric.`,
+        predicted_delta: Math.max(0.01, (1 - lowest.score) * 0.1),
+        reasoning: `${lowest.dimension} at ${lowest.score.toFixed(4)} is the weakest dimension -- improving it has the most room for composite score gains`,
+        risk: "Improvements to one dimension may trade off against others",
+      }
+      console.log(chalk.cyan(`  Target: ${lowest.dimension} (score: ${lowest.score.toFixed(4)})`))
+    } else {
+      console.log(chalk.yellow("  Could not determine a target dimension from eval history.\n"))
+      return
+    }
+  }
+
+  console.log(chalk.bold(`\n  Selected experiment:`))
+  console.log(chalk.white(`  Task: ${proposal.task}`))
+  console.log(chalk.gray(`  Predicted delta: +${proposal.predicted_delta.toFixed(4)}`))
+  console.log(chalk.gray(`  Risk: ${proposal.risk}\n`))
+
+  writeJournalEntry(projectRoot, {
+    v: 1,
+    ts: new Date().toISOString(),
+    session: "peter-experiment",
+    type: "experiment",
+    status: "incomplete",
+    title: `Experiment: ${proposal.task.slice(0, 80)}`,
+    summary: `Proactive experiment selected. Predicted delta: +${proposal.predicted_delta.toFixed(4)}. ${proposal.reasoning}`,
+    detail: `Task: ${proposal.task}\nRisk: ${proposal.risk}`,
+    hypothesis: `Implementing "${proposal.task}" will improve composite score by ~${proposal.predicted_delta.toFixed(4)}`,
+    agent_id: "peter-parker",
+  })
+
+  await postHubEvent(projectRoot, "peter:task-selected", {
+    task: proposal.task,
+    predicted_delta: proposal.predicted_delta,
+    source: "experiment",
+    reasoning: proposal.reasoning,
+  })
+
+  console.log(chalk.cyan("  Dispatching to Peter Parker PR workflow...\n"))
+  await runWithPR(projectRoot, proposal.task)
+}
+
+async function runAutoresearch(projectRoot: string, rounds: number): Promise<void> {
+  console.log(chalk.bold(`\n  Peter Parker - Autoresearch Mode (${rounds} rounds)\n`))
+  console.log(chalk.gray("  Pattern: branch → change → eval → keep|revert → repeat"))
+  console.log(chalk.gray("  Only the winning experiment gets a PR.\n"))
+
+  if (!hasRalphTui()) {
+    console.log(chalk.yellow("  ralph-tui is not installed"))
+    console.log(chalk.gray("  Install: bun install -g ralph-tui\n"))
+    return
+  }
+
+  const configPath = path.join(projectRoot, ".ralph-tui", "config.toml")
+  if (!fs.existsSync(configPath)) {
+    console.log(chalk.yellow("  No Peter Parker config found"))
+    console.log(chalk.gray("  Run: jfl peter setup\n"))
+    return
+  }
+
+  const loader = new TrajectoryLoader(projectRoot)
+  const evals = readEvals(projectRoot)
+
+  if (evals.length === 0) {
+    console.log(chalk.yellow("  No eval history. Run `jfl peter pr` first.\n"))
+    return
+  }
+
+  const baseBranch = "main"
+  const baselineScore = evals
+    .sort((a, b) => b.ts.localeCompare(a.ts))[0]?.composite ?? 0
+
+  console.log(chalk.gray(`  Baseline composite: ${baselineScore.toFixed(4)}`))
+
+  interface ExperimentResult {
+    round: number
+    task: string
+    score: number
+    delta: number
+    testsPassing: number
+    testsTotal: number
+    branch: string
+  }
+
+  const results: ExperimentResult[] = []
+  let bestResult: ExperimentResult | null = null
+
+  for (let round = 1; round <= rounds; round++) {
+    console.log(chalk.bold(`\n  ── Round ${round}/${rounds} ${"─".repeat(40)}\n`))
+
+    const experimentEntries = loader.load({ type: "experiment", maxAge: "30d", limit: 20 })
+    const pastTitles = [
+      ...experimentEntries.map(e => e.title),
+      ...results.map(r => r.task),
+    ]
+
+    let proposal: ExperimentProposal | null = null
+
+    const stratusKey = process.env.STRATUS_API_KEY
+    if (stratusKey) {
+      try {
+        const { StratusClient } = await import("../lib/stratus-client.js")
+        const stratus = new StratusClient({
+          baseUrl: process.env.STRATUS_API_URL || "https://api.stratus.run",
+          apiKey: stratusKey,
+          model: "stratus-x1ac-base-claude-sonnet-4-6",
+          timeout: 60000,
+        })
+
+        const evalSummary = buildEvalSummary(evals.concat(
+          results.map(r => ({
+            v: 1 as const, ts: new Date().toISOString(), agent: "autoresearch",
+            run_id: `autoresearch-r${r.round}`,
+            metrics: { composite: r.score }, composite: r.score,
+            model_version: `round-${r.round}`,
+          }))
+        ), 15)
+
+        const policyHead = new PolicyHeadInference(projectRoot)
+        const useMultiProposal = policyHead.isLoaded
+
+        const prompt = useMultiProposal
+          ? `Autoresearch round ${round}/${rounds}. Suggest 3 specific improvements ranked by expected impact.
+
+Eval history:
+${evalSummary}
+
+Already tried (avoid these):
+${pastTitles.map(t => `- ${t}`).join("\n") || "Nothing yet"}
+
+Previous rounds this session:
+${results.map(r => `- Round ${r.round}: "${r.task}" → delta=${r.delta > 0 ? "+" : ""}${r.delta.toFixed(4)}`).join("\n") || "None yet"}
+
+Respond with ONLY a JSON array of 3 objects: [{"task": "...", "predicted_delta": 0.0-1.0, "reasoning": "...", "risk": "..."}, ...]`
+          : `Autoresearch round ${round}/${rounds}. Suggest ONE specific improvement.
+
+Eval history:
+${evalSummary}
+
+Already tried (avoid these):
+${pastTitles.map(t => `- ${t}`).join("\n") || "Nothing yet"}
+
+Previous rounds this session:
+${results.map(r => `- Round ${r.round}: "${r.task}" → delta=${r.delta > 0 ? "+" : ""}${r.delta.toFixed(4)}`).join("\n") || "None yet"}
+
+Suggest the SINGLE highest-value change. JSON format:
+{"task": "...", "predicted_delta": 0.0-1.0, "reasoning": "...", "risk": "..."}`
+
+        const response = await stratus.reason(prompt, {
+          temperature: 0.8 + (round * 0.05),
+          maxTokens: useMultiProposal ? 1500 : 500,
+          featureContext: "autoresearch",
+        })
+
+        const content = response.choices[0]?.message?.content || ""
+
+        if (useMultiProposal) {
+          const jsonMatch = content.match(/\[[\s\S]*\]/)
+          if (jsonMatch) {
+            let proposals: ExperimentProposal[] = JSON.parse(jsonMatch[0])
+            const recentDeltas = results.slice(-5).map(r => r.delta)
+            proposals = await rerankWithPolicyHead(projectRoot, proposals, evals, recentDeltas)
+            if (proposals.length > 0) proposal = proposals[0]
+          }
+        }
+
+        if (!proposal) {
+          const jsonMatch = content.match(/\{[\s\S]*\}/)
+          if (jsonMatch) {
+            proposal = JSON.parse(jsonMatch[0]) as ExperimentProposal
+          }
+        }
+      } catch (err: any) {
+        console.log(chalk.yellow(`  Stratus failed: ${err.message}`))
+      }
+    }
+
+    if (!proposal) {
+      const regressed = findRegressedDimensions(evals)
+      const lowest = findLowestDimension(evals)
+
+      if (regressed.length > 0) {
+        const worst = regressed[0]
+        proposal = {
+          task: `Improve ${worst.dimension} score (regressed by ${worst.delta.toFixed(4)})`,
+          predicted_delta: Math.abs(worst.delta),
+          reasoning: `Recovering ${worst.dimension} regression`,
+          risk: "May not fully recover",
+        }
+      } else if (lowest) {
+        proposal = {
+          task: `Improve ${lowest.dimension} score (currently ${lowest.score.toFixed(4)})`,
+          predicted_delta: Math.max(0.01, (1 - lowest.score) * 0.1),
+          reasoning: `${lowest.dimension} is weakest dimension`,
+          risk: "May trade off against others",
+        }
+      } else {
+        console.log(chalk.yellow("  No target found, skipping round"))
+        continue
+      }
+    }
+
+    console.log(chalk.cyan(`  Task: ${proposal.task}`))
+    console.log(chalk.gray(`  Predicted: +${proposal.predicted_delta.toFixed(4)}\n`))
+
+    const branchName = `pp/autoresearch-r${round}-${Date.now()}`
+
+    gitExec(["stash", "--include-untracked"], projectRoot)
+    gitExec(["fetch", "origin", baseBranch], projectRoot)
+
+    let checkout = gitExec(["checkout", "-b", branchName, `origin/${baseBranch}`], projectRoot)
+    if (!checkout.ok) {
+      checkout = gitExec(["checkout", "-b", branchName, baseBranch], projectRoot)
+    }
+    if (!checkout.ok) {
+      console.log(chalk.red(`  Failed to create branch ${branchName}`))
+      continue
+    }
+
+    await new Promise<void>((resolve) => {
+      const ralphDir = path.join(projectRoot, ".ralph-tui")
+      if (!fs.existsSync(ralphDir)) fs.mkdirSync(ralphDir, { recursive: true })
+
+      const prdPath = path.join(ralphDir, "autoresearch-task.json")
+      const prd = {
+        name: "Autoresearch Task",
+        branchName: `ralph/autoresearch-${Date.now()}`,
+        description: proposal!.task,
+        userStories: [{
+          id: "US-001",
+          title: proposal!.task.slice(0, 80),
+          description: proposal!.task,
+          acceptanceCriteria: ["Task completed"],
+          priority: 1, passes: false, notes: "", dependsOn: [],
+        }],
+        metadata: { updatedAt: new Date().toISOString() },
+      }
+      fs.writeFileSync(prdPath, JSON.stringify(prd, null, 2))
+
+      const env = { ...process.env }
+      delete env.CLAUDECODE
+      delete env.CLAUDE_CODE
+
+      const child = spawn("ralph-tui", ["run", "--listen", "--prd", prdPath, "--headless"], {
+        cwd: projectRoot, stdio: "inherit", env,
+      })
+
+      child.on("error", () => { try { fs.unlinkSync(prdPath) } catch {} resolve() })
+      child.on("exit", () => { try { fs.unlinkSync(prdPath) } catch {} resolve() })
+    })
+
+    const diffCheck = gitExec(["diff", "--quiet", "HEAD"], projectRoot)
+    const untrackedResult = spawnSync("git", ["ls-files", "--others", "--exclude-standard"], {
+      cwd: projectRoot, encoding: "utf-8", stdio: "pipe",
+    })
+    const hasChanges = !diffCheck.ok || (untrackedResult.stdout || "").trim().length > 0
+
+    if (!hasChanges) {
+      console.log(chalk.yellow(`  Round ${round}: No changes, skipping eval`))
+      gitExec(["checkout", baseBranch], projectRoot)
+      gitExec(["branch", "-D", branchName], projectRoot)
+      continue
+    }
+
+    gitExec(["add", "-A"], projectRoot)
+    gitExec(["commit", "-m", `autoresearch: round ${round} - ${proposal.task}`], projectRoot)
+
+    console.log(chalk.gray("  Running local eval..."))
+    const testResult = spawnSync("npx", ["jest", "--json", "--silent"], {
+      cwd: projectRoot, encoding: "utf-8", stdio: "pipe", timeout: 120000,
+    })
+
+    let passing = 0, total = 1
+    try {
+      const json = JSON.parse(testResult.stdout || "{}")
+      passing = json.numPassedTests || 0
+      total = json.numTotalTests || 1
+    } catch {}
+
+    const score = total > 0 ? passing / total : 0
+    const delta = score - baselineScore
+
+    const result: ExperimentResult = {
+      round,
+      task: proposal.task,
+      score,
+      delta,
+      testsPassing: passing,
+      testsTotal: total,
+      branch: branchName,
+    }
+    results.push(result)
+
+    const emoji = delta > 0 ? "+" : delta < 0 ? "" : "="
+    console.log(chalk.bold(`  Round ${round} result: ${score.toFixed(4)} (${emoji}${delta.toFixed(4)})`))
+    console.log(chalk.gray(`  Tests: ${passing}/${total}`))
+
+    if (!bestResult || result.score > bestResult.score) {
+      bestResult = result
+      console.log(chalk.green(`  New best! (round ${round})`))
+    }
+
+    writeJournalEntry(projectRoot, {
+      v: 1,
+      ts: new Date().toISOString(),
+      session: "autoresearch",
+      type: "experiment",
+      status: delta > 0 ? "complete" : "incomplete",
+      title: `Autoresearch R${round}: ${proposal.task.slice(0, 60)}`,
+      summary: `Score: ${score.toFixed(4)}, delta: ${delta > 0 ? "+" : ""}${delta.toFixed(4)}`,
+      detail: `Task: ${proposal.task}\nResult: ${passing}/${total} tests passing`,
+      hypothesis: `"${proposal.task}" improves composite by ~${proposal.predicted_delta.toFixed(4)}`,
+      outcome: delta > 0 ? "confirmed" : delta < 0 ? "rejected" : "inconclusive",
+      score_delta: delta,
+      agent_id: "peter-parker",
+    })
+
+    const tb = new TrainingBuffer(projectRoot)
+    tb.append({
+      agent: "peter-parker",
+      state: {
+        composite_score: baselineScore,
+        dimension_scores: evals.sort((a, b) => b.ts.localeCompare(a.ts))[0]?.metrics ?? {},
+        tests_passing: evals.sort((a, b) => b.ts.localeCompare(a.ts))[0]?.metrics?.tests_passed as number ?? 0,
+        tests_total: evals.sort((a, b) => b.ts.localeCompare(a.ts))[0]?.metrics?.tests_total as number ?? 1,
+        trajectory_length: results.length,
+        recent_deltas: results.slice(-5).map(r => r.delta),
+        agent: "peter-parker",
+      },
+      action: {
+        type: "experiment",
+        description: proposal.task,
+        files_affected: [],
+        scope: "medium",
+        branch: branchName,
+      },
+      reward: {
+        composite_delta: delta,
+        dimension_deltas: {},
+        tests_added: total - (evals.sort((a, b) => b.ts.localeCompare(a.ts))[0]?.metrics?.tests_total as number ?? total),
+        quality_score: score,
+        improved: delta > 0,
+        prediction_error: Math.abs(proposal.predicted_delta - delta),
+      },
+      metadata: {
+        branch: branchName,
+        autoresearch_round: round,
+        source: "autoresearch",
+      },
+    })
+
+    gitExec(["checkout", baseBranch], projectRoot)
+  }
+
+  console.log(chalk.bold(`\n  ── Autoresearch Complete ${"─".repeat(35)}\n`))
+  console.log(chalk.gray(`  Rounds: ${rounds}`))
+  console.log(chalk.gray(`  Results:`))
+
+  for (const r of results) {
+    const emoji = r.delta > 0 ? chalk.green("+") : r.delta < 0 ? chalk.red("-") : chalk.gray("=")
+    const best = bestResult && r.round === bestResult.round ? chalk.yellow(" ★") : ""
+    console.log(chalk.gray(`    R${r.round}: ${r.score.toFixed(4)} (${emoji}${Math.abs(r.delta).toFixed(4)}) ${r.task.slice(0, 50)}${best}`))
+  }
+
+  if (bestResult && bestResult.delta > 0) {
+    console.log(chalk.green(`\n  Winner: Round ${bestResult.round} (${bestResult.delta > 0 ? "+" : ""}${bestResult.delta.toFixed(4)})`))
+    console.log(chalk.cyan("  Creating PR for winning experiment...\n"))
+
+    gitExec(["checkout", bestResult.branch], projectRoot)
+    const pushResult = gitExec(["push", "-u", "origin", bestResult.branch], projectRoot)
+
+    if (pushResult.ok) {
+      const prTitle = `PP autoresearch: ${bestResult.task.slice(0, 50)} (+${bestResult.delta.toFixed(4)})`
+      const prBody = [
+        "## Autoresearch Winner",
+        "",
+        `**Task:** ${bestResult.task}`,
+        `**Score:** ${bestResult.score.toFixed(4)} (delta: +${bestResult.delta.toFixed(4)})`,
+        `**Tests:** ${bestResult.testsPassing}/${bestResult.testsTotal}`,
+        `**Round:** ${bestResult.round}/${rounds}`,
+        "",
+        "### All Rounds",
+        ...results.map(r =>
+          `- R${r.round}: ${r.score.toFixed(4)} (${r.delta > 0 ? "+" : ""}${r.delta.toFixed(4)}) ${r.task.slice(0, 60)}${r.round === bestResult!.round ? " **← winner**" : ""}`
+        ),
+        "",
+        "---",
+        "*Generated by JFL autoresearch loop*",
+      ].join("\n")
+
+      let prResult = ghExec([
+        "pr", "create", "--title", prTitle, "--body", prBody,
+        "--base", baseBranch, "--head", bestResult.branch, "--label", "pp-generated",
+      ], projectRoot)
+      if (!prResult.ok) {
+        prResult = ghExec([
+          "pr", "create", "--title", prTitle, "--body", prBody,
+          "--base", baseBranch, "--head", bestResult.branch,
+        ], projectRoot)
+      }
+
+      if (prResult.ok) {
+        console.log(chalk.green(`  PR created: ${prResult.output}`))
+        await postHubEvent(projectRoot, "autoresearch:complete", {
+          rounds,
+          winner_round: bestResult.round,
+          winner_task: bestResult.task,
+          winner_delta: bestResult.delta,
+          pr_url: prResult.output,
+          all_results: results.map(r => ({
+            round: r.round, task: r.task, score: r.score, delta: r.delta,
+          })),
+        })
+      } else {
+        console.log(chalk.red(`  Failed to create PR: ${prResult.output}`))
+      }
+    } else {
+      console.log(chalk.red(`  Failed to push: ${pushResult.output}`))
+    }
+
+    gitExec(["checkout", baseBranch], projectRoot)
+  } else {
+    console.log(chalk.yellow("\n  No improvement found across all rounds."))
+    console.log(chalk.gray("  All experiment branches preserved for review.\n"))
+  }
+
+  for (const r of results) {
+    if (!bestResult || r.round !== bestResult.round) {
+      gitExec(["branch", "-D", r.branch], projectRoot)
+    }
+  }
+
+  gitExec(["stash", "pop"], projectRoot)
+  console.log()
+}
+
 export async function peterCommand(
   action?: string,
-  options: { cost?: boolean; quality?: boolean; balanced?: boolean; task?: string } = {}
+  options: { cost?: boolean; quality?: boolean; balanced?: boolean; task?: string; rounds?: string; mode?: string } = {}
 ) {
   const projectRoot = process.cwd()
 
@@ -461,12 +1151,31 @@ export async function peterCommand(
       break
     }
 
+    case "experiment": {
+      if (options.mode === "autoresearch") {
+        const rounds = parseInt(options.rounds || "5", 10)
+        await runAutoresearch(projectRoot, rounds)
+      } else {
+        await runExperiment(projectRoot)
+      }
+      break
+    }
+
+    case "autoresearch": {
+      const rounds = parseInt(options.rounds || "5", 10)
+      await runAutoresearch(projectRoot, rounds)
+      break
+    }
+
     default: {
       console.log(chalk.bold("\n  Peter Parker - Model-Routed Agent Orchestrator\n"))
       console.log(chalk.gray("  Commands:"))
       console.log("    jfl peter setup [--cost|--balanced|--quality]  Generate agent config")
       console.log("    jfl peter run [--task <task>]                  Run orchestrator")
       console.log("    jfl peter pr --task <task>                     Run + branch + PR")
+      console.log("    jfl peter experiment                           Proactive: pick + execute next experiment")
+      console.log("    jfl peter experiment --mode autoresearch       Tight loop: N experiments, PR the winner")
+      console.log("    jfl peter autoresearch [--rounds N]            Shortcut for autoresearch mode")
       console.log("    jfl peter status                               Show status + recent events")
       console.log("    jfl peter dashboard                            Live event stream dashboard")
       console.log()

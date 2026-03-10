@@ -22,7 +22,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if echo \"$TOOL_INPUT\" | grep -qE 'git commit'; then BRANCH=$(cat .jfl/current-session-branch.txt 2>/dev/null || git branch --show-current); MSG=$(git log -1 --pretty=%B 2>/dev/null | head -1); FILES=$(git diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null | tr '\\n' ', ' | sed 's/,$//'); echo ''; echo '═══════════════════════════════════════════════════════════'; echo '📝 JOURNAL REQUIRED: Git commit detected'; echo '═══════════════════════════════════════════════════════════'; echo \"Commit: $(git rev-parse --short HEAD 2>/dev/null)\"; echo \"Message: $MSG\"; echo \"Files: $FILES\"; echo ''; echo 'WRITE JOURNAL ENTRY NOW. File: .jfl/journal/'\"${BRANCH}\"'.jsonl'; echo '═══════════════════════════════════════════════════════════'; fi"
+            "command": "if echo \"$TOOL_INPUT\" | grep -qE 'git commit'; then BRANCH=$(cat .jfl/current-session-branch.txt 2>/dev/null || git branch --show-current); MSG=$(git log -1 --pretty=%B 2>/dev/null | head -1); FILES=$(git diff-tree --no-commit-id --name-only -r HEAD 2>/dev/null | tr '\\n' ', ' | sed 's/,$//'); echo ''; echo '\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550'; echo '\ud83d\udcdd JOURNAL REQUIRED: Git commit detected'; echo '\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550'; echo \"Commit: $(git rev-parse --short HEAD 2>/dev/null)\"; echo \"Message: $MSG\"; echo \"Files: $FILES\"; echo ''; echo 'WRITE JOURNAL ENTRY NOW. File: .jfl/journal/'\"${BRANCH}\"'.jsonl'; echo '\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550'; fi"
           }
         ]
       },
@@ -31,7 +31,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "FILE=$(echo \"$TOOL_INPUT\" | grep -oE '\"file_path\":\\s*\"[^\"]+\"' | head -1 | sed 's/.*\"\\([^\"]*\\)\"/\\1/'); if echo \"$FILE\" | grep -qE '\\.(ts|tsx|js|jsx)$'; then if [ -f \"$FILE\" ] && ! head -20 \"$FILE\" | grep -q '@purpose'; then echo ''; echo '⚠️  MISSING @purpose HEADER'; echo \"   File: $FILE\"; echo '   Add: /** @purpose One-line description */'; fi; fi",
+            "command": "FILE=$(echo \"$TOOL_INPUT\" | grep -oE '\"file_path\":\\s*\"[^\"]+\"' | head -1 | sed 's/.*\"\\([^\"]*\\)\"/\\1/'); if echo \"$FILE\" | grep -qE '\\.(ts|tsx|js|jsx)$'; then if [ -f \"$FILE\" ] && ! head -20 \"$FILE\" | grep -q '@purpose'; then echo ''; echo '\u26a0\ufe0f  MISSING @purpose HEADER'; echo \"   File: $FILE\"; echo '   Add: /** @purpose One-line description */'; fi; fi",
             "async": true
           }
         ]
@@ -41,7 +41,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "if echo \"$TOOL_INPUT\" | grep -q '\"status\":\\s*\"completed\"'; then BRANCH=$(cat .jfl/current-session-branch.txt 2>/dev/null || git branch --show-current); echo ''; echo '═══════════════════════════════════════════════════════════'; echo '📝 JOURNAL REQUIRED: Task completed'; echo '═══════════════════════════════════════════════════════════'; echo 'WRITE JOURNAL ENTRY NOW. File: .jfl/journal/'\"${BRANCH}\"'.jsonl'; echo '═══════════════════════════════════════════════════════════'; fi"
+            "command": "if echo \"$TOOL_INPUT\" | grep -q '\"status\":\\s*\"completed\"'; then BRANCH=$(cat .jfl/current-session-branch.txt 2>/dev/null || git branch --show-current); echo ''; echo '\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550'; echo '\ud83d\udcdd JOURNAL REQUIRED: Task completed'; echo '\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550'; echo 'WRITE JOURNAL ENTRY NOW. File: .jfl/journal/'\"${BRANCH}\"'.jsonl'; echo '\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550'; fi"
           }
         ]
       },
@@ -50,7 +50,7 @@
         "hooks": [
           {
             "type": "http",
-            "url": "http://localhost:4313/api/hooks"
+            "url": "http://localhost:4358/api/hooks"
           }
         ]
       }
@@ -61,7 +61,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "BRANCH=$(cat .jfl/current-session-branch.txt 2>/dev/null || git branch --show-current); echo ''; echo '═══════════════════════════════════════════════════════════'; echo '📝 JOURNAL CHECK: User approved/confirmed something'; echo '═══════════════════════════════════════════════════════════'; echo 'If a decision or feature was just approved, write journal entry.'; echo 'File: .jfl/journal/'\"${BRANCH}\"'.jsonl'; echo '═══════════════════════════════════════════════════════════'"
+            "command": "BRANCH=$(cat .jfl/current-session-branch.txt 2>/dev/null || git branch --show-current); echo ''; echo '\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550'; echo '\ud83d\udcdd JOURNAL CHECK: User approved/confirmed something'; echo '\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550'; echo 'If a decision or feature was just approved, write journal entry.'; echo 'File: .jfl/journal/'\"${BRANCH}\"'.jsonl'; echo '\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550'"
           }
         ]
       }
@@ -72,7 +72,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "BRANCH=$(cat .jfl/current-session-branch.txt 2>/dev/null || git branch --show-current); JOURNAL=\".jfl/journal/${BRANCH}.jsonl\"; if [ ! -s \"$JOURNAL\" ] 2>/dev/null; then echo '⚠️  No journal entry for session'; else echo '✓ Journal exists'; fi; exit 0"
+            "command": "BRANCH=$(cat .jfl/current-session-branch.txt 2>/dev/null || git branch --show-current); JOURNAL=\".jfl/journal/${BRANCH}.jsonl\"; if [ ! -s \"$JOURNAL\" ] 2>/dev/null; then echo '\u26a0\ufe0f  No journal entry for session'; else echo '\u2713 Journal exists'; fi; exit 0"
           },
           {
             "type": "command",
@@ -85,7 +85,7 @@
         "hooks": [
           {
             "type": "http",
-            "url": "http://localhost:4313/api/hooks"
+            "url": "http://localhost:4358/api/hooks"
           }
         ]
       }
@@ -96,7 +96,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "BRANCH=$(cat .jfl/current-session-branch.txt 2>/dev/null || git branch --show-current); JOURNAL=\".jfl/journal/${BRANCH}.jsonl\"; if [ ! -s \"$JOURNAL\" ] 2>/dev/null; then echo ''; echo '🚨 CONTEXT COMPACTING - WRITE JOURNAL NOW'; echo \"File: .jfl/journal/${BRANCH}.jsonl\"; fi"
+            "command": "BRANCH=$(cat .jfl/current-session-branch.txt 2>/dev/null || git branch --show-current); JOURNAL=\".jfl/journal/${BRANCH}.jsonl\"; if [ ! -s \"$JOURNAL\" ] 2>/dev/null; then echo ''; echo '\ud83d\udea8 CONTEXT COMPACTING - WRITE JOURNAL NOW'; echo \"File: .jfl/journal/${BRANCH}.jsonl\"; fi"
           },
           {
             "type": "command",
@@ -109,7 +109,7 @@
         "hooks": [
           {
             "type": "http",
-            "url": "http://localhost:4313/api/hooks"
+            "url": "http://localhost:4358/api/hooks"
           }
         ]
       }
@@ -120,7 +120,7 @@
         "hooks": [
           {
             "type": "http",
-            "url": "http://localhost:4313/api/hooks"
+            "url": "http://localhost:4358/api/hooks"
           }
         ]
       }
@@ -131,7 +131,7 @@
         "hooks": [
           {
             "type": "http",
-            "url": "http://localhost:4313/api/hooks"
+            "url": "http://localhost:4358/api/hooks"
           }
         ]
       }

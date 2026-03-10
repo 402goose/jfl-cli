@@ -66,6 +66,26 @@ flows:
       - type: log
         message: "Training tuple logged: state={{data.baseline}} action=PR#{{data.pr_number}} reward={{data.delta}}"
 
+  # Proactive experiment trigger — PP picks its own next task
+  - name: proactive-experiment
+    description: "Pick and execute the highest-value experiment from trajectory history"
+    enabled: true
+    trigger:
+      pattern: "cron:daily"
+    gate:
+      requires_approval: true
+    actions:
+      - type: log
+        message: "Proactive experiment trigger: evaluating next best action"
+      - type: spawn
+        command: jfl
+        args: ["peter", "experiment"]
+        detach: true
+      - type: journal
+        entry_type: "milestone"
+        title: "Proactive experiment dispatched"
+        summary: "Autonomous experiment selection triggered. PP will analyze trajectory history and propose next improvement."
+
   # Review → Fix loop flows
   - name: block-merge-on-blockers
     description: "Request changes when AI review finds red (blocker) findings"
@@ -121,6 +141,41 @@ flows:
         entry_type: "milestone"
         title: "PP auto-fix dispatched: PR #{{data.pr_number}}"
         summary: "Peter Parker spawned to address {{data.counts.red}} review blockers on {{data.branch}}. Max 3 iterations."
+
+  # Telemetry agent: log high-severity insights
+  - name: telemetry-insight-journal
+    description: "Log telemetry insights to journal for tracking"
+    enabled: true
+    trigger:
+      pattern: "telemetry:insight"
+    actions:
+      - type: journal
+        entry_type: "discovery"
+        title: "Telemetry: {{data.title}}"
+        summary: "{{data.description}}. Fix: {{data.suggested_fix}}"
+      - type: log
+        message: "[telemetry-agent] {{data.severity}} insight: {{data.title}}"
+
+  # Telemetry agent: spawn PP for high-severity issues
+  - name: telemetry-auto-fix
+    description: "Spawn Peter Parker to address high-severity telemetry findings"
+    enabled: true
+    trigger:
+      pattern: "telemetry:insight"
+      condition: 'data.severity == "high" && data.is_new == true'
+    gate:
+      requires_approval: true
+    actions:
+      - type: log
+        message: "PP dispatched for telemetry issue: {{data.title}}"
+      - type: spawn
+        command: jfl
+        args: ["peter", "pr", "--task", "Fix telemetry issue: {{data.title}}. Details: {{data.description}}. Suggested fix: {{data.suggested_fix}}"]
+        detach: true
+      - type: journal
+        entry_type: "milestone"
+        title: "PP dispatched: {{data.title}}"
+        summary: "Telemetry agent detected high-severity issue. Peter Parker spawned to address: {{data.description}}"
 
   # Training tuple enrichment with AI quality score
   - name: log-quality-training-tuple

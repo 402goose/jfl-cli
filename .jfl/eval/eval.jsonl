@@ -1,0 +1,1 @@
+{"v":1,"ts":"2026-03-10T07:53:27Z","agent":"peter-parker","dataset":"ci-eval","metrics":{"test_pass_rate":1.0000,"tests_passed":274,"tests_total":274},"composite":1.0000,"delta":{"composite":0.0000},"model_version":"pp-run","improved":true,"pr_number":16,"branch":"pp/test-self-driving-loop"}

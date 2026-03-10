@@ -25,6 +25,9 @@ export type MAPEventType =
   | "agent:iteration-start" | "agent:iteration-complete" | "agent:analysis"
   | "eval:submitted" | "eval:scored" | "eval:baseline" | "eval:tuple"
   | "stratus:prediction" | "stratus:prediction-delta"
+  | "telemetry:insight" | "telemetry:agent-report"
+  | "pr:created" | "review:findings"
+  | "cron:daily" | "cron:hourly" | "cron:every-30-minutes"
   | "custom"
 
 export interface HookPayload {

@@ -1,5 +1,6 @@
 import { WorkspaceStatus, api } from "@/api"
 import { cn, usePolling } from "@/lib/hooks"
+import { useState } from "preact/hooks"
 
 interface SidebarProps {
   status: WorkspaceStatus | null
@@ -55,6 +56,28 @@ function NavIcon({ name }: { name: string }) {
         <path d="M7 12l5-5M12 7l5 3M17 10l-5 7" />
       </>
     ),
+    topology: (
+      <>
+        <circle cx="5" cy="6" r="2" />
+        <circle cx="12" cy="4" r="2" />
+        <circle cx="19" cy="8" r="2" />
+        <circle cx="7" cy="18" r="2" />
+        <circle cx="17" cy="17" r="2" />
+        <path d="M7 6l5-2M14 4l5 4M5 8l2 10M12 6l5 11M9 18h8" />
+      </>
+    ),
+    telemetry: (
+      <>
+        <path d="M3 3v18h18" />
+        <path d="m7 16 4-8 4 4 4-6" />
+      </>
+    ),
+    search: (
+      <>
+        <circle cx="11" cy="11" r="8" />
+        <path d="m21 21-4.3-4.3" />
+      </>
+    ),
   }
 
   return (
@@ -99,7 +122,9 @@ const sections: { label?: string; items: NavItemDef[] }[] = [
     label: "Infra",
     items: [
       { id: "services", label: "Services", icon: "services" },
+      { id: "topology", label: "Topology", icon: "topology" },
       { id: "health", label: "Health", icon: "health" },
+      { id: "telemetry", label: "Telemetry", icon: "telemetry" },
     ],
   },
   {
@@ -142,6 +167,10 @@ export function Sidebar({ status, currentPage, setPage }: SidebarProps) {
             </div>
           </div>
         </div>
+      </div>
+
+      <div class="px-3 pb-3">
+        <SearchBox setPage={setPage} />
       </div>
 
       <nav class="flex-1 overflow-y-auto pb-2">
@@ -234,5 +263,66 @@ export function Sidebar({ status, currentPage, setPage }: SidebarProps) {
         <div class="text-[10px] text-muted-foreground/60 mono">jfl v0.3.0</div>
       </div>
     </aside>
+  )
+}
+
+function SearchBox({ setPage }: { setPage: (p: string) => void }) {
+  const [query, setQuery] = useState("")
+  const [results, setResults] = useState<any[]>([])
+  const [searching, setSearching] = useState(false)
+
+  const doSearch = async () => {
+    if (!query.trim()) return
+    setSearching(true)
+    try {
+      const data = await api.memorySearch(query.trim())
+      setResults((data as any).results?.slice(0, 5) || [])
+    } catch {
+      setResults([])
+    }
+    setSearching(false)
+  }
+
+  return (
+    <div class="relative">
+      <div class="flex items-center gap-1.5 bg-accent/40 rounded-md px-2.5 py-1.5 border border-sidebar-border/50 focus-within:border-info/50 transition-colors">
+        <NavIcon name="search" />
+        <input
+          type="text"
+          placeholder="Search journals..."
+          value={query}
+          onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
+          onKeyDown={(e) => e.key === "Enter" && doSearch()}
+          class="bg-transparent text-xs text-sidebar-foreground placeholder:text-muted-foreground/50 outline-none flex-1 min-w-0"
+        />
+        {searching && <span class="text-[10px] text-muted-foreground animate-pulse-dot">...</span>}
+      </div>
+      {results.length > 0 && (
+        <div class="absolute top-full left-0 right-0 mt-1 bg-card border border-border rounded-md shadow-lg z-50 max-h-60 overflow-y-auto">
+          {results.map((r: any, i: number) => (
+            <button
+              key={i}
+              onClick={() => { setResults([]); setQuery(""); setPage("journal") }}
+              class="w-full text-left px-3 py-2 hover:bg-muted/30 transition-colors border-b border-border/30 last:border-0"
+            >
+              <div class="text-xs font-medium truncate">{r.title || r.content?.slice(0, 60)}</div>
+              <div class="flex items-center gap-2 mt-0.5">
+                {r.type && (
+                  <span class="text-[10px] mono text-info">{r.type}</span>
+                )}
+                {r.relevance && (
+                  <span class={cn(
+                    "text-[10px] mono",
+                    r.relevance === "high" ? "text-success" : "text-muted-foreground",
+                  )}>
+                    {r.relevance}
+                  </span>
+                )}
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }

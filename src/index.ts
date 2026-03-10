@@ -87,7 +87,7 @@ program.hook('postAction', (_thisCommand, actionCommand) => {
 const HELP_GROUPS: Record<string, string[]> = {
   "Getting Started": ["init", "status", "hud", "doctor"],
   "Daily Use": ["synopsis", "ask", "improve", "events", "voice"],
-  "Management": ["services", "portfolio", "flows", "hooks", "scope", "memory", "eval", "viz", "telemetry", "context-hub", "skills"],
+  "Management": ["services", "portfolio", "flows", "hooks", "scope", "memory", "eval", "viz", "telemetry", "context-hub", "skills", "ci"],
   "Platform": ["login", "deploy", "wallet", "preferences"],
   "Advanced": ["peter", "orchestrate", "openclaw", "ralph", "agent"],
 }
@@ -858,11 +858,13 @@ program
 program
   .command("peter")
   .description("Peter Parker - model-routed agent orchestrator")
-  .argument("[action]", "setup, run, pr, status, or dashboard")
+  .argument("[action]", "setup, run, pr, experiment, autoresearch, status, or dashboard")
   .option("--cost", "Cost-optimized model routing (haiku-heavy)")
   .option("--balanced", "Balanced model routing (default)")
   .option("--quality", "Quality-first model routing (opus-heavy)")
   .option("-t, --task <task>", "Task to run (for run action)")
+  .option("-r, --rounds <n>", "Number of autoresearch rounds (default: 5)")
+  .option("--mode <mode>", "Experiment mode: default or autoresearch")
   .action(async (action, options) => {
     await peterCommand(action, options)
   })
@@ -1029,6 +1031,24 @@ openclaw
     const { tagCommand } = await import("./commands/openclaw.js")
     await tagCommand(service, message, options)
   })
+
+// ============================================================================
+// CI WORKFLOWS
+// ============================================================================
+
+const ci = program.command("ci").description("CI/CD workflow management")
+
+ci
+  .command("setup")
+  .description("Deploy eval + review CI workflows to .github/workflows/")
+  .action(async () => {
+    const { ciSetupCommand } = await import("./commands/ci-setup.js")
+    await ciSetupCommand()
+  })
+
+ci.action(() => {
+  ci.outputHelp()
+})
 
 // ============================================================================
 // EVAL FRAMEWORK
