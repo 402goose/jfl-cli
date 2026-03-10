@@ -25,45 +25,144 @@ jobs:
         with:
           node-version: '22'
 
+      - name: Gather project context
+        id: context
+        run: |
+          # Read project config
+          PROJECT_NAME=$(node -e "
+            try { console.log(JSON.parse(require('fs').readFileSync('.jfl/config.json','utf8')).name || 'unknown'); }
+            catch(e) { console.log('unknown'); }
+          ")
+          PROJECT_DESC=$(node -e "
+            try { console.log(JSON.parse(require('fs').readFileSync('.jfl/config.json','utf8')).description || ''); }
+            catch(e) { console.log(''); }
+          ")
+          echo "project_name=$PROJECT_NAME" >> $GITHUB_OUTPUT
+
+          # Build project context from repo files
+          node -e "
+            const fs = require('fs');
+            const sections = [];
+
+            // Project identity
+            sections.push('# Project: ' + '$PROJECT_NAME');
+            if ('$PROJECT_DESC') sections.push('$PROJECT_DESC');
+            sections.push('');
+
+            // Architecture (tech stack, structure, patterns)
+            try {
+              const arch = fs.readFileSync('knowledge/ARCHITECTURE.md', 'utf8');
+              // Extract first 2000 chars (tech stack + structure)
+              sections.push('## Architecture');
+              sections.push(arch.substring(0, 2000));
+              sections.push('');
+            } catch(e) {}
+
+            // Service spec (what the project does)
+            try {
+              const spec = fs.readFileSync('knowledge/SERVICE_SPEC.md', 'utf8');
+              sections.push('## Service Spec');
+              sections.push(spec.substring(0, 1000));
+              sections.push('');
+            } catch(e) {}
+
+            // Recent journal entries (last 5 for active context)
+            try {
+              const { execSync } = require('child_process');
+              const journal = execSync('cat .jfl/journal/*.jsonl 2>/dev/null | tail -5', { encoding: 'utf8' });
+              if (journal.trim()) {
+                sections.push('## Recent Activity');
+                sections.push(journal.trim());
+                sections.push('');
+              }
+            } catch(e) {}
+
+            // Recent decisions
+            try {
+              const { execSync } = require('child_process');
+              const decisions = execSync('cat .jfl/journal/*.jsonl 2>/dev/null | grep decision | tail -3', { encoding: 'utf8' });
+              if (decisions.trim()) {
+                sections.push('## Recent Decisions');
+                sections.push(decisions.trim());
+                sections.push('');
+              }
+            } catch(e) {}
+
+            const context = sections.join('\n');
+            fs.writeFileSync('/tmp/project-context.txt', context);
+            console.log('Context size: ' + context.length + ' chars');
+          "
+
       - name: Get PR diff and review
         id: review
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
         run: |
-          # Get full diff (including test files — review everything)
+          # Get full diff
           git diff origin/main...HEAD -- '*.ts' '*.tsx' '*.js' '*.jsx' | head -4000 > /tmp/diff.txt
           git diff origin/main...HEAD --stat > /tmp/stats.txt
           git diff origin/main...HEAD --name-only -- '*.ts' '*.tsx' '*.js' '*.jsx' > /tmp/files.txt
 
           DIFF_SIZE=$(wc -c < /tmp/diff.txt | tr -d ' ')
           echo "Diff size: $DIFF_SIZE bytes"
-          echo "Files changed:"
-          cat /tmp/files.txt
 
           if [ "$DIFF_SIZE" -lt 10 ]; then
             echo "No code diff to review" > /tmp/review.md
+            echo '{"findings":[]}' > /tmp/findings.json
             echo "has_review=true" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          # Build payload via node (safe multiline handling)
+          # Build context-aware payload
           node -e "
             const fs = require('fs');
             const diff = fs.readFileSync('/tmp/diff.txt', 'utf8').substring(0, 12000);
+            const context = fs.readFileSync('/tmp/project-context.txt', 'utf8').substring(0, 3000);
             const title = process.env.PR_TITLE || '';
+            const body = (process.env.PR_BODY || '').substring(0, 500);
+
+            const systemPrompt = [
+              'You are a senior code reviewer with full project context.',
+              '',
+              '--- PROJECT CONTEXT ---',
+              context,
+              '--- END CONTEXT ---',
+              '',
+              'Review this PR diff with awareness of the project\\'s architecture, patterns, and conventions.',
+              '',
+              'Review for:',
+              '1. Bugs - Logic errors, null/undefined risks, race conditions',
+              '2. Security - Injection, XSS, credential exposure, unsafe operations',
+              '3. Architecture - Does this follow the project\\'s established patterns?',
+              '4. Performance - N+1 queries, unnecessary re-renders, memory leaks',
+              '5. Test gaps - What should be tested that is not',
+              '',
+              'Be concise. Only flag real issues, not style preferences. If the code is clean, say so briefly.',
+              'Use your knowledge of the project to distinguish intentional patterns from mistakes.',
+              '',
+              'Output format:',
+              '## Findings',
+              '- [severity_emoji] file:line - description',
+              '',
+              'Severity: red_circle (bug/security), yellow_circle (perf/architecture concern), blue_circle (suggestion)',
+              '',
+              'If no issues: ## Findings\\nNo issues found. Code looks clean.',
+              '',
+              'After the markdown findings, output a JSON block on a new line starting with FINDINGS_JSON:',
+              'FINDINGS_JSON:[{\"severity\":\"red|yellow|blue\",\"file\":\"path\",\"line\":0,\"description\":\"...\"}]',
+              'Output an empty array [] if no findings.',
+            ].join('\\n');
 
             const payload = {
               model: 'gpt-4o-mini',
               messages: [
-                {
-                  role: 'system',
-                  content: 'You are a senior code reviewer. Review this PR diff for:\\n1. Bugs - Logic errors, null/undefined risks, race conditions\\n2. Security - Injection, XSS, credential exposure, unsafe operations\\n3. Performance - N+1 queries, unnecessary re-renders, memory leaks\\n4. Test gaps - What should be tested that is not\\n\\nBe concise. Only flag real issues, not style preferences. If the code is clean, say so briefly.\\n\\nFormat:\\n## Findings\\n- [severity] file:line - description\\n\\nSeverity: red_circle (bug/security), yellow_circle (perf/logic concern), blue_circle (suggestion)\\n\\nIf no issues: No issues found. Code looks clean.'
-                },
-                { role: 'user', content: 'PR: ' + title + '\\n\\n' + diff }
+                { role: 'system', content: systemPrompt },
+                { role: 'user', content: 'PR: ' + title + '\\n' + (body ? 'Description: ' + body + '\\n\\n' : '\\n') + diff }
               ],
-              max_tokens: 1000,
+              max_tokens: 1500,
               temperature: 0.1
             };
 
@@ -108,10 +207,47 @@ jobs:
 
           if [ -z "$REVIEW" ]; then
             REVIEW="AI review unavailable — both OpenAI and OpenRouter failed."
+            echo '{"findings":[]}' > /tmp/findings.json
           fi
 
           echo "$REVIEW" > /tmp/review.md
           echo "has_review=true" >> $GITHUB_OUTPUT
+
+      - name: Extract structured findings
+        if: steps.review.outputs.has_review == 'true'
+        run: |
+          # Parse FINDINGS_JSON from review output
+          node -e "
+            const fs = require('fs');
+            const review = fs.readFileSync('/tmp/review.md', 'utf8');
+
+            // Extract FINDINGS_JSON line
+            const match = review.match(/FINDINGS_JSON:\s*(\[.*\])/);
+            let findings = [];
+            if (match) {
+              try { findings = JSON.parse(match[1]); } catch(e) {}
+            }
+
+            // Also count by severity from markdown as fallback
+            const redCount = (review.match(/🔴/g) || []).length;
+            const yellowCount = (review.match(/🟡/g) || []).length;
+            const blueCount = (review.match(/🔵/g) || []).length;
+
+            const result = {
+              findings: findings,
+              counts: { red: redCount, yellow: yellowCount, blue: blueCount },
+              total: findings.length || (redCount + yellowCount + blueCount),
+              has_blockers: findings.some(f => f.severity === 'red') || redCount > 0
+            };
+
+            fs.writeFileSync('/tmp/findings.json', JSON.stringify(result));
+
+            // Clean the FINDINGS_JSON line from the review markdown
+            const cleanReview = review.replace(/FINDINGS_JSON:.*$/m, '').trim();
+            fs.writeFileSync('/tmp/review.md', cleanReview);
+
+            console.log('Findings: ' + result.total + ' (red=' + result.counts.red + ' yellow=' + result.counts.yellow + ' blue=' + result.counts.blue + ')');
+          "
 
       - name: Comment on PR
         if: steps.review.outputs.has_review == 'true'
@@ -121,11 +257,13 @@ jobs:
             const fs = require('fs');
             const review = fs.readFileSync('/tmp/review.md', 'utf8');
             const stats = fs.readFileSync('/tmp/stats.txt', 'utf8');
+            const findings = JSON.parse(fs.readFileSync('/tmp/findings.json', 'utf8'));
+            const projectName = '${{ steps.context.outputs.project_name }}';
             const marker = '<!-- jfl-ai-review -->';
 
             const body = [
               marker,
-              '## AI Code Review',
+              `## AI Code Review — ${projectName}`,
               '',
               review,
               '',
@@ -137,7 +275,13 @@ jobs:
               '```',
               '</details>',
               '',
-              '*Reviewed by JFL AI Review (gpt-4o-mini / claude-sonnet fallback)*'
+              findings.has_blockers
+                ? ':warning: **Blockers found** — address red findings before merge'
+                : (findings.total > 0
+                  ? ':white_check_mark: No blockers — suggestions only'
+                  : ':white_check_mark: Clean'),
+              '',
+              `*Reviewed by JFL AI Review (context-aware) | ${findings.total} finding(s)*`
             ].join('\n');
 
             const { data: comments } = await github.rest.issues.listComments({
@@ -163,26 +307,43 @@ jobs:
               });
             }
 
-      - name: Post review event to hub
+      - name: Post review:findings event to hub
         if: always()
         continue-on-error: true
         env:
           JFL_HUB_URL: ${{ secrets.JFL_HUB_URL }}
           JFL_HUB_TOKEN: ${{ secrets.JFL_HUB_TOKEN }}
         run: |
+          # Build structured event with findings
+          node -e "
+            const fs = require('fs');
+            let findings = { findings: [], counts: { red: 0, yellow: 0, blue: 0 }, total: 0, has_blockers: false };
+            try { findings = JSON.parse(fs.readFileSync('/tmp/findings.json', 'utf8')); } catch(e) {}
+
+            const event = {
+              type: 'review:findings',
+              source: 'github-action',
+              data: {
+                pr_number: ${{ github.event.pull_request.number }},
+                pr_url: '${{ github.event.pull_request.html_url }}',
+                branch: '${{ github.head_ref }}',
+                commit_sha: '${{ github.sha }}',
+                reviewer: 'ai',
+                model: 'gpt-4o-mini',
+                findings: findings.findings,
+                counts: findings.counts,
+                total_findings: findings.total,
+                has_blockers: findings.has_blockers,
+                run_url: '${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}'
+              }
+            };
+
+            fs.writeFileSync('/tmp/review-event.json', JSON.stringify(event));
+          "
+
           if [ -n "$JFL_HUB_URL" ]; then
             curl -s -X POST "$JFL_HUB_URL/api/events" \
               -H "Content-Type: application/json" \
               -H "Authorization: Bearer $JFL_HUB_TOKEN" \
-              -d "{
-                \"type\": \"review:completed\",
-                \"source\": \"github-action\",
-                \"data\": {
-                  \"pr_number\": \"${{ github.event.pull_request.number }}\",
-                  \"branch\": \"${{ github.head_ref }}\",
-                  \"reviewer\": \"ai\",
-                  \"model\": \"gpt-4o-mini\",
-                  \"run_url\": \"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}\"
-                }
-              }" || echo "Hub not available"
+              -d @/tmp/review-event.json || echo "Hub not available"
           fi
