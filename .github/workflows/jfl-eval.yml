@@ -6,7 +6,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
 
 jobs:
@@ -263,8 +263,32 @@ jobs:
             }
           " >> $GITHUB_OUTPUT
 
-      - name: Post eval:scored event to hub
+      - name: Commit eval entry to PR branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          # Checkout the actual PR branch (not detached HEAD)
+          git checkout ${{ github.head_ref }}
+
+          # Write eval entry
+          mkdir -p .jfl/eval
+          cat >> .jfl/eval/eval.jsonl << EOF
+          {"v":1,"ts":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","agent":"peter-parker","dataset":"ci-eval","metrics":{"test_pass_rate":${{ steps.pr_eval.outputs.score }},"tests_passed":${{ steps.pr_eval.outputs.passing }},"tests_total":${{ steps.pr_eval.outputs.total }}},"composite":${{ steps.pr_eval.outputs.score }},"delta":{"composite":${{ steps.delta.outputs.delta }}},"model_version":"pp-run","improved":${{ steps.delta.outputs.improved }},"pr_number":${{ github.event.pull_request.number }},"branch":"${{ github.head_ref }}"}
+          EOF
+
+          # Write eval:scored event for hub file watcher
+          cat >> .jfl/service-events.jsonl << EOF
+          {"ts":"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)","type":"eval:scored","source":"ci","data":{"agent":"peter-parker","composite":${{ steps.pr_eval.outputs.score }},"baseline":${{ steps.baseline.outputs.score }},"delta":${{ steps.delta.outputs.delta }},"improved":"${{ steps.delta.outputs.improved }}","pr_number":${{ github.event.pull_request.number }},"branch":"${{ github.head_ref }}","run_url":"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}","quality_score":${{ steps.ai_eval.outputs.quality_score }},"dim_correctness":${{ steps.ai_eval.outputs.dim_correctness }},"dim_coverage":${{ steps.ai_eval.outputs.dim_coverage }},"dim_architecture":${{ steps.ai_eval.outputs.dim_architecture }},"dim_value":${{ steps.ai_eval.outputs.dim_value }}}}
+          EOF
+
+          git add .jfl/eval/eval.jsonl .jfl/service-events.jsonl
+          git commit -m "eval: scored PR #${{ github.event.pull_request.number }} (composite=${{ steps.pr_eval.outputs.score }}, delta=${{ steps.delta.outputs.delta }})"
+          git push origin ${{ github.head_ref }}
+
+      - name: Post eval:scored event to hub (best-effort)
         if: env.JFL_HUB_URL != ''
+        continue-on-error: true
         run: |
           curl -sf -X POST "${JFL_HUB_URL}/api/events" \
             -H "Content-Type: application/json" \
@@ -295,13 +319,6 @@ jobs:
                 "run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
               }
             }' || echo "Warning: could not post to hub (hub may not be running)"
-
-      - name: Log eval entry
-        run: |
-          mkdir -p .jfl/eval
-          cat >> .jfl/eval/eval.jsonl << EOF
-          {"v":1,"ts":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","agent":"peter-parker","run_id":"${{ github.run_id }}","metrics":{"test_pass_rate":${{ steps.pr_eval.outputs.score }},"tests_passing":${{ steps.pr_eval.outputs.passing }},"tests_total":${{ steps.pr_eval.outputs.total }}},"composite":${{ steps.pr_eval.outputs.score }},"baseline":${{ steps.baseline.outputs.score }},"delta":${{ steps.delta.outputs.delta }},"improved":${{ steps.delta.outputs.improved }},"model_version":"pp-pr-${{ github.event.pull_request.number }}","notes":"GHA eval run ${{ github.run_id }}"}
-          EOF
 
       - name: Comment on PR
         uses: actions/github-script@v7
@@ -390,6 +407,21 @@ jobs:
                 body,
               });
             }
+
+      - name: Auto-merge or flag regression
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ steps.delta.outputs.improved }}" = "true" ]; then
+            echo "Eval passed — auto-merging PR #${{ github.event.pull_request.number }}"
+            gh pr merge ${{ github.event.pull_request.number }} --merge --delete-branch \
+              --body "Auto-merged by JFL eval: test_pass_rate improved by ${{ steps.delta.outputs.delta }} (${{ steps.baseline.outputs.score }} → ${{ steps.pr_eval.outputs.score }})"
+          elif [ "${{ steps.delta.outputs.improved }}" = "false" ]; then
+            echo "Eval regression — requesting changes on PR #${{ github.event.pull_request.number }}"
+            gh pr review ${{ github.event.pull_request.number }} --request-changes \
+              --body "JFL eval regression: test_pass_rate dropped by ${{ steps.delta.outputs.delta }} (${{ steps.baseline.outputs.score }} → ${{ steps.pr_eval.outputs.score }}). Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          fi
 
       - name: Eval Summary
         if: always()
