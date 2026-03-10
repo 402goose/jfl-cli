@@ -593,6 +593,7 @@ jfl services                  # Interactive TUI (no args)
 | `jfl peter run [--task text]` | Run orchestrator (interactive or headless) |
 | `jfl peter pr --task <text>` | Run agent, create PR on pp/ branch, emit event |
 | `jfl peter experiment` | Proactive: analyze trajectory, pick highest-value task, execute |
+| `jfl peter autoresearch [--rounds N]` | Tight loop: N experiments, only PR the winner |
 | `jfl peter status` | Show config and recent events |
 | `jfl peter dashboard` | Live event stream TUI |
 | `jfl ralph [args]` | Ralph-tui agent loop orchestrator |
@@ -855,13 +856,15 @@ npx changeset         # pick bump level, write summary
 
 ### Eval — `.github/workflows/jfl-eval.yml`
 
-Runs on PRs from Peter Parker (`pp/` prefix) or `run-eval` label:
+Runs on PRs from Peter Parker (`pp/` prefix), any `agent/*` branch, or `run-eval` label:
 
+- Detects agent from branch prefix (`pp/` → peter-parker, `agent/name/` → name, fallback → PR author)
 - Baseline test pass rate from `main`
-- PR test pass rate
-- AI quality assessment (correctness, coverage, architecture, value)
-- Posts `eval:scored` event to Context Hub
-- Comments on PR with eval results
+- PR test pass rate + AI quality assessment (correctness, coverage, architecture, value)
+- Stratus prediction before eval, resolve after (optional, needs `STRATUS_API_KEY` secret)
+- Auto-merge if improved + no AI review blockers; request changes if regressed
+- Commits eval entry + service events to PR branch (file-drop pattern for hub)
+- PR comment with full eval table, AI quality dimensions, and prediction accuracy
 
 ### AI Review — `.github/workflows/jfl-review.yml`
 
@@ -909,6 +912,13 @@ jfl wallet                    # Wallet and day pass status
 ---
 
 ## What's New
+
+**0.4.4**
+- Feat: **`jfl peter autoresearch --rounds N`** — tight inner loop: N experiments, branch/change/eval/keep|revert, only PRs the winner (Karpathy autoresearch pattern)
+- Feat: **Stratus predictor in CI** — predicts eval delta before running tests, resolves after. PR comments show predicted vs actual with direction accuracy
+- Feat: **Agent generalization** — CI detects agent from branch prefix (`pp/*` → peter-parker, `bot/*` → bot, `agent/name/*` → extracted). Any agent gets the self-driving loop
+- Fix: Eval path alignment — CI writes `.jfl/eval.jsonl` matching `readEvals()` (was `.jfl/eval/eval.jsonl`)
+- Feat: Eval entries include `prediction_id` and AI quality dimensions for dashboard linking
 
 **0.4.3**
 - Feat: **Self-driving loop proven end-to-end** — eval CI auto-merges improved PRs, requests changes on regressions. First auto-merged PP PR (#16) in 90 seconds
