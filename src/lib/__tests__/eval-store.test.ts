@@ -60,7 +60,7 @@ describe('readEvals', () => {
 
     const result = readEvals('/fake/root')
     expect(result).toHaveLength(1)
-    expect(result[0].agent).toBe('peter-parker')
+    expect(result[0]).toEqual(valid)
   })
 
   it('returns empty array for empty file', () => {

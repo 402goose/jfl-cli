@@ -8,6 +8,7 @@ jest.mock('../telemetry.js', () => ({
 
 import { transformHookPayload } from '../hook-transformer'
 import { telemetry } from '../telemetry'
+import type { HookPayload } from '../../types/map'
 
 beforeEach(() => {
   jest.clearAllMocks()
@@ -74,7 +75,8 @@ describe('transformHookPayload', () => {
   })
 
   it('handles missing hook_event_name', () => {
-    const result = transformHookPayload({} as any)
+    const payload: Partial<HookPayload> = {}
+    const result = transformHookPayload(payload as HookPayload)
     expect(result.type).toBe('custom')
     expect(result.data.hook_event_name).toBe('unknown')
   })
