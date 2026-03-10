@@ -1231,9 +1231,9 @@ const piCmd = program
     await piCommand(options, cmd.args)
   })
 
-const piAgents = piCmd.command("agents").description("Manage Pi agent team sessions")
+const piTeam = piCmd.command("team").description("Manage Pi agent team sessions")
 
-piAgents
+piTeam
   .command("run")
   .description("Spawn agent team as Pi RPC subprocesses")
   .option("--team <yaml>", "Team configuration YAML", "teams/gtm-team.yaml")

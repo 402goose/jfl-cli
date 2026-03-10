@@ -9,7 +9,7 @@
  */
 
 import type { PiContext } from "./types.js"
-import { hubUrl, authToken } from "./map-bridge.js"
+import { hubUrl, authToken, emitCustomEvent } from "./map-bridge.js"
 
 interface AgentHealth {
   name: string
@@ -52,7 +52,7 @@ function buildGridLines(): string[] {
   const lines: string[] = ["─ Agent Grid ──────────────────────────────────────────────────"]
 
   if (agentList.length === 0) {
-    lines.push("  No active agents. Run: jfl pi agents run --team teams/gtm-team.yaml")
+    lines.push("  No active agents. Run: jfl pi team run --team teams/gtm-team.yaml")
     return lines
   }
 
@@ -136,7 +136,9 @@ export function emitAgentHealth(
   ctx: PiContext,
   health: Omit<AgentHealth, "lastSeen">
 ): void {
-  ctx.emit("agent:health", { ...health, ts: new Date().toISOString() })
+  const event = { ...health, ts: new Date().toISOString() }
+  ctx.emit("agent:health", event)
+  emitCustomEvent(ctx, "agent:health", event).catch(() => {})
 }
 
 export function stopAgentGrid(): void {

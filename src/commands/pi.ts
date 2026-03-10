@@ -77,7 +77,7 @@ export async function piCommand(options: PiOptions, extraArgs: string[] = []): P
   ]
 
   if (skillsPath) {
-    args.push("--skills", skillsPath)
+    args.push("--skill", skillsPath)
   }
 
   args.push("--theme", "jfl")
@@ -174,7 +174,7 @@ export async function piAgentsRunCommand(options: AgentsRunOptions): Promise<voi
     ]
 
     if (skillsPath) {
-      args.push("--skills", skillsPath)
+      args.push("--skill", skillsPath)
     }
 
     const env = {

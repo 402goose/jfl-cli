@@ -33,7 +33,7 @@ import { setupSynopsisTool } from "./synopsis-tool.js"
 import { initStratusBridge, onAgentStart as onStratusStart, onAgentEnd as onStratusEnd } from "./stratus-bridge.js"
 import { setupPeterParker } from "./peter-parker.js"
 import { setupPortfolioBridge, onPortfolioShutdown } from "./portfolio-bridge.js"
-import { setupAgentGrid } from "./agent-grid.js"
+import { setupAgentGrid, emitAgentHealth } from "./agent-grid.js"
 
 function readJflConfig(projectRoot: string): JflConfig {
   const configPath = join(projectRoot, ".jfl", "config.json")
@@ -113,9 +113,9 @@ export default async function jflExtension(pi: any): Promise<void> {
         execute: async (_id: string, params: Record<string, unknown>) => {
           try {
             const result = await tool.handler(params)
-            return { type: "tool_result", content: String(result) }
+            return { type: "tool_result", content: [{ type: "text", text: String(result) }] }
           } catch (err) {
-            return { type: "tool_result", content: `Error: ${err}`, isError: true }
+            return { type: "tool_result", content: [{ type: "text", text: `Error: ${err}` }], isError: true }
           }
         },
       })
@@ -197,7 +197,31 @@ export default async function jflExtension(pi: any): Promise<void> {
     await setupPortfolioBridge(ctx, config)
     setupAgentGrid(ctx)
 
+    // If running as an RPC team agent, emit health heartbeats to the grid
+    const agentName = process.env.JFL_AGENT_NAME
+    const agentRole = process.env.JFL_AGENT_ROLE
+    if (agentName) {
+      const emitHealth = (status: "idle" | "running") => {
+        emitAgentHealth(ctx, {
+          name: agentName,
+          role: agentRole ?? "agent",
+          status,
+          model: process.env.JFL_AGENT_MODEL,
+        })
+      }
+      emitHealth("idle")
+      setInterval(() => emitHealth("idle"), 5000)
+    }
+
     ctx.log(`JFL: ${projectName} — session ready`)
+
+    // Auto-trigger session initialization after Pi finishes its own startup
+    setImmediate(() => {
+      pi.sendUserMessage(
+        `JFL session started in "${projectName}". Use the jfl_context tool to read recent project context, then show a brief status update with current focus and any blocking issues.`,
+        { triggerTurn: true }
+      )
+    })
   })
 
   pi.on("session_shutdown", async (_event: unknown, piCtx: any) => {
