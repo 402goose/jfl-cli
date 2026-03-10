@@ -31,14 +31,16 @@ export async function setupEval(ctx: PiContext, _config: JflConfig): Promise<voi
 }
 
 export async function onAgentEnd(ctx: PiContext, event: AgentEndEvent): Promise<void> {
-  if (!event.turnCount || event.turnCount < 1) return
+  // Pi's AgentEndEvent has messages array; use length as turn count
+  const turnCount = event.messages?.length ?? event.turnCount ?? 0
+  if (turnCount < 1) return
 
   const entry: EvalEntry = {
     id: randomUUID(),
     session_id: ctx.session.id,
     ts: new Date().toISOString(),
     model: event.model,
-    turn_count: event.turnCount,
+    turn_count: turnCount,
     tools_used: event.toolsUsed,
     files_changed: event.filesChanged,
     duration_ms: event.duration,

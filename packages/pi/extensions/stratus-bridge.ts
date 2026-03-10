@@ -17,6 +17,9 @@ const TRAINING_BUFFER = join(homedir(), ".jfl", "training-buffer.jsonl")
 
 let projectRoot = ""
 const sessionPredictions = new Map<string, string>()
+// Store current prediction per session (replaces ctx.session.custom)
+let currentPredictionId: string | undefined
+let currentPredictionKey: string | undefined
 
 function getTrainingBufferPath(): string {
   const dir = join(homedir(), ".jfl")
@@ -58,9 +61,8 @@ export async function onAgentStart(ctx: PiContext, event: AgentStartEvent): Prom
 
     const key = `${ctx.session.id}:${Date.now()}`
     sessionPredictions.set(key, prediction.prediction_id)
-
-    ctx.session.custom["last_prediction_id"] = prediction.prediction_id
-    ctx.session.custom["last_prediction_key"] = key
+    currentPredictionId = prediction.prediction_id
+    currentPredictionKey = key
 
     ctx.log(`Stratus prediction: ${prediction.recommendation} (Δ${prediction.predicted_delta.toFixed(3)})`, "debug")
   } catch (err) {
@@ -71,7 +73,7 @@ export async function onAgentStart(ctx: PiContext, event: AgentStartEvent): Prom
 export async function onAgentEnd(ctx: PiContext, event: AgentEndEvent): Promise<void> {
   if (!projectRoot) return
 
-  const predictionId = ctx.session.custom["last_prediction_id"] as string | undefined
+  const predictionId = currentPredictionId
   if (!predictionId) return
 
   const predictor = await getPredictor(projectRoot)
@@ -97,8 +99,8 @@ export async function onAgentEnd(ctx: PiContext, event: AgentEndEvent): Promise<
     appendFileSync(getTrainingBufferPath(), JSON.stringify(tuple) + "\n")
     await emitCustomEvent(ctx, "training:tuple:added", tuple)
 
-    delete ctx.session.custom["last_prediction_id"]
-    delete ctx.session.custom["last_prediction_key"]
+    currentPredictionId = undefined
+    currentPredictionKey = undefined
   } catch (err) {
     ctx.log(`Stratus resolve failed: ${err}`, "debug")
   }
