@@ -327,6 +327,10 @@ jobs:
             echo "Red findings detected — requesting changes"
             gh pr review ${{ github.event.pull_request.number }} --request-changes \
               --body "JFL AI Review: ${{ steps.findings.outputs.red_count }} blocker(s) found. Address red findings before merge."
+          else
+            echo "No blockers — approving (dismisses any previous CHANGES_REQUESTED)"
+            gh pr review ${{ github.event.pull_request.number }} --approve \
+              --body "JFL AI Review: Clean. No blockers found."
           fi
 
       - name: Post review:findings event to hub
