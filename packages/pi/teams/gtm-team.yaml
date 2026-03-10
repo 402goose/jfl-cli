@@ -1,0 +1,79 @@
+name: gtm-team
+description: JFL GTM team — research, planning, building, content, and eval
+
+agents:
+  - name: scout
+    role: Research and discovery
+    description: Finds trends, researches competitors, discovers opportunities
+    model: claude-sonnet-4-6
+    skills:
+      - search
+      - agent-browser
+      - x-algorithm
+    color: cyan
+    health_interval: 5000
+
+  - name: planner
+    role: Spec and strategy
+    description: Turns insights into specs and roadmaps
+    model: claude-opus-4-6
+    skills:
+      - spec
+      - startup
+      - hud
+    color: blue
+    health_interval: 5000
+
+  - name: builder
+    role: Implementation
+    description: Writes code, runs tests, ships features
+    model: claude-sonnet-4-6
+    skills:
+      - spec
+      - react-best-practices
+      - fly-deploy
+    color: green
+    default: true
+    health_interval: 5000
+
+  - name: gtm
+    role: Go-to-market
+    description: Coordinates launch, outreach, and pipeline
+    model: claude-sonnet-4-6
+    skills:
+      - hud
+      - content-creator
+      - x-algorithm
+    color: orange
+    health_interval: 5000
+
+  - name: content
+    role: Content generation
+    description: Writes threads, articles, scripts, and one-pagers
+    model: claude-sonnet-4-6
+    skills:
+      - content-creator
+      - founder-video
+    color: purple
+    health_interval: 5000
+
+  - name: eval
+    role: Quality scoring
+    description: Runs evals, scores outputs, provides structured feedback
+    model: claude-haiku-4-5-20251001
+    skills:
+      - eval
+    color: yellow
+    health_interval: 5000
+
+orchestration:
+  mode: rpc
+  extension: "@jfl/pi/extensions/index.js"
+  map_events:
+    - eval:scored
+    - review:findings
+    - task:requested
+    - agent:health
+  peter_parker:
+    enabled: true
+    max_iterations: 5

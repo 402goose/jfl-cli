@@ -1,0 +1,44 @@
+{
+  "name": "@jfl/pi",
+  "version": "0.1.0",
+  "description": "JFL extension package for Pi AI agent runtime",
+  "type": "module",
+  "main": "dist/index.js",
+  "keywords": ["pi-package", "jfl", "ai", "gtm", "extensions"],
+  "author": "JFL <402goose@users.noreply.github.com>",
+  "license": "MIT",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "exports": {
+    ".": "./dist/index.js",
+    "./extensions": "./dist/index.js",
+    "./extensions/*": "./dist/*.js",
+    "./themes/*": "./themes/*",
+    "./teams/*": "./teams/*",
+    "./skills/*": "./skills/*"
+  },
+  "files": [
+    "dist",
+    "extensions",
+    "themes",
+    "teams",
+    "skills",
+    "AGENTS.md"
+  ],
+  "dependencies": {
+    "axios": "^1.13.4",
+    "yaml": "^2.8.2"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.3.3"
+  },
+  "pi": {
+    "entry": "dist/extensions/index.js",
+    "skills": "skills",
+    "themes": "themes/jfl.theme.json",
+    "teams": "teams"
+  }
+}

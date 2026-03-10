@@ -1216,6 +1216,34 @@ gtm
   })
 
 // ============================================================================
+// PI INTEGRATION
+// ============================================================================
+
+const piCmd = program
+  .command("pi")
+  .description("Pi AI agent runtime — launch JFL with Pi extensions, multi-provider LLM, agent grid")
+  .option("--yolo", "Skip all permission prompts (pass-through to Pi)")
+  .option("--mode <mode>", "Pi mode: interactive (default), rpc, headless")
+  .option("--task <task>", "Task for RPC/headless mode")
+  .allowUnknownOption(true)
+  .action(async (options, cmd) => {
+    const { piCommand } = await import("./commands/pi.js")
+    await piCommand(options, cmd.args)
+  })
+
+const piAgents = piCmd.command("agents").description("Manage Pi agent team sessions")
+
+piAgents
+  .command("run")
+  .description("Spawn agent team as Pi RPC subprocesses")
+  .option("--team <yaml>", "Team configuration YAML", "teams/gtm-team.yaml")
+  .option("--dry-run", "Show what would be spawned without spawning")
+  .action(async (options) => {
+    const { piAgentsRunCommand } = await import("./commands/pi.js")
+    await piAgentsRunCommand(options)
+  })
+
+// ============================================================================
 
 // Parse and run
 program.parse()

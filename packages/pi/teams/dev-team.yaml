@@ -1,0 +1,63 @@
+name: dev-team
+description: JFL dev team — focused on code quality, tests, and shipping
+
+agents:
+  - name: scout
+    role: Research and discovery
+    description: Researches libraries, APIs, and technical approaches
+    model: claude-sonnet-4-6
+    skills:
+      - search
+      - agent-browser
+    color: cyan
+    health_interval: 5000
+
+  - name: planner
+    role: Architecture and design
+    description: Designs systems, writes specs, plans implementation
+    model: claude-opus-4-6
+    skills:
+      - spec
+    color: blue
+    health_interval: 5000
+
+  - name: builder
+    role: Implementation
+    description: Primary coding agent — writes features and fixes bugs
+    model: claude-sonnet-4-6
+    skills:
+      - react-best-practices
+      - fly-deploy
+    color: green
+    default: true
+    health_interval: 5000
+
+  - name: reviewer
+    role: Code review
+    description: Reviews PRs, finds bugs, suggests improvements
+    model: claude-sonnet-4-6
+    skills:
+      - spec
+    color: orange
+    health_interval: 5000
+
+  - name: tester
+    role: Testing and validation
+    description: Writes tests, runs evals, validates behavior
+    model: claude-sonnet-4-6
+    skills:
+      - eval
+    color: yellow
+    health_interval: 5000
+
+orchestration:
+  mode: rpc
+  extension: "@jfl/pi/extensions/index.js"
+  map_events:
+    - eval:scored
+    - review:findings
+    - task:requested
+    - agent:health
+  peter_parker:
+    enabled: true
+    max_iterations: 3
