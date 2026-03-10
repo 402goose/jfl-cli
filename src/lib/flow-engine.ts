@@ -482,6 +482,9 @@ export class FlowEngine {
           stdio: "ignore",
           detached: action.detach ?? true,
         })
+        child.on('error', (err) => {
+          console.error(`[FlowEngine] Spawn failed in flow "${flow.name}": ${err.message}`)
+        })
         if (action.detach !== false) child.unref()
         break
       }
@@ -554,7 +557,7 @@ export class FlowEngine {
         case "==": return strValue === expected
         case "!=": return strValue !== expected
         case "contains": return strValue.includes(expected)
-        default: return true
+        default: return false
       }
     } catch {
       return false
