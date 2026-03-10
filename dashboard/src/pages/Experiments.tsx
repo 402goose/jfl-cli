@@ -1,4 +1,4 @@
-import { api, EvalAgent, TrajectoryPoint } from "@/api"
+import { api, EvalAgent, TrajectoryPoint, PredictionRecord, PredictionAccuracyStats } from "@/api"
 import { Sparkline } from "@/components"
 import { usePolling, cn, timeAgo } from "@/lib/hooks"
 import { useState } from "preact/hooks"
@@ -329,32 +329,150 @@ function LeaderboardSummary({ agents }: { agents: EvalAgent[] }) {
 }
 
 function PredictionAccuracy() {
+  const predictions = usePolling(() => api.predictions(), 30000)
+  const data = predictions.data
+  const accuracy = data?.accuracy
+  const recent = data?.recent || []
+
+  const hasData = accuracy && accuracy.total > 0
+
   return (
-    <div class="bg-card rounded-lg border border-border/50 p-6 animate-fade-in">
-      <div class="flex items-center justify-between mb-2">
-        <h2 class="text-sm font-medium">Prediction Accuracy</h2>
-        <span class="text-[10px] mono px-1.5 py-0.5 rounded bg-warning/15 text-warning uppercase">
-          phase 2
-        </span>
+    <div class="bg-card rounded-lg border border-border animate-fade-in">
+      <div class="px-4 py-3 border-b border-border flex items-center justify-between">
+        <div>
+          <h2 class="text-sm font-medium">Stratus Prediction Accuracy</h2>
+          <div class="text-[10px] text-muted-foreground mt-0.5 mono">
+            JEPA rollout + chat ensemble — predicted vs actual eval deltas
+          </div>
+        </div>
+        {hasData && (
+          <span class={cn(
+            "text-[10px] mono px-1.5 py-0.5 rounded uppercase",
+            accuracy.direction_accuracy >= 0.7 ? "bg-success/15 text-success"
+              : accuracy.direction_accuracy >= 0.5 ? "bg-warning/15 text-warning"
+              : "bg-destructive/15 text-destructive",
+          )}>
+            {(accuracy.direction_accuracy * 100).toFixed(0)}% direction accuracy
+          </span>
+        )}
       </div>
-      <p class="text-xs text-muted-foreground">
-        Stratus predictions: coming soon. This section will track predicted_delta vs actual_delta
-        from the JEPA rollout endpoint, measuring how well Stratus predicts experiment outcomes
-        before they run.
-      </p>
-      <div class="mt-4 grid grid-cols-3 gap-4">
-        <div class="text-center">
-          <div class="text-[10px] text-muted-foreground uppercase">Predicted Delta</div>
-          <div class="text-lg font-semibold mono text-muted-foreground/40">—</div>
+
+      <div class="p-4">
+        <div class="grid grid-cols-5 gap-4 mb-4">
+          <div class="text-center">
+            <div class="text-[10px] text-muted-foreground uppercase">Total</div>
+            <div class="text-lg font-semibold mono">
+              {hasData ? accuracy.total : "—"}
+            </div>
+          </div>
+          <div class="text-center">
+            <div class="text-[10px] text-muted-foreground uppercase">Resolved</div>
+            <div class="text-lg font-semibold mono">
+              {hasData ? accuracy.resolved : "—"}
+            </div>
+          </div>
+          <div class="text-center">
+            <div class="text-[10px] text-muted-foreground uppercase">Direction</div>
+            <div class={cn("text-lg font-semibold mono",
+              hasData && accuracy.direction_accuracy >= 0.7 ? "text-success"
+              : hasData && accuracy.direction_accuracy >= 0.5 ? "text-warning"
+              : hasData ? "text-destructive" : "text-muted-foreground/40"
+            )}>
+              {hasData ? `${(accuracy.direction_accuracy * 100).toFixed(0)}%` : "—"}
+            </div>
+          </div>
+          <div class="text-center">
+            <div class="text-[10px] text-muted-foreground uppercase">Mean Error</div>
+            <div class="text-lg font-semibold mono">
+              {hasData && accuracy.resolved > 0 ? accuracy.mean_delta_error.toFixed(4) : "—"}
+            </div>
+          </div>
+          <div class="text-center">
+            <div class="text-[10px] text-muted-foreground uppercase">Calibration</div>
+            <div class="text-lg font-semibold mono">
+              {hasData && accuracy.resolved > 0 ? accuracy.calibration.toFixed(2) : "—"}
+            </div>
+          </div>
         </div>
-        <div class="text-center">
-          <div class="text-[10px] text-muted-foreground uppercase">Actual Delta</div>
-          <div class="text-lg font-semibold mono text-muted-foreground/40">—</div>
-        </div>
-        <div class="text-center">
-          <div class="text-[10px] text-muted-foreground uppercase">Accuracy</div>
-          <div class="text-lg font-semibold mono text-muted-foreground/40">—</div>
-        </div>
+
+        {recent.length > 0 ? (
+          <div class="overflow-hidden rounded border border-border/50">
+            <table class="w-full text-xs">
+              <thead>
+                <tr class="text-muted-foreground border-b border-border bg-muted/30">
+                  <th class="text-left py-2 px-3 font-medium">Proposal</th>
+                  <th class="text-center py-2 px-3 font-medium">Method</th>
+                  <th class="text-right py-2 px-3 font-medium">Predicted</th>
+                  <th class="text-right py-2 px-3 font-medium">Actual</th>
+                  <th class="text-right py-2 px-3 font-medium">Error</th>
+                  <th class="text-center py-2 px-3 font-medium">Direction</th>
+                  <th class="text-right py-2 px-3 font-medium">Goal Prox</th>
+                  <th class="text-right py-2 px-3 font-medium">When</th>
+                </tr>
+              </thead>
+              <tbody>
+                {recent.map((r) => (
+                  <tr key={r.prediction_id} class="border-b border-border/50 hover:bg-muted/20 transition-colors">
+                    <td class="py-1.5 px-3 max-w-48 truncate" title={r.proposal.description}>
+                      {r.proposal.description}
+                    </td>
+                    <td class="py-1.5 px-3 text-center">
+                      <span class={cn(
+                        "text-[10px] mono px-1.5 py-0.5 rounded",
+                        r.prediction.method === "ensemble" ? "bg-info/15 text-info"
+                          : r.prediction.method === "rollout" ? "bg-warning/15 text-warning"
+                          : "bg-muted text-muted-foreground",
+                      )}>
+                        {r.prediction.method}
+                      </span>
+                    </td>
+                    <td class={cn("py-1.5 px-3 mono text-right",
+                      r.prediction.delta >= 0 ? "text-success" : "text-destructive"
+                    )}>
+                      {r.prediction.delta >= 0 ? "+" : ""}{r.prediction.delta.toFixed(4)}
+                    </td>
+                    <td class="py-1.5 px-3 mono text-right">
+                      {r.actual ? (
+                        <span class={r.actual.delta >= 0 ? "text-success" : "text-destructive"}>
+                          {r.actual.delta >= 0 ? "+" : ""}{r.actual.delta.toFixed(4)}
+                        </span>
+                      ) : (
+                        <span class="text-muted-foreground/40">pending</span>
+                      )}
+                    </td>
+                    <td class="py-1.5 px-3 mono text-right">
+                      {r.accuracy ? r.accuracy.delta_error.toFixed(4) : "—"}
+                    </td>
+                    <td class="py-1.5 px-3 text-center">
+                      {r.accuracy ? (
+                        <span class={cn(
+                          "inline-block w-2 h-2 rounded-full",
+                          r.accuracy.direction_correct ? "bg-success" : "bg-destructive",
+                        )} />
+                      ) : (
+                        <span class="inline-block w-2 h-2 rounded-full bg-muted-foreground/30" />
+                      )}
+                    </td>
+                    <td class="py-1.5 px-3 mono text-right text-muted-foreground">
+                      {r.prediction.brain_goal_proximity > 0
+                        ? r.prediction.brain_goal_proximity.toFixed(2)
+                        : "—"
+                      }
+                    </td>
+                    <td class="py-1.5 px-3 mono text-right text-muted-foreground whitespace-nowrap">
+                      {timeAgo(r.ts)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div class="text-center py-6 text-muted-foreground text-xs">
+            No predictions yet. Run <span class="mono">jfl predict</span> before a PP change to see
+            Stratus prediction accuracy here.
+          </div>
+        )}
       </div>
     </div>
   )

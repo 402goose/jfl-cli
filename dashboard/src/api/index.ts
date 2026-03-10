@@ -150,6 +150,63 @@ export interface MemoryStatus {
   last_index: string
 }
 
+export interface PredictionRecord {
+  prediction_id: string
+  ts: string
+  proposal: { description: string; change_type: string; scope: string }
+  input_score: number
+  prediction: {
+    delta: number
+    score: number
+    confidence: number
+    recommendation: string
+    method: string
+    brain_goal_proximity: number
+  }
+  actual: { delta: number; score: number; eval_run_id: string; resolved_at: string } | null
+  accuracy: { delta_error: number; direction_correct: boolean; calibration: number } | null
+}
+
+export interface PredictionAccuracyStats {
+  total: number
+  resolved: number
+  direction_accuracy: number
+  mean_delta_error: number
+  calibration: number
+}
+
+export interface SynopsisData {
+  hours: number
+  author?: string
+  journalEntries: JournalEntry[]
+  commits: { hash: string; author: string; date: string; message: string }[]
+  fileHeaders: { file: string; purpose: string; spec?: string; decision?: string }[]
+  summary: {
+    features: number
+    fixes: number
+    decisions: number
+    discoveries: number
+    filesModified: number
+    incompleteItems: string[]
+  }
+}
+
+export interface TelemetryDigest {
+  periodHours: number
+  generatedAt: string
+  totalEvents: number
+  totalCostUsd: number
+  costs: { model: string; calls: number; promptTokens: number; completionTokens: number; totalTokens: number; estimatedCostUsd: number }[]
+  commands: { command: string; count: number; avgDurationMs: number; successRate: number }[]
+  errors: { total: number; byType: Record<string, number> }
+  hubHealth: { starts: number; crashes: number; mcpCalls: number; avgMcpLatencyMs: number }
+  memoryHealth: { indexRuns: number; entriesIndexed: number; errors: number; avgDurationMs: number }
+  sessions: { started: number; ended: number; crashed: number; avgDurationS: number }
+  hooks: { received: number; byEvent: Record<string, number>; byTool: Record<string, number>; fileHotspots: string[] }
+  flows: { triggered: number; completed: number; failed: number; byFlow: Record<string, { triggered: number; completed: number; failed: number }> }
+  suggestions?: { severity: string; message: string; fix?: string }[]
+}
+
 export const api = {
   status: () => apiFetch<WorkspaceStatus>("/api/context/status"),
 
@@ -215,4 +272,19 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ command, args, event_type: eventType }),
     }),
+
+  predictions: () =>
+    apiFetch<{ accuracy: PredictionAccuracyStats; recent: PredictionRecord[] }>("/api/eval/predictions"),
+
+  synopsis: (hours = 24) =>
+    apiFetch<SynopsisData>(`/api/synopsis?hours=${hours}`),
+
+  telemetryDigest: (hours = 168) =>
+    apiFetch<TelemetryDigest>(`/api/telemetry/digest?hours=${hours}`),
+
+  telemetryAgentStatus: () =>
+    apiFetch<{ running: boolean; lastRun: string; runCount: number; lastInsights: string[] }>("/api/telemetry/agent"),
+
+  telemetryAgentRun: () =>
+    apiFetch<{ ok: boolean; insights: unknown[] }>("/api/telemetry/agent/run", { method: "POST" }),
 }
