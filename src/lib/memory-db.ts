@@ -248,14 +248,14 @@ export async function insertMemory(memory: MemoryInsert): Promise<number> {
       embedding_model, tf_idf_tokens
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `, [
-    memory.source,
+    memory.source || 'journal',
     memory.source_id || null,
     memory.type || null,
-    memory.title,
-    memory.content,
+    memory.title || '(untitled)',
+    memory.content || '',
     memory.summary || null,
     memory.metadata ? JSON.stringify(memory.metadata) : null,
-    memory.created_at,
+    memory.created_at || now,
     now,
     embeddingBlob,
     memory.embedding_model || null,

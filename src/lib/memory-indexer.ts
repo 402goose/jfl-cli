@@ -99,6 +99,10 @@ function extractContent(entry: JournalEntry): string {
  * Index a single journal entry
  */
 async function indexEntry(entry: JournalEntry, allTexts: string[]): Promise<boolean> {
+  if (!entry.session || !entry.ts) {
+    return false
+  }
+
   // Check if already indexed
   if (await isMemoryIndexed(entry.session, entry.ts)) {
     return false
