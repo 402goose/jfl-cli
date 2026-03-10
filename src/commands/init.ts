@@ -10,6 +10,7 @@ import { isAuthenticated, getUser, getAuthMethod, getX402Address } from "./login
 import { extractServiceMetadata } from "../lib/service-detector.js"
 import { generateAgentDefinition, writeAgentDefinition } from "../lib/agent-generator.js"
 import { writeSkillFiles } from "../lib/skill-generator.js"
+import { detectMonorepo, onboardMonorepo, formatOnboardSummary } from "../lib/monorepo-onboard.js"
 import { getProfile } from "./profile.js"
 import { generateClaudeMdFromProfile } from "../utils/claude-md-generator.js"
 import { validateSettings, fixSettings } from "../utils/settings-validator.js"
@@ -781,7 +782,69 @@ export async function initCommand(options?: { name?: string }) {
             }
           }
 
-          // Auto-detect metadata
+          // Check for monorepo first
+          const monoInfo = detectMonorepo(resolvedPath)
+          if (monoInfo) {
+            console.log(chalk.hex("#FFA500")(`\n  Detected monorepo: ${chalk.bold(monoInfo.rootName)} (${monoInfo.type} + ${monoInfo.manager})\n`))
+            console.log(chalk.gray(`  Found ${monoInfo.packages.length} packages:`))
+
+            if (monoInfo.apps.length > 0) {
+              console.log(chalk.cyan("\n  APPS (deployable):"))
+              for (const app of monoInfo.apps) {
+                const port = app.metadata.port ? `:${app.metadata.port}` : ""
+                console.log(`    ${chalk.green("✓")} ${chalk.bold(app.name.padEnd(20))} ${chalk.gray(app.metadata.type)}${chalk.gray(port)}  ${chalk.gray(app.relativePath)}`)
+              }
+            }
+
+            if (monoInfo.libs.length > 0) {
+              console.log(chalk.blue("\n  LIBRARIES:"))
+              for (const lib of monoInfo.libs) {
+                const consumers = lib.consumers.length > 0 ? `→ ${lib.consumers.join(", ")}` : ""
+                console.log(`    ${chalk.blue("○")} ${chalk.bold(lib.name.padEnd(20))} ${chalk.gray(lib.role)}  ${chalk.gray(consumers)}`)
+              }
+            }
+
+            console.log(chalk.gray(`\n  Agent plan:`))
+            console.log(chalk.hex("#A855F7")(`    @${monoInfo.rootName}-coordinator  ← monorepo coordinator (dependency graph)`))
+            for (const pkg of monoInfo.packages) {
+              const { generateMonorepoAgentName } = await import("../lib/monorepo-detector.js")
+              const agentName = generateMonorepoAgentName(monoInfo.rootName, pkg.name)
+              const icon = pkg.role === "app" ? chalk.green("●") : chalk.blue("○")
+              console.log(`    ${icon} @${agentName}  ← ${pkg.relativePath}`)
+            }
+
+            const confirmMono = await p.confirm({
+              message: `Onboard all ${monoInfo.packages.length + 1} agents?`,
+              initialValue: true,
+            })
+
+            if (p.isCancel(confirmMono)) {
+              p.cancel("Setup cancelled.")
+              process.exit(0)
+            }
+
+            if (confirmMono) {
+              const monoSpinner = ora("Generating monorepo agents + Pi team...").start()
+              try {
+                const result = onboardMonorepo(resolvedPath, projectPath)
+                if (result) {
+                  monoSpinner.succeed(`${chalk.green("✓")} ${result.agents.length} agents generated`)
+                  console.log(formatOnboardSummary(result))
+                  for (const agent of result.agents) {
+                    onboardedServices.push(agent)
+                  }
+                } else {
+                  monoSpinner.fail("Monorepo onboarding failed")
+                }
+              } catch (err: any) {
+                monoSpinner.fail(`Monorepo onboarding failed: ${err.message}`)
+              }
+              continue
+            }
+            // If user says no, fall through to single-service detection
+          }
+
+          // Auto-detect metadata (single service)
           const detectStep = isGitURL ? 2 : 1
           const totalSteps = isGitURL ? 3 : 2
           const detectSpinner = ora(`[${detectStep}/${totalSteps}] Detecting service metadata...`).start()
