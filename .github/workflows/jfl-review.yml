@@ -25,82 +25,58 @@ jobs:
         with:
           node-version: '22'
 
-      - name: Get PR diff
-        id: diff
-        run: |
-          DIFF=$(git diff origin/main...HEAD -- '*.ts' '*.tsx' '*.js' '*.jsx' ':!*.test.*' ':!*.spec.*' | head -3000)
-          echo "diff<<DIFF_EOF" >> $GITHUB_OUTPUT
-          echo "$DIFF" >> $GITHUB_OUTPUT
-          echo "DIFF_EOF" >> $GITHUB_OUTPUT
-
-          FILES=$(git diff origin/main...HEAD --name-only -- '*.ts' '*.tsx' '*.js' '*.jsx')
-          echo "files<<FILES_EOF" >> $GITHUB_OUTPUT
-          echo "$FILES" >> $GITHUB_OUTPUT
-          echo "FILES_EOF" >> $GITHUB_OUTPUT
-
-          STATS=$(git diff origin/main...HEAD --stat)
-          echo "stats<<STATS_EOF" >> $GITHUB_OUTPUT
-          echo "$STATS" >> $GITHUB_OUTPUT
-          echo "STATS_EOF" >> $GITHUB_OUTPUT
-
-      - name: AI Review
+      - name: Get PR diff and review
         id: review
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           PR_TITLE: ${{ github.event.pull_request.title }}
-          PR_BODY: ${{ github.event.pull_request.body }}
         run: |
-          DIFF='${{ steps.diff.outputs.diff }}'
-          FILES='${{ steps.diff.outputs.files }}'
+          # Get full diff (including test files — review everything)
+          git diff origin/main...HEAD -- '*.ts' '*.tsx' '*.js' '*.jsx' | head -4000 > /tmp/diff.txt
+          git diff origin/main...HEAD --stat > /tmp/stats.txt
+          git diff origin/main...HEAD --name-only -- '*.ts' '*.tsx' '*.js' '*.jsx' > /tmp/files.txt
 
-          # Build review prompt
-          PROMPT=$(cat <<'PROMPT_EOF'
-          You are a senior code reviewer. Review this PR diff for:
-          1. **Bugs** - Logic errors, null/undefined risks, race conditions
-          2. **Security** - Injection, XSS, credential exposure, unsafe operations
-          3. **Performance** - N+1 queries, unnecessary re-renders, memory leaks
-          4. **Test gaps** - What should be tested that isn't
+          DIFF_SIZE=$(wc -c < /tmp/diff.txt | tr -d ' ')
+          echo "Diff size: $DIFF_SIZE bytes"
+          echo "Files changed:"
+          cat /tmp/files.txt
 
-          Be concise. Only flag real issues, not style preferences.
-          If the code is clean, say so briefly.
+          if [ "$DIFF_SIZE" -lt 10 ]; then
+            echo "No code diff to review" > /tmp/review.md
+            echo "has_review=true" >> $GITHUB_OUTPUT
+            exit 0
+          fi
 
-          Format your response as:
-          ## Findings
-          - [severity] file:line - description
-
-          Where severity is 🔴 (bug/security), 🟡 (perf/logic concern), 🔵 (suggestion)
-
-          If no issues found:
-          ## Findings
-          No issues found. Code looks clean.
-          PROMPT_EOF
-          )
-
-          # Build JSON payload
-          PAYLOAD=$(node -e "
-            const prompt = process.env.REVIEW_PROMPT;
-            const diff = process.env.REVIEW_DIFF;
+          # Build payload via node (safe multiline handling)
+          node -e "
+            const fs = require('fs');
+            const diff = fs.readFileSync('/tmp/diff.txt', 'utf8').substring(0, 12000);
             const title = process.env.PR_TITLE || '';
-            const body = process.env.PR_BODY || '';
-            console.log(JSON.stringify({
+
+            const payload = {
               model: 'gpt-4o-mini',
               messages: [
-                { role: 'system', content: prompt },
-                { role: 'user', content: 'PR: ' + title + '\n\n' + diff.substring(0, 12000) }
+                {
+                  role: 'system',
+                  content: 'You are a senior code reviewer. Review this PR diff for:\\n1. Bugs - Logic errors, null/undefined risks, race conditions\\n2. Security - Injection, XSS, credential exposure, unsafe operations\\n3. Performance - N+1 queries, unnecessary re-renders, memory leaks\\n4. Test gaps - What should be tested that is not\\n\\nBe concise. Only flag real issues, not style preferences. If the code is clean, say so briefly.\\n\\nFormat:\\n## Findings\\n- [severity] file:line - description\\n\\nSeverity: red_circle (bug/security), yellow_circle (perf/logic concern), blue_circle (suggestion)\\n\\nIf no issues: No issues found. Code looks clean.'
+                },
+                { role: 'user', content: 'PR: ' + title + '\\n\\n' + diff }
               ],
               max_tokens: 1000,
               temperature: 0.1
-            }));
-          " 2>/dev/null)
+            };
 
-          # Try OpenAI first, fall back to OpenRouter
+            fs.writeFileSync('/tmp/payload.json', JSON.stringify(payload));
+          "
+
+          # Try OpenAI
           REVIEW=""
           if [ -n "$OPENAI_API_KEY" ]; then
             RESPONSE=$(curl -s -X POST https://api.openai.com/v1/chat/completions \
               -H "Content-Type: application/json" \
               -H "Authorization: Bearer $OPENAI_API_KEY" \
-              -d "$PAYLOAD" 2>/dev/null)
+              -d @/tmp/payload.json 2>/dev/null)
             REVIEW=$(echo "$RESPONSE" | node -e "
               let d=''; process.stdin.on('data',c=>d+=c); process.stdin.on('end',()=>{
                 try { console.log(JSON.parse(d).choices[0].message.content); }
@@ -109,19 +85,19 @@ jobs:
             ")
           fi
 
+          # Fallback to OpenRouter
           if [ -z "$REVIEW" ] && [ -n "$OPENROUTER_API_KEY" ]; then
             echo "OpenAI failed, trying OpenRouter..."
-            OR_PAYLOAD=$(echo "$PAYLOAD" | node -e "
-              let d=''; process.stdin.on('data',c=>d+=c); process.stdin.on('end',()=>{
-                const j=JSON.parse(d);
-                j.model='anthropic/claude-sonnet-4';
-                console.log(JSON.stringify(j));
-              })
-            ")
+            node -e "
+              const fs = require('fs');
+              const p = JSON.parse(fs.readFileSync('/tmp/payload.json', 'utf8'));
+              p.model = 'anthropic/claude-sonnet-4';
+              fs.writeFileSync('/tmp/payload-or.json', JSON.stringify(p));
+            "
             RESPONSE=$(curl -s -X POST https://openrouter.ai/api/v1/chat/completions \
               -H "Content-Type: application/json" \
               -H "Authorization: Bearer $OPENROUTER_API_KEY" \
-              -d "$OR_PAYLOAD" 2>/dev/null)
+              -d @/tmp/payload-or.json 2>/dev/null)
             REVIEW=$(echo "$RESPONSE" | node -e "
               let d=''; process.stdin.on('data',c=>d+=c); process.stdin.on('end',()=>{
                 try { console.log(JSON.parse(d).choices[0].message.content); }
@@ -131,10 +107,9 @@ jobs:
           fi
 
           if [ -z "$REVIEW" ]; then
-            REVIEW="AI review unavailable — no API keys configured or both providers failed."
+            REVIEW="AI review unavailable — both OpenAI and OpenRouter failed."
           fi
 
-          # Save review to file (multiline output is tricky in GH Actions)
           echo "$REVIEW" > /tmp/review.md
           echo "has_review=true" >> $GITHUB_OUTPUT
 
@@ -145,12 +120,26 @@ jobs:
           script: |
             const fs = require('fs');
             const review = fs.readFileSync('/tmp/review.md', 'utf8');
-            const stats = `${{ steps.diff.outputs.stats }}`;
+            const stats = fs.readFileSync('/tmp/stats.txt', 'utf8');
             const marker = '<!-- jfl-ai-review -->';
 
-            const body = `${marker}\n## AI Code Review 🤖\n\n${review}\n\n---\n<details><summary>Diff stats</summary>\n\n\`\`\`\n${stats}\n\`\`\`\n</details>\n\n*Reviewed by JFL AI Review (gpt-4o-mini → claude-sonnet fallback)*`;
+            const body = [
+              marker,
+              '## AI Code Review',
+              '',
+              review,
+              '',
+              '---',
+              '<details><summary>Diff stats</summary>',
+              '',
+              '```',
+              stats,
+              '```',
+              '</details>',
+              '',
+              '*Reviewed by JFL AI Review (gpt-4o-mini / claude-sonnet fallback)*'
+            ].join('\n');
 
-            // Update existing comment or create new one
             const { data: comments } = await github.rest.issues.listComments({
               owner: context.repo.owner,
               repo: context.repo.repo,
