@@ -15,13 +15,6 @@ import { getCurrentBranch } from "./session.js"
 import { emitCustomEvent } from "./map-bridge.js"
 
 let projectRoot = ""
-const FOOTER_COLORS: Record<string, string> = {
-  feature: "green",
-  fix: "red",
-  decision: "yellow",
-  discovery: "blue",
-  milestone: "magenta",
-}
 
 interface JournalEntry {
   v: number
@@ -70,29 +63,24 @@ function hasJournalEntryForSession(root: string, sessionBranch: string): boolean
   return content.length > 0
 }
 
-function updateFooter(ctx: PiContext): void {
+function showRecentJournal(ctx: PiContext): void {
   const entries = readRecentEntries(projectRoot, 3)
   if (!entries.length) return
-
-  const lines = entries.map(e => {
-    const color = FOOTER_COLORS[e.type] ?? "white"
-    return `{${color}-fg}[${e.type}]{/${color}-fg} ${e.title}`
-  })
-
-  ctx.ui.setFooter(["Journal:", ...lines])
+  const lines = ["Recent journal:", ...entries.map(e => `  [${e.type}] ${e.title}`)]
+  ctx.ui.setWidget("belowEditor", lines)
 }
 
 export async function setupJournal(ctx: PiContext, _config: JflConfig): Promise<void> {
   projectRoot = ctx.session.projectRoot
 
-  updateFooter(ctx)
+  showRecentJournal(ctx)
 
   ctx.registerCommand({
     name: "journal",
     description: "Write a journal entry for the current session",
     async handler(_args, ctx) {
       const branch = getCurrentBranch(projectRoot)
-      const initial = JSON.stringify({
+      const template = JSON.stringify({
         v: 1,
         ts: new Date().toISOString(),
         session: branch,
@@ -104,33 +92,36 @@ export async function setupJournal(ctx: PiContext, _config: JflConfig): Promise<
         files: [],
       }, null, 2)
 
-      const content = await ctx.ui.editor({ title: "Write Journal Entry", initial })
+      const content = await ctx.ui.input("Journal Entry (paste JSON)", template)
       if (!content?.trim()) return
 
       try {
         const entry = JSON.parse(content) as JournalEntry
         appendJournalEntry(projectRoot, entry)
         await emitCustomEvent(ctx, "journal:entry", entry)
-        updateFooter(ctx)
+        showRecentJournal(ctx)
         ctx.ui.notify("Journal entry saved", { level: "info" })
       } catch {
-        ctx.ui.notify("Invalid JSON — entry not saved", { level: "error" })
+        ctx.ui.notify("Invalid JSON — entry not saved. Use /journal and paste valid JSON.", { level: "warn" })
       }
     },
   })
 
-  ctx.on("map:journal:entry", () => updateFooter(ctx))
+  ctx.on("map:journal:entry", () => showRecentJournal(ctx))
 }
 
 export async function onToolExecutionEnd(
   ctx: PiContext,
   event: ToolExecutionEvent
 ): Promise<void> {
-  if (event.tool !== "Bash") return
+  // Pi uses toolName; check for bash tool
+  const toolName = event.toolName ?? event.tool ?? ""
+  if (toolName.toLowerCase() !== "bash") return
 
-  const input = (event.input as Record<string, string> | undefined)
-  const command = input?.command ?? ""
-  if (!command.includes("git commit")) return
+  // Detect git commit from tool output (git commit output contains "[branch hash] message")
+  const result = String(event.result ?? "")
+  const isGitCommit = /\[[\w/.-]+\s+[0-9a-f]{7,}\]/.test(result)
+  if (!isGitCommit) return
 
   let commitMsg = ""
   let commitFiles = ""
@@ -142,26 +133,25 @@ export async function onToolExecutionEnd(
 
   ctx.emit("pi:git-commit-detected", { message: commitMsg, files: commitFiles })
 
-  ctx.ui.notify(
-    [
-      "Git commit detected — journal entry required.",
-      `Commit: ${commitMsg}`,
-      commitFiles ? `Files: ${commitFiles.split("\n").slice(0, 3).join(", ")}` : "",
-      "Use /journal to write the entry now.",
-    ].filter(Boolean).join("\n"),
-    { level: "info" }
-  )
+  const notifyLines = [
+    "Git commit detected — write a journal entry with /journal",
+    commitMsg ? `Commit: ${commitMsg.split("\n")[0]}` : "",
+    commitFiles ? `Files: ${commitFiles.split("\n").slice(0, 3).join(", ")}` : "",
+  ].filter(Boolean).join("\n")
+
+  ctx.ui.notify(notifyLines, { level: "info" })
 }
 
 export async function onJournalAgentEnd(
   ctx: PiContext,
   event: AgentEndEvent
 ): Promise<void> {
-  if ((event.turnCount ?? 0) > 3) {
-    ctx.ui.setWidget("journal-reminder", [
-      "Journal entry recommended for this session.",
-      "Use /journal to capture what was built.",
-    ], { placement: "aboveEditor", color: "yellow" })
+  // Pi's AgentEndEvent has messages array; count them as turns
+  const turnCount = (event.messages?.length ?? event.turnCount ?? 0)
+  if (turnCount > 3) {
+    ctx.ui.setWidget("aboveEditor", [
+      "Journal entry recommended — use /journal to capture what was built.",
+    ])
   }
 }
 

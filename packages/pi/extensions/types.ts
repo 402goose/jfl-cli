@@ -1,81 +1,82 @@
 /**
- * Pi Extension Type Definitions
+ * JFL Pi Extension Types
  *
- * Type contracts for the Pi AI agent runtime extension API.
+ * Defines PiContext — the shim that wraps Pi's real ExtensionAPI for all
+ * JFL sub-extensions. The factory in index.ts constructs this shim from the
+ * real pi (ExtensionAPI) object and a shared mutable state object.
  *
- * @purpose Type definitions for @jfl/pi extension hooks and context objects
+ * Pi's actual API (from @mariozechner/pi-coding-agent):
+ *   - Factory: export default async function(pi: ExtensionAPI)
+ *   - Handlers: pi.on(event, (event, ctx: ExtensionContext) => void)
+ *   - ctx.cwd = project root
+ *   - Commands: handler(args: string, ctx: ExtensionCommandContext)
+ *   - Tools: { name, label, description, parameters: TSchema, execute(...) }
+ *   - BeforeAgentStartEventResult: { systemPrompt?: string }
+ *
+ * @purpose Type definitions for JFL Pi extension shim + config
  */
 
-export interface PiTool {
+// ─── Tool / Command formats for JFL sub-extensions ───────────────────────────
+
+export interface JflToolDef {
   name: string
+  label?: string
   description: string
   inputSchema: {
     type: "object"
-    properties: Record<string, {
-      type: string
-      description: string
-      enum?: string[]
-    }>
+    properties: Record<string, { type: string; description?: string; enum?: string[] }>
     required?: string[]
   }
-  handler: (input: Record<string, unknown>) => Promise<unknown>
+  handler(input: Record<string, unknown>): Promise<string>
 }
 
-export interface PiCommand {
+export interface JflCommandDef {
   name: string
-  description: string
-  handler: (args: string, ctx: PiContext) => Promise<void>
+  description?: string
+  handler(args: string, ctx: PiContext): Promise<void> | void
 }
 
-export interface PiWidget {
-  placement: "aboveEditor" | "belowEditor" | "sidebar" | "footer"
-  content: string[]
-  color?: string
-}
-
-export interface PiUI {
-  setWidget: (id: string, lines: string[], options?: { placement?: PiWidget["placement"]; color?: string }) => void
-  setFooter: (lines: string[]) => void
-  custom: (render: (screen: unknown) => void) => void
-  editor: (options?: { title?: string; initial?: string }) => Promise<string>
-  notify: (message: string, options?: { level?: "info" | "warn" | "error" }) => void
-}
-
-export interface PiSession {
-  id: string
-  branch: string
-  projectRoot: string
-  startTime: Date
-  custom: Record<string, unknown>
-}
+// ─── PiContext shim — passed to all JFL sub-extensions ───────────────────────
 
 export interface PiContext {
-  pi: {
-    setSessionName: (name: string) => void
-    applyTheme: (theme: string | Record<string, unknown>) => void
-    session: PiSession
-    mode: "interactive" | "rpc" | "headless"
-    version: string
+  session: {
+    readonly projectRoot: string
+    readonly id: string
+    readonly branch: string
   }
-  ui: PiUI
-  session: PiSession
-  registerTool: (tool: PiTool) => void
-  registerCommand: (command: PiCommand) => void
-  emit: (event: string, data?: unknown) => void
-  on: (event: string, handler: (data: unknown) => void) => void
-  log: (message: string, level?: "debug" | "info" | "warn" | "error") => void
-  cancel: () => { cancel: true }
+  /** Log to console. In Pi sessions shown as debug output. */
+  log(msg: string, level?: "debug" | "info" | "warn" | "error"): void
+  /** Emit on JFL's internal event bus (not directly to MAP hub). */
+  emit(event: string, data?: unknown): void
+  /** Subscribe to JFL internal events. */
+  on(event: string, handler: (data: unknown) => void | Promise<void>): void
+  registerTool(tool: JflToolDef): void
+  registerCommand(cmd: JflCommandDef): void
+  ui: {
+    notify(msg: string, opts?: { level?: "info" | "warn" | "error" }): void
+    input(title: string, placeholder?: string): Promise<string | undefined>
+    setWidget(placement: "aboveEditor" | "belowEditor", lines: string[], opts?: unknown): void
+    setStatus(key: string, text: string | undefined): void
+  }
+  pi: {
+    setSessionName(name: string): void
+    applyTheme(name: string): void
+  }
+  /** Used by journal.ts to cancel context compaction if no journal entry exists. */
+  cancel(): { cancel: true }
 }
 
+// ─── Pi event shapes ──────────────────────────────────────────────────────────
+
 export interface AgentStartEvent {
-  taskId?: string
   prompt?: string
   model?: string
-  tools?: string[]
 }
 
 export interface AgentEndEvent {
-  taskId?: string
+  /** Pi provides the full messages array */
+  messages?: unknown[]
+  /** Legacy fields (may not be present in Pi) */
   turnCount?: number
   model?: string
   duration?: number
@@ -85,23 +86,16 @@ export interface AgentEndEvent {
 }
 
 export interface ToolExecutionEvent {
-  tool: string
-  input?: Record<string, unknown>
-  output?: unknown
+  /** Pi uses toolName */
+  toolName?: string
+  /** Legacy compat */
+  tool?: string
+  result?: unknown
+  isError?: boolean
   duration?: number
-  error?: string
 }
 
-export interface PiLifecycleHooks {
-  session_start?: (ctx: PiContext) => Promise<void>
-  session_shutdown?: (ctx: PiContext) => Promise<void>
-  session_before_compact?: (ctx: PiContext) => Promise<{ cancel: true } | void>
-  before_agent_start?: (ctx: PiContext, event: AgentStartEvent) => Promise<{ systemPromptAddition?: string } | void>
-  agent_start?: (ctx: PiContext, event: AgentStartEvent) => Promise<void>
-  agent_end?: (ctx: PiContext, event: AgentEndEvent) => Promise<void>
-  tool_execution_start?: (ctx: PiContext, event: ToolExecutionEvent) => Promise<void>
-  tool_execution_end?: (ctx: PiContext, event: ToolExecutionEvent) => Promise<void>
-}
+// ─── JFL config ──────────────────────────────────────────────────────────────
 
 export interface JflConfig {
   name?: string

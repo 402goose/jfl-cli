@@ -105,7 +105,7 @@ async function pollAgentHealth(ctx: PiContext): Promise<void> {
       })
     }
 
-    ctx.ui.setWidget("agent-grid-footer", buildGridLines(), { placement: "footer" })
+    ctx.ui.setWidget("belowEditor", buildGridLines())
   } catch {}
 }
 
@@ -114,7 +114,7 @@ export function setupAgentGrid(ctx: PiContext): void {
     const health = data as AgentHealth
     if (!health.name) return
     agents.set(health.name, { ...health, lastSeen: Date.now() })
-    ctx.ui.setWidget("agent-grid-footer", buildGridLines(), { placement: "footer" })
+    ctx.ui.setWidget("belowEditor", buildGridLines())
   })
 
   ctx.registerCommand({
@@ -127,10 +127,7 @@ export function setupAgentGrid(ctx: PiContext): void {
 
       await pollAgentHealth(ctx)
       const lines = buildGridLines()
-      ctx.ui.custom((screen: unknown) => {
-        void screen
-        ctx.ui.setWidget("agent-grid-overlay", lines, { placement: "aboveEditor" })
-      })
+      ctx.ui.setWidget("aboveEditor", lines)
     },
   })
 }

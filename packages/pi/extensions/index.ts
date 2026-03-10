@@ -1,27 +1,38 @@
 /**
- * JFL Pi Extension — Master Entry
+ * JFL Pi Extension — Master Entry (Factory Function)
  *
- * Auto-discovered by Pi via the pi-package keyword in package.json.
- * Wires all JFL sub-extensions and registers the unified lifecycle.
+ * Pi loads this as a factory: export default async function(pi: ExtensionAPI).
+ * We construct a PiContext shim from the real Pi API and pass it to all
+ * JFL sub-extensions, which register their handlers + tools via the shim.
  *
- * @purpose Master entry point for @jfl/pi — composes all sub-extensions
+ * Pi API facts (from @mariozechner/pi-coding-agent source):
+ *   - pi.on(event, (event, ctx) => void) — lifecycle handlers
+ *   - pi.registerTool({ name, label, description, parameters, execute })
+ *   - pi.registerCommand(name, { description, handler(args, ctx) })
+ *   - pi.setSessionName(name)
+ *   - ctx.cwd = project root (in every handler)
+ *   - ctx.ui.notify/input/setWidget/setStatus
+ *   - BeforeAgentStartEventResult: { systemPrompt?: string }
+ *
+ * @purpose Master entry point for @jfl/pi — factory function + shim
  */
 
 import { readFileSync, existsSync } from "fs"
 import { join } from "path"
-import type { PiContext, PiLifecycleHooks, JflConfig } from "./types.js"
-import { setupSession } from "./session.js"
-import { setupContext } from "./context.js"
-import { setupJournal } from "./journal.js"
-import { setupMapBridge } from "./map-bridge.js"
-import { setupEval } from "./eval.js"
-import { setupHudTool } from "./hud-tool.js"
+import { execSync } from "child_process"
+import type { PiContext, JflConfig, JflToolDef, JflCommandDef } from "./types.js"
+import { setupSession, onShutdown } from "./session.js"
+import { setupContext, injectContext } from "./context.js"
+import { setupJournal, checkJournalBeforeCompact, onJournalAgentEnd, onToolExecutionEnd } from "./journal.js"
+import { setupMapBridge, onMapBridgeShutdown, onMapToolEnd } from "./map-bridge.js"
+import { setupEval, onAgentEnd as onEvalEnd } from "./eval.js"
+import { setupHudTool, updateHudWidget } from "./hud-tool.js"
 import { setupCrmTool } from "./crm-tool.js"
 import { setupMemoryTool } from "./memory-tool.js"
 import { setupSynopsisTool } from "./synopsis-tool.js"
-import { initStratusBridge } from "./stratus-bridge.js"
+import { initStratusBridge, onAgentStart as onStratusStart, onAgentEnd as onStratusEnd } from "./stratus-bridge.js"
 import { setupPeterParker } from "./peter-parker.js"
-import { setupPortfolioBridge } from "./portfolio-bridge.js"
+import { setupPortfolioBridge, onPortfolioShutdown } from "./portfolio-bridge.js"
 import { setupAgentGrid } from "./agent-grid.js"
 
 function readJflConfig(projectRoot: string): JflConfig {
@@ -45,14 +56,130 @@ function getProjectName(projectRoot: string, config: JflConfig): string {
   return projectRoot.split("/").pop() ?? "JFL Project"
 }
 
-export const hooks: PiLifecycleHooks = {
-  async session_start(ctx: PiContext) {
-    const root = ctx.session.projectRoot
-    const config = readJflConfig(root)
-    const projectName = getProjectName(root, config)
+function getCurrentBranch(root: string): string {
+  try {
+    return execSync("git branch --show-current", { cwd: root, stdio: ["pipe", "pipe", "ignore"] })
+      .toString().trim() || "main"
+  } catch {
+    return "main"
+  }
+}
 
-    ctx.pi.setSessionName(`JFL: ${projectName}`)
-    ctx.pi.applyTheme("jfl")
+// ─── Pi extension factory function ───────────────────────────────────────────
+
+export default async function jflExtension(pi: any): Promise<void> {
+  // Mutable shared state — updated on each handler invocation
+  let projectCwd = process.cwd()
+  let latestPiCtx: any = null
+
+  // JFL internal event bus (for ctx.on / ctx.emit between sub-extensions)
+  const internalHandlers = new Map<string, Array<(data: unknown) => void | Promise<void>>>()
+
+  function jflOn(event: string, handler: (data: unknown) => void | Promise<void>): void {
+    const list = internalHandlers.get(event) ?? []
+    list.push(handler)
+    internalHandlers.set(event, list)
+  }
+
+  function jflEmit(event: string, data?: unknown): void {
+    const list = internalHandlers.get(event) ?? []
+    list.forEach(h => Promise.resolve(h(data)).catch(() => {}))
+  }
+
+  // ─── PiContext shim ─────────────────────────────────────────────────────────
+
+  const ctx: PiContext = {
+    get session() {
+      return {
+        projectRoot: projectCwd,
+        id: pi.getSessionName?.() ?? "jfl",
+        branch: getCurrentBranch(projectCwd),
+      }
+    },
+
+    log: (msg: string) => console.log(`[JFL] ${msg}`),
+
+    emit: jflEmit,
+    on: jflOn,
+
+    registerTool: (tool: JflToolDef) => {
+      // Adapt JflToolDef → Pi ToolDefinition
+      // Pi uses `parameters` (TypeBox-compatible JSON Schema) + `execute`
+      pi.registerTool({
+        name: tool.name,
+        label: tool.label ?? tool.name,
+        description: tool.description,
+        parameters: tool.inputSchema,
+        execute: async (_id: string, params: Record<string, unknown>) => {
+          try {
+            const result = await tool.handler(params)
+            return { type: "tool_result", content: String(result) }
+          } catch (err) {
+            return { type: "tool_result", content: `Error: ${err}`, isError: true }
+          }
+        },
+      })
+    },
+
+    registerCommand: (cmd: JflCommandDef) => {
+      // Pi commands: handler(args: string, ctx: ExtensionCommandContext)
+      // Our JflCommandDef has the same shape — just pass through with shim ctx
+      pi.registerCommand(cmd.name, {
+        description: cmd.description,
+        handler: async (args: string, piCtx: any) => {
+          latestPiCtx = piCtx
+          await cmd.handler(args, ctx)
+        },
+      })
+    },
+
+    ui: {
+      notify: (msg: string, opts?: { level?: "info" | "warn" | "error" }) => {
+        const type = opts?.level ?? "info"
+        if (latestPiCtx?.ui?.notify) {
+          latestPiCtx.ui.notify(msg, type)
+        } else {
+          console.log(`[JFL ${type}] ${msg}`)
+        }
+      },
+      input: async (title: string, placeholder?: string) => {
+        if (latestPiCtx?.ui?.input) {
+          return latestPiCtx.ui.input(title, placeholder)
+        }
+        return undefined
+      },
+      setWidget: (placement: "aboveEditor" | "belowEditor", lines: string[], opts?: unknown) => {
+        if (latestPiCtx?.ui?.setWidget) {
+          latestPiCtx.ui.setWidget(placement, lines, opts)
+        }
+      },
+      setStatus: (key: string, text: string | undefined) => {
+        if (latestPiCtx?.ui?.setStatus) {
+          latestPiCtx.ui.setStatus(key, text)
+        }
+      },
+    },
+
+    pi: {
+      setSessionName: (name: string) => pi.setSessionName(name),
+      applyTheme: (_name: string) => {
+        // Pi themes are set via --theme CLI flag; no runtime API
+      },
+    },
+
+    cancel: () => ({ cancel: true as const }),
+  }
+
+  // ─── Lifecycle handlers ────────────────────────────────────────────────────
+
+  pi.on("session_start", async (_event: unknown, piCtx: any) => {
+    latestPiCtx = piCtx
+    projectCwd = piCtx.cwd
+
+    const config = readJflConfig(projectCwd)
+    const projectName = getProjectName(projectCwd, config)
+
+    pi.setSessionName(`JFL: ${projectName}`)
 
     await setupMapBridge(ctx, config)
     await setupSession(ctx, config)
@@ -65,55 +192,57 @@ export const hooks: PiLifecycleHooks = {
     setupMemoryTool(ctx)
     setupSynopsisTool(ctx)
 
-    initStratusBridge(root)
+    initStratusBridge(projectCwd)
     await setupPeterParker(ctx, config)
     await setupPortfolioBridge(ctx, config)
     setupAgentGrid(ctx)
 
-    ctx.log(`JFL: ${projectName} — session ready`, "info")
-  },
+    ctx.log(`JFL: ${projectName} — session ready`)
+  })
 
-  async session_shutdown(ctx: PiContext) {
-    const { onPortfolioShutdown } = await import("./portfolio-bridge.js")
+  pi.on("session_shutdown", async (_event: unknown, piCtx: any) => {
+    latestPiCtx = piCtx
     await onPortfolioShutdown(ctx)
-    const { onShutdown } = await import("./session.js")
     await onShutdown(ctx)
-    const { onMapBridgeShutdown } = await import("./map-bridge.js")
     await onMapBridgeShutdown(ctx)
-  },
+  })
 
-  async session_before_compact(ctx: PiContext) {
-    const { checkJournalBeforeCompact } = await import("./journal.js")
+  pi.on("session_before_compact", async (_event: unknown, piCtx: any) => {
+    latestPiCtx = piCtx
     return checkJournalBeforeCompact(ctx)
-  },
+  })
 
-  async before_agent_start(ctx: PiContext, event) {
-    const { injectContext } = await import("./context.js")
-    return injectContext(ctx, event)
-  },
+  pi.on("before_agent_start", async (event: any, piCtx: any) => {
+    latestPiCtx = piCtx
+    const result = await injectContext(ctx, event)
+    if (result?.systemPromptAddition) {
+      // BeforeAgentStartEventResult.systemPrompt replaces the system prompt;
+      // prepend our additions to the current prompt
+      const current = piCtx.getSystemPrompt?.() ?? ""
+      return {
+        systemPrompt: current
+          ? `${current}\n\n${result.systemPromptAddition}`
+          : result.systemPromptAddition,
+      }
+    }
+  })
 
-  async agent_start(ctx: PiContext, event) {
-    const { onAgentStart } = await import("./stratus-bridge.js")
-    await onAgentStart(ctx, event)
-  },
+  pi.on("agent_start", async (event: any, piCtx: any) => {
+    latestPiCtx = piCtx
+    await onStratusStart(ctx, event)
+  })
 
-  async agent_end(ctx: PiContext, event) {
-    const { onAgentEnd: onStratusEnd } = await import("./stratus-bridge.js")
+  pi.on("agent_end", async (event: any, piCtx: any) => {
+    latestPiCtx = piCtx
     await onStratusEnd(ctx, event)
-    const { onAgentEnd: onEvalEnd } = await import("./eval.js")
     await onEvalEnd(ctx, event)
-    const { updateHudWidget } = await import("./hud-tool.js")
     await updateHudWidget(ctx)
-    const { onJournalAgentEnd } = await import("./journal.js")
     await onJournalAgentEnd(ctx, event)
-  },
+  })
 
-  async tool_execution_end(ctx: PiContext, event) {
-    const { onToolExecutionEnd } = await import("./journal.js")
+  pi.on("tool_execution_end", async (event: any, piCtx: any) => {
+    latestPiCtx = piCtx
     await onToolExecutionEnd(ctx, event)
-    const { onMapToolEnd } = await import("./map-bridge.js")
     await onMapToolEnd(ctx, event)
-  },
+  })
 }
-
-export default hooks

@@ -166,7 +166,7 @@ export async function onMapToolEnd(ctx: PiContext, event: ToolExecutionEvent): P
   await postToHub({
     type: "hook:tool-result",
     source: `pi-agent:${ctx.session.id}`,
-    data: { tool: event.tool, duration: event.duration },
+    data: { tool: event.toolName ?? event.tool, duration: event.duration },
     ts: new Date().toISOString(),
   })
 }

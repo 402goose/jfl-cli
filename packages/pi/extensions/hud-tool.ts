@@ -77,7 +77,7 @@ export function setupHudTool(ctx: PiContext): void {
   projectRoot = ctx.session.projectRoot
 
   const initialLines = buildHudLines(projectRoot)
-  ctx.ui.setWidget("jfl-hud", initialLines, { placement: "aboveEditor" })
+  ctx.ui.setWidget("aboveEditor", initialLines)
 
   ctx.registerTool({
     name: "jfl_hud",
@@ -96,8 +96,8 @@ export function setupHudTool(ctx: PiContext): void {
     description: "Show project dashboard",
     async handler(_args, ctx) {
       const lines = buildHudLines(projectRoot)
-      ctx.ui.setWidget("jfl-hud", lines, { placement: "aboveEditor" })
-      ctx.ui.notify(lines.join("\n"), { level: "info" })
+      ctx.ui.setWidget("aboveEditor", lines)
+      ctx.ui.notify(lines.join(" | "), { level: "info" })
     },
   })
 }
@@ -105,5 +105,5 @@ export function setupHudTool(ctx: PiContext): void {
 export async function updateHudWidget(ctx: PiContext): Promise<void> {
   if (!projectRoot) return
   const lines = buildHudLines(projectRoot)
-  ctx.ui.setWidget("jfl-hud", lines, { placement: "aboveEditor" })
+  ctx.ui.setWidget("aboveEditor", lines)
 }
