@@ -1,10 +1,12 @@
 /**
  * JFL Session Extension
  *
- * Handles worktree lifecycle, auto-commit, and session-scoped shell scripts.
- * Delegates to existing shell scripts — doesn't reimplement what already works.
+ * Handles auto-commit and session cleanup within a Pi session.
+ * Does NOT run session-init.sh — that script is a Claude Code pre-hook that
+ * launches the AI CLI, which would cause a double-launch inside Pi.
+ * Pi IS the AI runtime; we only handle the persistent background tasks here.
  *
- * @purpose Pi lifecycle → shell script delegation for JFL session management
+ * @purpose Pi session lifecycle — auto-commit daemon + cleanup script delegation
  */
 
 import { execSync, spawn } from "child_process"
@@ -28,15 +30,7 @@ function findScript(root: string, scriptName: string): string | null {
 export async function setupSession(ctx: PiContext, _config: JflConfig): Promise<void> {
   const root = ctx.session.projectRoot
 
-  const initScript = findScript(root, "session-init.sh")
-  if (initScript) {
-    try {
-      execSync(`bash "${initScript}"`, { cwd: root, stdio: "inherit" })
-    } catch (err) {
-      ctx.log(`session-init.sh failed: ${err}`, "warn")
-    }
-  }
-
+  // Start auto-commit daemon — detached so it outlives this call
   const autoCommitScript = findScript(root, "auto-commit.sh")
   if (autoCommitScript) {
     autoCommitProcess = spawn("bash", [autoCommitScript, "start", "120"], {
