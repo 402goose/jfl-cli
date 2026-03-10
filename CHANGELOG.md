@@ -1,5 +1,11 @@
 # jfl
 
+## 0.4.2
+
+### Patch Changes
+
+- fb28107: chore: trigger npm publish for v0.4.1
+
 ## 0.4.1
 
 ### Patch Changes
