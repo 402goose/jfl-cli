@@ -1,12 +1,13 @@
 /**
- * @purpose CLI commands for eval framework — list, trajectory, log, compare, tuples, buffer
+ * @purpose CLI commands for eval framework — list, trajectory, log, compare, tuples, buffer, mine
  */
 
 import chalk from "chalk"
 import type { Command } from "commander"
 import { readEvals, getTrajectory, getLatestEval, listAgents, appendEval, getScopedJournalDirs } from "../lib/eval-store.js"
 import { extractTuples, formatTuplesReport } from "../lib/training-tuples.js"
-import { TrainingBuffer } from "../lib/training-buffer.js"
+import { TrainingBuffer, hashEntry } from "../lib/training-buffer.js"
+import { mineAll } from "../lib/tuple-miner.js"
 import { linePlot, asciiBars, sparkline } from "../lib/kuva.js"
 import type { EvalEntry } from "../types/eval.js"
 
@@ -299,6 +300,90 @@ async function bufferCommand(options: { export?: boolean; limit?: string }): Pro
   console.log()
 }
 
+async function mineCommand(options: { all?: boolean; telemetry?: boolean; dryRun?: boolean; dir?: string }): Promise<void> {
+  console.log(chalk.bold("\n  Tuple Miner — extracting training data from existing work\n"))
+
+  const dirs = options.dir ? [options.dir] : undefined
+  const { tuples, stats } = mineAll({
+    dirs,
+    all: options.all,
+    telemetry: options.telemetry,
+  })
+
+  console.log(chalk.gray(`  Scanned ${stats.directories.length} project(s):`))
+  for (const dir of stats.directories) {
+    console.log(chalk.gray(`    ${dir}`))
+  }
+  console.log()
+
+  const headers = ["Source", "Count"]
+  const rows = [
+    ["Journal entries", String(stats.journalTuples)],
+    ["Session trajectories", String(stats.sessionTuples)],
+    ["Flow executions", String(stats.flowTuples)],
+    ["Eval scores", String(stats.evalTuples)],
+  ]
+  if (options.telemetry) {
+    rows.push(["Telemetry sessions", String(stats.telemetryTuples)])
+  }
+  rows.push(["TOTAL", String(stats.totalMined)])
+  console.log(formatTable(headers, rows))
+
+  if (stats.totalMined === 0) {
+    console.log(chalk.gray("\n  No tuples to mine.\n"))
+    return
+  }
+
+  if (options.dryRun) {
+    console.log(chalk.yellow(`\n  Dry run — ${stats.totalMined} tuples would be written`))
+
+    const byAgent = new Map<string, number>()
+    const bySource = new Map<string, number>()
+    for (const t of tuples) {
+      byAgent.set(t.agent, (byAgent.get(t.agent) ?? 0) + 1)
+      bySource.set(t.metadata.mine_source || "?", (bySource.get(t.metadata.mine_source || "?") ?? 0) + 1)
+    }
+
+    console.log(chalk.gray(`\n  By agent: ${[...byAgent].map(([k, v]) => `${k}=${v}`).join(", ")}`))
+    console.log(chalk.gray(`  By source: ${[...bySource].map(([k, v]) => `${k}=${v}`).join(", ")}`))
+
+    const improved = tuples.filter(t => t.reward.improved).length
+    const avgDelta = tuples.length > 0
+      ? tuples.reduce((s, t) => s + (Number(t.reward.composite_delta) || 0), 0) / tuples.length
+      : 0
+    console.log(chalk.gray(`  Improved: ${improved}/${tuples.length} (${Math.round(improved / tuples.length * 100)}%)`))
+    console.log(chalk.gray(`  Avg delta: ${avgDelta >= 0 ? "+" : ""}${avgDelta.toFixed(4)}`))
+    console.log(chalk.gray(`\n  Run without --dry-run to write to training buffer.\n`))
+    return
+  }
+
+  const tb = new TrainingBuffer()
+  const existing = new Set(tb.read().map(e => e.id))
+  let written = 0
+  let skipped = 0
+
+  for (const tuple of tuples) {
+    const id = `tb_${hashEntry(tuple.state, tuple.action)}`
+    if (existing.has(id)) {
+      skipped++
+      continue
+    }
+    tb.append(tuple)
+    existing.add(id)
+    written++
+  }
+
+  console.log(chalk.green(`\n  Written: ${written} new tuples to training buffer`))
+  if (skipped > 0) {
+    console.log(chalk.gray(`  Skipped: ${skipped} (already exist)`))
+  }
+
+  const allStats = tb.stats()
+  console.log(chalk.gray(`  Buffer total: ${allStats.total}`))
+  console.log(chalk.gray(`  Avg reward: ${allStats.avgReward >= 0 ? "+" : ""}${allStats.avgReward.toFixed(4)}`))
+  console.log(chalk.gray(`  Improved rate: ${Math.round(allStats.improvedRate * 100)}%\n`))
+}
+
 export function registerEvalCommand(program: Command): void {
   const evalCmd = program
     .command("eval")
@@ -351,6 +436,15 @@ export function registerEvalCommand(program: Command): void {
     .option("--export", "Export as JSONL for policy head training")
     .option("--limit <n>", "Max entries to show", "10")
     .action(bufferCommand)
+
+  evalCmd
+    .command("mine")
+    .description("Mine training tuples from journals, events, telemetry, and eval history")
+    .option("--all", "Scan all JFL projects (from ~/.config/jfl/config.json)")
+    .option("--telemetry", "Include global telemetry archive (58k+ events)")
+    .option("--dry-run", "Show what would be mined without writing")
+    .option("--dir <path>", "Specific directory to mine")
+    .action(mineCommand)
 
   evalCmd.action(async () => {
     // Default: show list

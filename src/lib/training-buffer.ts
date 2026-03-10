@@ -48,11 +48,12 @@ export interface TrainingBufferEntry {
     eval_run_id?: string
     prediction_id?: string
     autoresearch_round?: number
-    source: "ci" | "autoresearch" | "experiment" | "manual"
+    source: "ci" | "autoresearch" | "experiment" | "manual" | "mined"
+    mine_source?: string
   }
 }
 
-function hashEntry(state: RLState, action: RLAction): string {
+export function hashEntry(state: RLState, action: RLAction): string {
   const content = JSON.stringify({ s: state.composite_score, a: action.description, t: action.type })
   return createHash("sha256").update(content).digest("hex").slice(0, 12)
 }
