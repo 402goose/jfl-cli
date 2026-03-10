@@ -1,13 +1,16 @@
 /**
  * CRM Tool Extension
  *
- * Registers jfl_crm tool that delegates to ./crm CLI (Google Sheets backed).
+ * Registers jfl_crm tool with custom TUI rendering.
+ * Delegates to ./crm CLI (Google Sheets backed).
+ * Renders pipeline data with color-coded deal stages.
  *
- * @purpose jfl_crm tool — delegates to ./crm CLI
+ * @purpose jfl_crm tool — themed CRM display with deal status colors
  */
 
 import { execSync } from "child_process"
 import type { PiContext } from "./types.js"
+import { crmRenderCall, crmRenderResult } from "./tool-renderers.js"
 
 let projectRoot = ""
 
@@ -17,6 +20,7 @@ export function setupCrmTool(ctx: PiContext): void {
   ctx.registerTool({
     name: "jfl_crm",
     description: "Query or update the JFL CRM (contacts, deals, pipeline). Delegates to ./crm CLI backed by Google Sheets.",
+    promptSnippet: "Query CRM pipeline, contacts, and deals via Google Sheets",
     inputSchema: {
       type: "object",
       properties: {
@@ -51,5 +55,7 @@ export function setupCrmTool(ctx: PiContext): void {
         return `Error running crm: ${error.message ?? String(err)}`
       }
     },
+    renderCall: crmRenderCall,
+    renderResult: crmRenderResult,
   })
 }

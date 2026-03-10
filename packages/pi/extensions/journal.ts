@@ -2,15 +2,16 @@
  * Journal Extension
  *
  * Detects git commits via tool_execution_end, prompts for journal entries,
- * registers the /journal command, and shows journal stream in footer.
+ * registers the /journal command with interactive type selection,
+ * shows themed journal stream in below-editor widget.
  *
- * @purpose Auto-journal detection after git commits + /journal command
+ * @purpose Auto-journal detection + interactive /journal command + themed widget
  */
 
 import { existsSync, readFileSync, appendFileSync, mkdirSync } from "fs"
 import { join } from "path"
 import { execSync } from "child_process"
-import type { PiContext, JflConfig, AgentEndEvent, ToolExecutionEvent } from "./types.js"
+import type { PiContext, PiTheme, JflConfig, AgentEndEvent, ToolExecutionEvent } from "./types.js"
 import { getCurrentBranch } from "./session.js"
 import { emitCustomEvent } from "./map-bridge.js"
 
@@ -42,7 +43,7 @@ function appendJournalEntry(root: string, entry: JournalEntry): void {
   appendFileSync(journalPath, JSON.stringify(entry) + "\n")
 }
 
-function readRecentEntries(root: string, count = 3): JournalEntry[] {
+function readRecentEntries(root: string, count = 5): JournalEntry[] {
   const journalPath = getJournalPath(root)
   if (!existsSync(journalPath)) return []
   try {
@@ -63,11 +64,49 @@ function hasJournalEntryForSession(root: string, sessionBranch: string): boolean
   return content.length > 0
 }
 
+const TYPE_ICONS: Record<string, string> = {
+  feature: "✦",
+  fix: "✧",
+  decision: "◆",
+  discovery: "◇",
+  milestone: "★",
+  "session-end": "●",
+  spec: "□",
+}
+
+const TYPE_COLORS: Record<string, string> = {
+  feature: "success",
+  fix: "error",
+  decision: "warning",
+  discovery: "accent",
+  milestone: "warning",
+  "session-end": "dim",
+  spec: "muted",
+}
+
 function showRecentJournal(ctx: PiContext): void {
-  const entries = readRecentEntries(projectRoot, 3)
-  if (!entries.length) return
-  const lines = ["Recent journal:", ...entries.map(e => `  [${e.type}] ${e.title}`)]
-  ctx.ui.setWidget("belowEditor", lines)
+  const entries = readRecentEntries(projectRoot, 5)
+
+  ctx.ui.setWidget("jfl-journal", (_tui: any, theme: PiTheme) => {
+    if (!entries.length) {
+      return {
+        render: () => [theme.fg("dim", "No journal entries yet — /journal to write one")],
+        invalidate() {},
+      }
+    }
+
+    const lines: string[] = []
+    lines.push(theme.fg("border", "─── ") + theme.fg("accent", "Journal") + theme.fg("border", " ───"))
+
+    for (const e of entries) {
+      const icon = TYPE_ICONS[e.type] ?? "·"
+      const color = TYPE_COLORS[e.type] ?? "muted"
+      const status = e.status === "incomplete" ? theme.fg("warning", " ◌") : ""
+      lines.push(`  ${theme.fg(color, icon)} ${theme.fg("text", e.title)}${status}`)
+    }
+
+    return { render: () => lines, invalidate() {} }
+  }, { placement: "belowEditor" })
 }
 
 export async function setupJournal(ctx: PiContext, _config: JflConfig): Promise<void> {
@@ -79,6 +118,43 @@ export async function setupJournal(ctx: PiContext, _config: JflConfig): Promise<
     name: "journal",
     description: "Write a journal entry for the current session",
     async handler(_args, ctx) {
+      if (ctx.ui.hasUI) {
+        const types = [
+          { value: "feature" as const, label: "✦ Feature", description: "Something built or completed" },
+          { value: "fix" as const, label: "✧ Fix", description: "Bug found and fixed" },
+          { value: "decision" as const, label: "◆ Decision", description: "Choice made between options" },
+          { value: "discovery" as const, label: "◇ Discovery", description: "Insight or learning" },
+          { value: "milestone" as const, label: "★ Milestone", description: "Major goal reached" },
+        ]
+
+        const type = await ctx.ui.select("Journal Entry Type", types)
+        if (!type) return
+
+        const title = await ctx.ui.input("Title", "What happened?")
+        if (!title?.trim()) return
+
+        const summary = await ctx.ui.input("Summary (2-3 sentences)", "Brief description")
+
+        const entry: JournalEntry = {
+          v: 1,
+          ts: new Date().toISOString(),
+          session: getCurrentBranch(projectRoot),
+          type,
+          status: "complete",
+          title: title.trim(),
+          summary: summary?.trim() ?? title.trim(),
+        }
+
+        appendJournalEntry(projectRoot, entry)
+        await emitCustomEvent(ctx, "journal:entry", entry)
+        ctx.emit("journal:written", entry)
+        showRecentJournal(ctx)
+        ctx.ui.notify(`${TYPE_ICONS[type] ?? "·"} Journal: ${title.trim()}`, { level: "success" })
+        ctx.ui.setStatus("journal", undefined)
+        return
+      }
+
+      // Fallback: raw JSON input for non-interactive mode
       const branch = getCurrentBranch(projectRoot)
       const template = JSON.stringify({
         v: 1,
@@ -99,8 +175,9 @@ export async function setupJournal(ctx: PiContext, _config: JflConfig): Promise<
         const entry = JSON.parse(content) as JournalEntry
         appendJournalEntry(projectRoot, entry)
         await emitCustomEvent(ctx, "journal:entry", entry)
+        ctx.emit("journal:written", entry)
         showRecentJournal(ctx)
-        ctx.ui.notify("Journal entry saved", { level: "info" })
+        ctx.ui.notify("Journal entry saved", { level: "success" })
       } catch {
         ctx.ui.notify("Invalid JSON — entry not saved. Use /journal and paste valid JSON.", { level: "warn" })
       }
@@ -108,17 +185,16 @@ export async function setupJournal(ctx: PiContext, _config: JflConfig): Promise<
   })
 
   ctx.on("map:journal:entry", () => showRecentJournal(ctx))
+  ctx.on("journal:written", () => showRecentJournal(ctx))
 }
 
 export async function onToolExecutionEnd(
   ctx: PiContext,
   event: ToolExecutionEvent
 ): Promise<void> {
-  // Pi uses toolName; check for bash tool
   const toolName = event.toolName ?? event.tool ?? ""
   if (toolName.toLowerCase() !== "bash") return
 
-  // Detect git commit from tool output (git commit output contains "[branch hash] message")
   const result = String(event.result ?? "")
   const isGitCommit = /\[[\w/.-]+\s+[0-9a-f]{7,}\]/.test(result)
   if (!isGitCommit) return
@@ -133,23 +209,21 @@ export async function onToolExecutionEnd(
 
   ctx.emit("pi:git-commit-detected", { message: commitMsg, files: commitFiles })
 
-  const notifyLines = [
-    "Git commit detected — write a journal entry with /journal",
+  ctx.ui.notify([
+    "Git commit detected — Ctrl+Shift+J for quick journal or /journal",
     commitMsg ? `Commit: ${commitMsg.split("\n")[0]}` : "",
     commitFiles ? `Files: ${commitFiles.split("\n").slice(0, 3).join(", ")}` : "",
-  ].filter(Boolean).join("\n")
-
-  ctx.ui.notify(notifyLines, { level: "info" })
+  ].filter(Boolean).join("\n"), { level: "info" })
 }
 
 export async function onJournalAgentEnd(
   ctx: PiContext,
   event: AgentEndEvent
 ): Promise<void> {
-  // Pi's AgentEndEvent has messages array; count them as turns
   const turnCount = (event.messages?.length ?? event.turnCount ?? 0)
   if (turnCount > 3) {
-    ctx.ui.setStatus("journal", "Journal entry recommended — /journal")
+    const theme = ctx.ui.theme
+    ctx.ui.setStatus("journal", theme.fg("warning", "◌") + theme.fg("dim", " Journal recommended — Ctrl+Shift+J"))
   }
 }
 
@@ -158,10 +232,18 @@ export async function checkJournalBeforeCompact(
 ): Promise<{ cancel: true } | void> {
   const branch = getCurrentBranch(projectRoot)
   if (!hasJournalEntryForSession(projectRoot, branch)) {
-    ctx.ui.notify(
-      "No journal entry for this session. Write one with /journal before compacting.",
-      { level: "warn" }
-    )
-    return ctx.cancel()
+    if (ctx.ui.hasUI) {
+      const ok = await ctx.ui.confirm(
+        "No Journal Entry",
+        "No journal entry for this session. Compacting without one loses context.\n\nContinue anyway?"
+      )
+      if (!ok) return ctx.cancel()
+    } else {
+      ctx.ui.notify(
+        "No journal entry for this session. Write one with /journal before compacting.",
+        { level: "warn" }
+      )
+      return ctx.cancel()
+    }
   }
 }

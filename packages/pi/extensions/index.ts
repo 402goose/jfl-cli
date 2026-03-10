@@ -2,25 +2,17 @@
  * JFL Pi Extension — Master Entry (Factory Function)
  *
  * Pi loads this as a factory: export default async function(pi: ExtensionAPI).
- * We construct a PiContext shim from the real Pi API and pass it to all
- * JFL sub-extensions, which register their handlers + tools via the shim.
+ * We construct a PiContext shim exposing full Pi TUI capabilities to all
+ * JFL sub-extensions: overlays, custom footer, shortcuts, tool rendering,
+ * interactive dialogs, notifications, state persistence, and more.
  *
- * Pi API facts (from @mariozechner/pi-coding-agent source):
- *   - pi.on(event, (event, ctx) => void) — lifecycle handlers
- *   - pi.registerTool({ name, label, description, parameters, execute })
- *   - pi.registerCommand(name, { description, handler(args, ctx) })
- *   - pi.setSessionName(name)
- *   - ctx.cwd = project root (in every handler)
- *   - ctx.ui.notify/input/setWidget/setStatus
- *   - BeforeAgentStartEventResult: { systemPrompt?: string }
- *
- * @purpose Master entry point for @jfl/pi — factory function + shim
+ * @purpose Master entry point for @jfl/pi — full TUI-powered extension
  */
 
 import { readFileSync, existsSync } from "fs"
 import { join } from "path"
 import { execSync } from "child_process"
-import type { PiContext, JflConfig, JflToolDef, JflCommandDef } from "./types.js"
+import type { PiContext, JflConfig, JflToolDef, JflCommandDef, PiTheme } from "./types.js"
 import { setupSession, onShutdown } from "./session.js"
 import { setupContext, injectContext } from "./context.js"
 import { setupJournal, checkJournalBeforeCompact, onJournalAgentEnd, onToolExecutionEnd } from "./journal.js"
@@ -34,6 +26,10 @@ import { initStratusBridge, onAgentStart as onStratusStart, onAgentEnd as onStra
 import { setupPeterParker } from "./peter-parker.js"
 import { setupPortfolioBridge, onPortfolioShutdown } from "./portfolio-bridge.js"
 import { setupAgentGrid } from "./agent-grid.js"
+import { setupFooter } from "./footer.js"
+import { setupShortcuts } from "./shortcuts.js"
+import { setupNotifications } from "./notifications.js"
+import { setupBookmarks } from "./bookmarks.js"
 
 function readJflConfig(projectRoot: string): JflConfig {
   const configPath = join(projectRoot, ".jfl", "config.json")
@@ -68,11 +64,9 @@ function getCurrentBranch(root: string): string {
 // ─── Pi extension factory function ───────────────────────────────────────────
 
 export default async function jflExtension(pi: any): Promise<void> {
-  // Mutable shared state — updated on each handler invocation
   let projectCwd = process.cwd()
   let latestPiCtx: any = null
 
-  // JFL internal event bus (for ctx.on / ctx.emit between sub-extensions)
   const internalHandlers = new Map<string, Array<(data: unknown) => void | Promise<void>>>()
 
   function jflOn(event: string, handler: (data: unknown) => void | Promise<void>): void {
@@ -86,7 +80,18 @@ export default async function jflExtension(pi: any): Promise<void> {
     list.forEach(h => Promise.resolve(h(data)).catch(() => {}))
   }
 
-  // ─── PiContext shim ─────────────────────────────────────────────────────────
+  // ─── Theme helper ───────────────────────────────────────────────────────────
+
+  function getTheme(): PiTheme {
+    if (latestPiCtx?.ui?.theme) return latestPiCtx.ui.theme
+    return {
+      fg: (_color: string, text: string) => text,
+      bg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    }
+  }
+
+  // ─── PiContext shim — full TUI capabilities ─────────────────────────────────
 
   const ctx: PiContext = {
     get session() {
@@ -97,33 +102,43 @@ export default async function jflExtension(pi: any): Promise<void> {
       }
     },
 
-    log: (msg: string) => console.log(`[JFL] ${msg}`),
+    log: (msg: string, level?: string) => {
+      const prefix = level === "debug" ? "[JFL debug]" : "[JFL]"
+      console.log(`${prefix} ${msg}`)
+    },
 
     emit: jflEmit,
     on: jflOn,
 
     registerTool: (tool: JflToolDef) => {
-      // Adapt JflToolDef → Pi ToolDefinition
-      // Pi uses `parameters` (TypeBox-compatible JSON Schema) + `execute`
       pi.registerTool({
         name: tool.name,
         label: tool.label ?? tool.name,
         description: tool.description,
+        promptSnippet: tool.promptSnippet,
+        promptGuidelines: tool.promptGuidelines,
         parameters: tool.inputSchema,
-        execute: async (_id: string, params: Record<string, unknown>) => {
+        async execute(_id: string, params: Record<string, unknown>) {
           try {
             const result = await tool.handler(params)
-            return { type: "tool_result", content: String(result) }
+            return {
+              content: [{ type: "text", text: result }],
+              details: { raw: result, toolName: tool.name },
+            }
           } catch (err) {
-            return { type: "tool_result", content: `Error: ${err}`, isError: true }
+            throw new Error(`${err}`)
           }
         },
+        renderCall: tool.renderCall
+          ? (args: Record<string, any>, theme: PiTheme) => tool.renderCall!(args, theme)
+          : undefined,
+        renderResult: tool.renderResult
+          ? (result: any, options: any, theme: PiTheme) => tool.renderResult!(result, options, theme)
+          : undefined,
       })
     },
 
     registerCommand: (cmd: JflCommandDef) => {
-      // Pi commands: handler(args: string, ctx: ExtensionCommandContext)
-      // Our JflCommandDef has the same shape — just pass through with shim ctx
       pi.registerCommand(cmd.name, {
         description: cmd.description,
         handler: async (args: string, piCtx: any) => {
@@ -133,8 +148,18 @@ export default async function jflExtension(pi: any): Promise<void> {
       })
     },
 
+    registerShortcut: (key: string, opts: { description: string; handler: () => Promise<void> | void }) => {
+      pi.registerShortcut(key, {
+        description: opts.description,
+        handler: async (piCtx: any) => {
+          latestPiCtx = piCtx
+          await opts.handler()
+        },
+      })
+    },
+
     ui: {
-      notify: (msg: string, opts?: { level?: "info" | "warn" | "error" }) => {
+      notify: (msg: string, opts?: { level?: string }) => {
         const type = opts?.level ?? "info"
         if (latestPiCtx?.ui?.notify) {
           latestPiCtx.ui.notify(msg, type)
@@ -142,39 +167,117 @@ export default async function jflExtension(pi: any): Promise<void> {
           console.log(`[JFL ${type}] ${msg}`)
         }
       },
+
       input: async (title: string, placeholder?: string) => {
-        if (latestPiCtx?.ui?.input) {
-          return latestPiCtx.ui.input(title, placeholder)
-        }
+        if (latestPiCtx?.ui?.input) return latestPiCtx.ui.input(title, placeholder)
         return undefined
       },
-      setWidget: (placement: "aboveEditor" | "belowEditor", lines: string[], opts?: unknown) => {
-        if (latestPiCtx?.ui?.setWidget) {
-          latestPiCtx.ui.setWidget(placement, lines, opts)
+
+      confirm: async (title: string, message: string) => {
+        if (latestPiCtx?.ui?.confirm) return latestPiCtx.ui.confirm(title, message)
+        return false
+      },
+
+      select: async <T extends string>(title: string, items: Array<{ value: T; label: string; description?: string }>) => {
+        if (latestPiCtx?.ui?.select) return latestPiCtx.ui.select(title, items)
+        return null
+      },
+
+      editor: async (title: string, content: string) => {
+        if (latestPiCtx?.ui?.editor) return latestPiCtx.ui.editor(title, content)
+        return undefined
+      },
+
+      custom: async <T>(factory: any, opts?: any) => {
+        if (latestPiCtx?.ui?.custom) return latestPiCtx.ui.custom(factory, opts)
+        return undefined as T
+      },
+
+      setWidget: (id: string, content: any, opts?: { placement?: string }) => {
+        if (!latestPiCtx?.ui?.setWidget) return
+        if (content === undefined) {
+          latestPiCtx.ui.setWidget(id, undefined)
+        } else if (typeof content === "function") {
+          latestPiCtx.ui.setWidget(id, content, opts)
+        } else {
+          latestPiCtx.ui.setWidget(id, content, opts)
         }
       },
+
       setStatus: (key: string, text: string | undefined) => {
-        if (latestPiCtx?.ui?.setStatus) {
-          latestPiCtx.ui.setStatus(key, text)
-        }
+        if (latestPiCtx?.ui?.setStatus) latestPiCtx.ui.setStatus(key, text)
+      },
+
+      setFooter: (factory: any) => {
+        if (latestPiCtx?.ui?.setFooter) latestPiCtx.ui.setFooter(factory)
+      },
+
+      setEditorText: (text: string) => {
+        if (latestPiCtx?.ui?.setEditorText) latestPiCtx.ui.setEditorText(text)
+      },
+
+      get theme(): PiTheme {
+        return getTheme()
+      },
+
+      get hasUI(): boolean {
+        return latestPiCtx?.hasUI ?? false
       },
     },
 
     pi: {
       setSessionName: (name: string) => pi.setSessionName(name),
-      applyTheme: (_name: string) => {
-        // Pi themes are set via --theme CLI flag; no runtime API
+
+      appendEntry: (type: string, data?: unknown) => {
+        if (pi.appendEntry) pi.appendEntry(type, data)
       },
+
+      setLabel: (entryId: string, label: string | undefined) => {
+        if (pi.setLabel) pi.setLabel(entryId, label)
+      },
+
+      sendMessage: (msg: any, opts?: any) => {
+        if (pi.sendMessage) pi.sendMessage(msg, opts)
+      },
+
+      events: {
+        on: (event: string, handler: (data: unknown) => void) => {
+          if (pi.events?.on) pi.events.on(event, handler)
+        },
+        emit: (event: string, data?: unknown) => {
+          if (pi.events?.emit) pi.events.emit(event, data)
+        },
+      },
+
+      getActiveTools: () => pi.getActiveTools?.() ?? [],
+      getAllTools: () => pi.getAllTools?.() ?? [],
+
+      exec: async (command: string, args: string[], opts?: any) => {
+        if (pi.exec) return pi.exec(command, args, opts)
+        return { stdout: "", stderr: "exec unavailable", code: 1 }
+      },
+
+      get sessionManager() { return latestPiCtx?.sessionManager },
+      get model() { return latestPiCtx?.model },
     },
 
     cancel: () => ({ cancel: true as const }),
   }
+
+  // ─── Session tracking state ────────────────────────────────────────────────
+
+  let turnCount = 0
+  let sessionStartTime = Date.now()
+  let currentModel = ""
 
   // ─── Lifecycle handlers ────────────────────────────────────────────────────
 
   pi.on("session_start", async (_event: unknown, piCtx: any) => {
     latestPiCtx = piCtx
     projectCwd = piCtx.cwd
+    turnCount = 0
+    sessionStartTime = Date.now()
+    currentModel = piCtx.model?.id ?? ""
 
     const config = readJflConfig(projectCwd)
     const projectName = getProjectName(projectCwd, config)
@@ -197,6 +300,11 @@ export default async function jflExtension(pi: any): Promise<void> {
     await setupPortfolioBridge(ctx, config)
     setupAgentGrid(ctx)
 
+    setupFooter(ctx, config, { turnCount: () => turnCount, sessionStart: () => sessionStartTime, model: () => currentModel })
+    if (!config.pi?.disable_shortcuts) setupShortcuts(ctx, config)
+    if (!config.pi?.disable_notifications) setupNotifications(ctx, config)
+    setupBookmarks(ctx)
+
     ctx.log(`JFL: ${projectName} — session ready`)
   })
 
@@ -216,8 +324,6 @@ export default async function jflExtension(pi: any): Promise<void> {
     latestPiCtx = piCtx
     const result = await injectContext(ctx, event)
     if (result?.systemPromptAddition) {
-      // BeforeAgentStartEventResult.systemPrompt replaces the system prompt;
-      // prepend our additions to the current prompt
       const current = piCtx.getSystemPrompt?.() ?? ""
       return {
         systemPrompt: current
@@ -230,6 +336,7 @@ export default async function jflExtension(pi: any): Promise<void> {
   pi.on("agent_start", async (event: any, piCtx: any) => {
     latestPiCtx = piCtx
     await onStratusStart(ctx, event)
+    jflEmit("agent:start", event)
   })
 
   pi.on("agent_end", async (event: any, piCtx: any) => {
@@ -238,11 +345,29 @@ export default async function jflExtension(pi: any): Promise<void> {
     await onEvalEnd(ctx, event)
     await updateHudWidget(ctx)
     await onJournalAgentEnd(ctx, event)
+    jflEmit("agent:end", event)
+  })
+
+  pi.on("turn_start", async (event: any, piCtx: any) => {
+    latestPiCtx = piCtx
+    turnCount++
+    jflEmit("turn:start", { ...event, turnCount })
+  })
+
+  pi.on("turn_end", async (event: any, piCtx: any) => {
+    latestPiCtx = piCtx
+    jflEmit("turn:end", { ...event, turnCount })
   })
 
   pi.on("tool_execution_end", async (event: any, piCtx: any) => {
     latestPiCtx = piCtx
     await onToolExecutionEnd(ctx, event)
     await onMapToolEnd(ctx, event)
+  })
+
+  pi.on("model_select", async (event: any, piCtx: any) => {
+    latestPiCtx = piCtx
+    currentModel = event.model?.id ?? ""
+    jflEmit("model:changed", event)
   })
 }

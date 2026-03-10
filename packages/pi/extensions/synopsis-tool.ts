@@ -1,15 +1,18 @@
 /**
  * Synopsis Tool Extension
  *
- * Registers jfl_synopsis tool that runs the synopsis CLI command.
+ * Registers jfl_synopsis tool with custom TUI rendering.
+ * Renders work summaries with color-coded sections for features,
+ * fixes, decisions, and time breakdowns.
  *
- * @purpose jfl_synopsis tool — aggregated work summary across sessions
+ * @purpose jfl_synopsis tool — themed work summary with category colors
  */
 
 import { execSync } from "child_process"
 import { existsSync } from "fs"
 import { join } from "path"
 import type { PiContext } from "./types.js"
+import { synopsisRenderCall, synopsisRenderResult } from "./tool-renderers.js"
 
 let projectRoot = ""
 
@@ -30,6 +33,7 @@ export function setupSynopsisTool(ctx: PiContext): void {
   ctx.registerTool({
     name: "jfl_synopsis",
     description: "Get a work summary across all sessions — what happened, who did what, time breakdown",
+    promptSnippet: "Summarize recent work: features, fixes, decisions, time audit",
     inputSchema: {
       type: "object",
       properties: {
@@ -73,5 +77,7 @@ export function setupSynopsisTool(ctx: PiContext): void {
         return `Synopsis unavailable: ${err}`
       }
     },
+    renderCall: synopsisRenderCall,
+    renderResult: synopsisRenderResult,
   })
 }

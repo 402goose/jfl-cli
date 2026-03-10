@@ -1,16 +1,18 @@
 /**
  * HUD Tool Extension
  *
- * Registers jfl_hud tool and /hud command.
+ * Registers jfl_hud tool and /hud command with custom TUI rendering.
+ * Shows a themed, collapsible dashboard in the tool output.
  * Updates the aboveEditor widget after each agent turn.
  *
- * @purpose jfl_hud tool + /hud command + aboveEditor widget
+ * @purpose jfl_hud tool + /hud command + themed widget + custom rendering
  */
 
 import { existsSync, readFileSync } from "fs"
 import { join } from "path"
 import { execSync } from "child_process"
-import type { PiContext } from "./types.js"
+import type { PiContext, PiTheme } from "./types.js"
+import { hudRenderCall, hudRenderResult } from "./tool-renderers.js"
 
 let projectRoot = ""
 
@@ -76,12 +78,25 @@ function buildHudLines(root: string): string[] {
 export function setupHudTool(ctx: PiContext): void {
   projectRoot = ctx.session.projectRoot
 
-  const initialLines = buildHudLines(projectRoot)
-  ctx.ui.setWidget("aboveEditor", initialLines)
+  // Themed widget above editor
+  ctx.ui.setWidget("jfl-hud", (_tui: any, theme: PiTheme) => {
+    const lines = buildHudLines(projectRoot)
+    const themed = lines.map((line, i) => {
+      if (i === 0) return theme.fg("accent", line)
+      if (line.includes("Phase:")) return theme.fg("warning", line)
+      if (line.includes("Pipeline")) return theme.fg("accent", line)
+      return theme.fg("muted", line)
+    })
+    return {
+      render: () => themed,
+      invalidate() {},
+    }
+  })
 
   ctx.registerTool({
     name: "jfl_hud",
     description: "Get the current JFL project dashboard — timeline, phase, pipeline status, and next action",
+    promptSnippet: "Show project dashboard with timeline, phase, and pipeline",
     inputSchema: {
       type: "object",
       properties: {},
@@ -89,6 +104,8 @@ export function setupHudTool(ctx: PiContext): void {
     async handler() {
       return buildHudLines(projectRoot).join("\n")
     },
+    renderCall: hudRenderCall,
+    renderResult: hudRenderResult,
   })
 
   ctx.registerCommand({
@@ -96,14 +113,21 @@ export function setupHudTool(ctx: PiContext): void {
     description: "Show project dashboard",
     async handler(_args, ctx) {
       const lines = buildHudLines(projectRoot)
-      ctx.ui.setWidget("aboveEditor", lines)
-      ctx.ui.notify(lines.join(" | "), { level: "info" })
+      ctx.ui.notify(lines.join("\n"), { level: "info" })
     },
   })
 }
 
 export async function updateHudWidget(ctx: PiContext): Promise<void> {
   if (!projectRoot) return
-  const lines = buildHudLines(projectRoot)
-  ctx.ui.setWidget("aboveEditor", lines)
+  ctx.ui.setWidget("jfl-hud", (_tui: any, theme: PiTheme) => {
+    const lines = buildHudLines(projectRoot)
+    const themed = lines.map((line, i) => {
+      if (i === 0) return theme.fg("accent", line)
+      if (line.includes("Phase:")) return theme.fg("warning", line)
+      if (line.includes("Pipeline")) return theme.fg("accent", line)
+      return theme.fg("muted", line)
+    })
+    return { render: () => themed, invalidate() {} }
+  })
 }

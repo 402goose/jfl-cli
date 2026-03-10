@@ -1,18 +1,22 @@
 /**
  * Memory Tool Extension
  *
- * Registers jfl_memory_search tool that queries Context Hub memory API.
+ * Registers jfl_memory_search tool with custom TUI rendering.
+ * Queries Context Hub memory API and renders results with
+ * type-colored headers and collapsible sections.
  *
- * @purpose jfl_memory_search tool — semantic memory search via Context Hub
+ * @purpose jfl_memory_search tool — themed semantic memory search results
  */
 
 import type { PiContext } from "./types.js"
 import { hubUrl, authToken } from "./map-bridge.js"
+import { memoryRenderCall, memoryRenderResult } from "./tool-renderers.js"
 
 export function setupMemoryTool(ctx: PiContext): void {
   ctx.registerTool({
     name: "jfl_memory_search",
     description: "Search JFL project memory — find past decisions, learnings, and patterns across all sessions",
+    promptSnippet: "Search project memory for decisions, learnings, and session history",
     inputSchema: {
       type: "object",
       properties: {
@@ -58,5 +62,7 @@ export function setupMemoryTool(ctx: PiContext): void {
         return "Memory search unavailable — Context Hub may not be running."
       }
     },
+    renderCall: memoryRenderCall,
+    renderResult: memoryRenderResult,
   })
 }

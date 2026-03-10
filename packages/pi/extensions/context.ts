@@ -2,15 +2,17 @@
  * Context Extension
  *
  * Ensures Context Hub is running, injects recent context before each agent turn,
- * and registers the jfl_context tool for in-session queries.
+ * and registers the jfl_context tool with custom TUI rendering.
+ * Context results show type-colored headers and collapsible sections.
  *
- * @purpose Context Hub integration — inject context into agent turns, register jfl_context tool
+ * @purpose Context Hub integration — inject context, register themed jfl_context tool
  */
 
 import { existsSync, readFileSync } from "fs"
 import { join } from "path"
 import { execSync } from "child_process"
 import type { PiContext, JflConfig, AgentStartEvent } from "./types.js"
+import { contextRenderCall, contextRenderResult } from "./tool-renderers.js"
 
 let hubBaseUrl = "http://localhost:4242"
 let hubToken: string | null = null
@@ -72,6 +74,7 @@ export async function setupContext(ctx: PiContext, _config: JflConfig): Promise<
   ctx.registerTool({
     name: "jfl_context",
     description: "Search JFL project context: journal entries, knowledge docs, memory. Use this to look up what happened in previous sessions, project decisions, or any project-specific knowledge.",
+    promptSnippet: "Search project context: journals, knowledge docs, decisions",
     inputSchema: {
       type: "object",
       properties: {
@@ -91,6 +94,8 @@ export async function setupContext(ctx: PiContext, _config: JflConfig): Promise<
       const result = await fetchContext(query, limit ?? 10)
       return result || "No relevant context found."
     },
+    renderCall: contextRenderCall,
+    renderResult: contextRenderResult,
   })
 }
 
