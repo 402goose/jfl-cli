@@ -1078,6 +1078,38 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus,
       return
     }
 
+    // Synopsis (work summary)
+    if (url.pathname === "/api/synopsis" && req.method === "GET") {
+      try {
+        const hours = parseInt(url.searchParams.get("hours") || "24", 10)
+        const author = url.searchParams.get("author") || undefined
+        const { generateSynopsis } = await import("./synopsis.js")
+        const synopsis = generateSynopsis(projectRoot, hours, author)
+        res.writeHead(200, { "Content-Type": "application/json" })
+        res.end(JSON.stringify(synopsis))
+      } catch (err: any) {
+        res.writeHead(500, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ error: err.message }))
+      }
+      return
+    }
+
+    // Prediction accuracy (Stratus)
+    if (url.pathname === "/api/eval/predictions" && req.method === "GET") {
+      try {
+        const { Predictor } = await import("../lib/predictor.js")
+        const predictor = new Predictor({ projectRoot })
+        const accuracy = predictor.getAccuracy()
+        const recent = predictor.getHistory(20).reverse()
+        res.writeHead(200, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ accuracy, recent }))
+      } catch (err: any) {
+        res.writeHead(200, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ accuracy: { total: 0, resolved: 0, direction_accuracy: 0, mean_delta_error: 0, calibration: 0 }, recent: [] }))
+      }
+      return
+    }
+
     // Cross-project health
     if (url.pathname === "/api/projects" && req.method === "GET") {
       const tracked = getTrackedProjects()
@@ -1212,6 +1244,38 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus,
       } catch (err: any) {
         res.writeHead(500, { "Content-Type": "application/json" })
         res.end(JSON.stringify({ error: err.message }))
+      }
+      return
+    }
+
+    // Telemetry agent status
+    if (url.pathname === "/api/telemetry/agent" && req.method === "GET") {
+      const agent = (server as any).__telemetryAgent
+      if (agent) {
+        res.writeHead(200, { "Content-Type": "application/json" })
+        res.end(JSON.stringify(agent.getStatus()))
+      } else {
+        res.writeHead(200, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ running: false, lastRun: '', runCount: 0, lastInsights: [] }))
+      }
+      return
+    }
+
+    // Telemetry agent: trigger manual run
+    if (url.pathname === "/api/telemetry/agent/run" && req.method === "POST") {
+      const agent = (server as any).__telemetryAgent
+      if (agent) {
+        try {
+          const insights = await agent.run()
+          res.writeHead(200, { "Content-Type": "application/json" })
+          res.end(JSON.stringify({ ok: true, insights }))
+        } catch (err: any) {
+          res.writeHead(500, { "Content-Type": "application/json" })
+          res.end(JSON.stringify({ error: err.message }))
+        }
+      } else {
+        res.writeHead(503, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ error: "Telemetry agent not running" }))
       }
       return
     }
@@ -2103,6 +2167,23 @@ export async function contextHubCommand(
           }
         } catch (err: any) {
           console.error(`[${timestamp}] Failed to start flow engine:`, err.message)
+        }
+
+        // Start telemetry agent (periodic pattern detection)
+        try {
+          const { TelemetryAgent } = await import("../lib/telemetry-agent.js")
+          const telemetryAgent = new TelemetryAgent({
+            projectRoot,
+            intervalMs: 30 * 60 * 1000,
+            emitEvent: (type, data, source) => {
+              eventBus.emit({ type: type as any, data, source: source || 'telemetry-agent' })
+            },
+          })
+          telemetryAgent.start()
+          ;(server as any).__telemetryAgent = telemetryAgent
+          console.log(`[${timestamp}] Telemetry agent started (interval: 30m)`)
+        } catch (err: any) {
+          console.error(`[${timestamp}] Failed to start telemetry agent:`, err.message)
         }
 
         console.log(`[${timestamp}] MAP event bus initialized (buffer: 1000, subscribers: ${eventBus.getSubscriberCount()})`)

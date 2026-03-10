@@ -226,7 +226,7 @@ function readFileHeaders(projectRoot: string, since: Date): FileHeader[] {
 // Synopsis Generator
 // ============================================================================
 
-function generateSynopsis(
+export function generateSynopsis(
   projectRoot: string,
   hours: number,
   author?: string

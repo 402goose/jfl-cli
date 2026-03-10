@@ -1,4 +1,4 @@
-import { WorkspaceStatus, api, HubEvent, DiscoveredService, ContextItem, EvalAgent } from "@/api"
+import { WorkspaceStatus, api, HubEvent, DiscoveredService, ContextItem, EvalAgent, SynopsisData } from "@/api"
 import { MetricCard, StatusDot, Sparkline, ActivityChart } from "@/components"
 import { usePolling, timeAgo, cn } from "@/lib/hooks"
 import { useState } from "preact/hooks"
@@ -28,6 +28,7 @@ export function OverviewPage({ status }: OverviewProps) {
   const leaderboard = usePolling(() => api.leaderboard(), 15000)
   const services = usePolling(() => api.services(), 15000)
   const journal = usePolling(() => api.journal(), 15000)
+  const synopsis = usePolling(() => api.synopsis(24), 30000)
 
   const mode = status?.type || "standalone"
   const config = status?.config
@@ -83,6 +84,10 @@ export function OverviewPage({ status }: OverviewProps) {
       </div>
 
       <ActivityChart events={eventList} journalItems={journalItems} />
+
+      <LoopPipeline events={eventList} />
+
+      {synopsis.data && <SynopsisSection data={synopsis.data} />}
 
       {mode === "portfolio" && children.length > 0 && (
         <section>
@@ -414,5 +419,233 @@ function RecentActivity({ events, journal }: { events: HubEvent[]; journal: Cont
         </div>
       ))}
     </div>
+  )
+}
+
+interface LoopCycle {
+  pr: string
+  branch?: string
+  agent: string
+  stages: { stage: string; status: "done" | "active" | "pending"; ts?: string; detail?: string }[]
+}
+
+function extractLoopCycles(events: HubEvent[]): LoopCycle[] {
+  const evalEvents = events.filter((e) => e.type === "eval:scored")
+  const flowEvents = events.filter((e) => e.type === "flow:completed" || e.type === "flow:triggered")
+
+  if (evalEvents.length === 0) return []
+
+  const evalById = new Map<string, HubEvent>()
+  for (const ev of evalEvents) evalById.set(ev.id, ev)
+
+  const flowsByTrigger = new Map<string, HubEvent[]>()
+  for (const fev of flowEvents) {
+    const tid = fev.data?.trigger_event_id as string
+    if (!tid) continue
+    if (!flowsByTrigger.has(tid)) flowsByTrigger.set(tid, [])
+    flowsByTrigger.get(tid)!.push(fev)
+  }
+
+  const cycles: LoopCycle[] = []
+
+  for (const ev of evalEvents) {
+    const d = ev.data || {}
+    const prId = (d.pr_number || d.pr) as string | undefined
+    const agent = (d.agent as string) || "peter-parker"
+    const branch = d.branch as string | undefined
+    const score = d.composite != null ? Number(d.composite).toFixed(4) : "?"
+    const delta = d.delta != null ? Number(d.delta) : null
+    const improved = d.improved as boolean | undefined
+
+    const relatedFlows = flowsByTrigger.get(ev.id) || []
+    const flowNames = relatedFlows.map((f) => (f.data?.flow_name as string) || f.source || "")
+    const hasMerge = flowNames.some((n) => n.includes("auto-merge"))
+    const hasFlag = flowNames.some((n) => n.includes("flag-regression") || n.includes("regression"))
+    const hasTraining = flowNames.some((n) => n.includes("training"))
+
+    const stages: LoopCycle["stages"] = [
+      { stage: "PR Created", status: "done", ts: ev.ts },
+      { stage: "Eval", status: "done", detail: `${score} (${delta != null ? (delta >= 0 ? "+" : "") + delta.toFixed(4) : "?"})` },
+    ]
+
+    if (improved === true || (delta != null && delta > 0)) {
+      if (hasMerge) {
+        stages.push({ stage: "Auto-Merged", status: "done", detail: "improved" })
+      } else {
+        stages.push({ stage: "Merge", status: "active", detail: "pending" })
+      }
+    } else if (improved === false || (delta != null && delta < 0)) {
+      if (hasFlag) {
+        stages.push({ stage: "Flagged", status: "done", detail: "regression" })
+      } else {
+        stages.push({ stage: "Review", status: "active", detail: "regressed" })
+      }
+    }
+
+    if (hasTraining) {
+      stages.push({ stage: "Training Tuple", status: "done" })
+    }
+
+    cycles.push({
+      pr: prId ? `#${prId}` : `eval`,
+      branch,
+      agent,
+      stages,
+    })
+  }
+
+  return cycles.slice(0, 5)
+}
+
+function stageStyle(stage: string, status: string): string {
+  if (stage === "Flagged") return "bg-destructive/15 text-destructive border-destructive/30"
+  if (stage === "Auto-Merged") return "bg-success/15 text-success border-success/30"
+  if (stage === "Training Tuple") return "bg-purple-500/15 text-purple-400 border-purple-500/30"
+  if (stage === "Eval" && status === "done") return "bg-info/15 text-info border-info/30"
+  if (status === "active") return "bg-warning/15 text-warning border-warning/30 animate-pulse-dot"
+  if (status === "done") return "bg-success/15 text-success border-success/30"
+  return "bg-muted text-muted-foreground border-border"
+}
+
+function LoopPipeline({ events }: { events: HubEvent[] }) {
+  const cycles = extractLoopCycles(events)
+  if (cycles.length === 0) return null
+
+  const improved = cycles.filter(c => c.stages.some(s => s.stage === "Auto-Merged")).length
+  const flagged = cycles.filter(c => c.stages.some(s => s.stage === "Flagged")).length
+
+  return (
+    <section>
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="text-sm font-medium text-muted-foreground uppercase tracking-wider">
+          Self-Driving Loop
+        </h2>
+        <div class="flex items-center gap-3 text-[10px] mono">
+          {improved > 0 && <span class="text-success">{improved} merged</span>}
+          {flagged > 0 && <span class="text-destructive">{flagged} flagged</span>}
+          <span class="text-muted-foreground">{cycles.length} PRs</span>
+        </div>
+      </div>
+      <div class="space-y-2">
+        {cycles.map((cycle, ci) => {
+          const isFlagged = cycle.stages.some(s => s.stage === "Flagged")
+          return (
+            <div key={ci} class={cn(
+              "bg-card rounded-lg border p-3 animate-fade-in",
+              isFlagged ? "border-destructive/20" : "border-border",
+            )}>
+              <div class="flex items-center gap-2 mb-2.5">
+                <span class={cn(
+                  "text-xs font-semibold mono",
+                  isFlagged ? "text-destructive" : "text-foreground",
+                )}>{cycle.pr}</span>
+                {cycle.branch && (
+                  <span class="text-[10px] mono text-muted-foreground/70 truncate max-w-56">{cycle.branch}</span>
+                )}
+                <span class="text-[10px] mono text-muted-foreground ml-auto">{cycle.agent}</span>
+              </div>
+              <div class="flex items-center gap-1.5">
+                {cycle.stages.map((stage, si) => (
+                  <div key={si} class="flex items-center gap-1.5">
+                    {si > 0 && (
+                      <svg width="16" height="8" viewBox="0 0 16 8" class="shrink-0 text-muted-foreground/30">
+                        <path d="M0 4h12M10 1l3 3-3 3" fill="none" stroke="currentColor" stroke-width="1.5" />
+                      </svg>
+                    )}
+                    <div class={cn(
+                      "text-[10px] mono px-2.5 py-1.5 rounded-md border",
+                      stageStyle(stage.stage, stage.status),
+                    )}>
+                      <div class="font-medium">{stage.stage}</div>
+                      {stage.detail && (
+                        <div class="text-[9px] opacity-60 mt-0.5">{stage.detail}</div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </section>
+  )
+}
+
+function SynopsisSection({ data }: { data: SynopsisData }) {
+  const s = data.summary
+  const hasContent = s.features + s.fixes + s.decisions + s.discoveries > 0 || data.commits.length > 0
+
+  if (!hasContent) return null
+
+  return (
+    <section>
+      <h2 class="text-sm font-medium text-muted-foreground uppercase tracking-wider mb-3">
+        Work Summary <span class="text-[10px] font-normal">last {data.hours}h</span>
+      </h2>
+      <div class="bg-card rounded-lg border border-border p-4">
+        <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-4">
+          {s.features > 0 && (
+            <div>
+              <div class="text-lg font-semibold mono text-success">{s.features}</div>
+              <div class="text-[10px] text-muted-foreground uppercase">Features</div>
+            </div>
+          )}
+          {s.fixes > 0 && (
+            <div>
+              <div class="text-lg font-semibold mono text-warning">{s.fixes}</div>
+              <div class="text-[10px] text-muted-foreground uppercase">Fixes</div>
+            </div>
+          )}
+          {s.decisions > 0 && (
+            <div>
+              <div class="text-lg font-semibold mono text-info">{s.decisions}</div>
+              <div class="text-[10px] text-muted-foreground uppercase">Decisions</div>
+            </div>
+          )}
+          {s.discoveries > 0 && (
+            <div>
+              <div class="text-lg font-semibold mono text-purple-400">{s.discoveries}</div>
+              <div class="text-[10px] text-muted-foreground uppercase">Discoveries</div>
+            </div>
+          )}
+          {data.commits.length > 0 && (
+            <div>
+              <div class="text-lg font-semibold mono">{data.commits.length}</div>
+              <div class="text-[10px] text-muted-foreground uppercase">Commits</div>
+            </div>
+          )}
+        </div>
+
+        {data.commits.length > 0 && (
+          <div class="border-t border-border pt-3">
+            <div class="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">Recent Commits</div>
+            <div class="space-y-1">
+              {data.commits.slice(0, 5).map((c) => (
+                <div key={c.hash} class="flex items-center gap-2 text-xs">
+                  <span class="mono text-muted-foreground text-[10px]">{c.hash.slice(0, 7)}</span>
+                  <span class="truncate">{c.message}</span>
+                  <span class="text-[10px] text-muted-foreground ml-auto whitespace-nowrap">{timeAgo(c.date)}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {s.incompleteItems.length > 0 && (
+          <div class="border-t border-border pt-3 mt-3">
+            <div class="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">Incomplete</div>
+            <div class="space-y-1">
+              {s.incompleteItems.slice(0, 5).map((item, i) => (
+                <div key={i} class="text-xs text-warning/80 flex items-center gap-1.5">
+                  <span class="w-1 h-1 rounded-full bg-warning/60 shrink-0" />
+                  {item}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </section>
   )
 }

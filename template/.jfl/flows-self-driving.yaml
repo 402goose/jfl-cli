@@ -122,6 +122,41 @@ flows:
         title: "PP auto-fix dispatched: PR #{{data.pr_number}}"
         summary: "Peter Parker spawned to address {{data.counts.red}} review blockers on {{data.branch}}. Max 3 iterations."
 
+  # Telemetry agent: log high-severity insights
+  - name: telemetry-insight-journal
+    description: "Log telemetry insights to journal for tracking"
+    enabled: true
+    trigger:
+      pattern: "telemetry:insight"
+    actions:
+      - type: journal
+        entry_type: "discovery"
+        title: "Telemetry: {{data.title}}"
+        summary: "{{data.description}}. Fix: {{data.suggested_fix}}"
+      - type: log
+        message: "[telemetry-agent] {{data.severity}} insight: {{data.title}}"
+
+  # Telemetry agent: spawn PP for high-severity issues
+  - name: telemetry-auto-fix
+    description: "Spawn Peter Parker to address high-severity telemetry findings"
+    enabled: true
+    trigger:
+      pattern: "telemetry:insight"
+      condition: 'data.severity == "high" && data.is_new == true'
+    gate:
+      requires_approval: true
+    actions:
+      - type: log
+        message: "PP dispatched for telemetry issue: {{data.title}}"
+      - type: spawn
+        command: jfl
+        args: ["peter", "pr", "--task", "Fix telemetry issue: {{data.title}}. Details: {{data.description}}. Suggested fix: {{data.suggested_fix}}"]
+        detach: true
+      - type: journal
+        entry_type: "milestone"
+        title: "PP dispatched: {{data.title}}"
+        summary: "Telemetry agent detected high-severity issue. Peter Parker spawned to address: {{data.description}}"
+
   # Training tuple enrichment with AI quality score
   - name: log-quality-training-tuple
     description: "Log enriched training tuple with AI quality dimensions"
