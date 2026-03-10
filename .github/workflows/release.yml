@@ -2,7 +2,7 @@ name: Release
 
 # Triggers after CI passes on main.
 # - If changesets exist: creates/updates a "Version Packages" PR
-# - If Version PR is merged: publishes to npm via trusted publisher (OIDC, no token needed)
+# - If Version PR is merged (no changesets): publishes to npm
 #
 # npm Trusted Publisher setup (one-time, per package):
 #   npmjs.com → jfl package → Settings → Publish Access → Add Provenance
@@ -42,24 +42,57 @@ jobs:
 
       - run: npm ci
 
+      - name: Check if version is unpublished
+        id: check
+        run: |
+          LOCAL_VERSION=$(node -p "require('./package.json').version")
+          NPM_VERSION=$(npm view jfl version 2>/dev/null || echo "0.0.0")
+          echo "local=$LOCAL_VERSION" >> $GITHUB_OUTPUT
+          echo "npm=$NPM_VERSION" >> $GITHUB_OUTPUT
+          if [ "$LOCAL_VERSION" != "$NPM_VERSION" ]; then
+            echo "needs_publish=true" >> $GITHUB_OUTPUT
+            echo "Version $LOCAL_VERSION not on npm (npm has $NPM_VERSION)"
+          else
+            echo "needs_publish=false" >> $GITHUB_OUTPUT
+            echo "Version $LOCAL_VERSION already on npm"
+          fi
+
+      - name: Publish if version bumped
+        if: steps.check.outputs.needs_publish == 'true'
+        run: |
+          npm run build
+          npm publish --provenance --access public
+          # Create git tag
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "v${{ steps.check.outputs.local }}" || true
+          git push origin "v${{ steps.check.outputs.local }}" || true
+          echo "Published jfl@${{ steps.check.outputs.local }}"
+
+      - name: Create GitHub Release
+        if: steps.check.outputs.needs_publish == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.check.outputs.local }}
+          name: jfl v${{ steps.check.outputs.local }}
+          generate_release_notes: true
+
       - name: Generate changesets from commit messages
+        if: steps.check.outputs.needs_publish == 'false'
         run: |
           chmod +x scripts/generate-changesets.sh
           ./scripts/generate-changesets.sh
-          # Commit generated changesets so changesets/action can see them
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add .changeset/ || true
           git diff --cached --quiet || git commit -m "chore: auto-generate changesets from commits"
 
-      - name: Create Release PR or Publish
+      - name: Create Release PR
+        if: steps.check.outputs.needs_publish == 'false'
         uses: changesets/action@v1
         with:
-          publish: npm publish --provenance --access public
+          publish: echo "skipping — publish handled above"
           title: 'chore: version packages'
           commit: 'chore: version packages'
-          createGithubReleases: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # No NPM_TOKEN needed — OIDC trusted publisher handles auth
-          # prepublishOnly in package.json runs `npm run build` automatically before publish
