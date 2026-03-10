@@ -133,14 +133,7 @@ else
         echo -e "${YELLOW}⚠${NC} Push failed (will retry on next session)"
     fi
 
-    # Step 5: Sync to portfolio parent (if configured)
-    PORTFOLIO_PATH=$(jq -r '.portfolio_parent // empty' "$PROJECT_ROOT/.jfl/config.json" 2>/dev/null || true)
-    if [[ -n "$PORTFOLIO_PATH" ]] && [[ -d "$PORTFOLIO_PATH" ]]; then
-        echo -e "${BLUE}→${NC} Syncing journals to portfolio..."
-        jfl portfolio phone-home 2>/dev/null || echo -e "${YELLOW}⚠${NC} Portfolio phone-home failed (non-fatal)"
-    fi
-
-    # Step 6 (was 5): Sync product repo if symlink/submodule
+    # Step 5: Sync product repo if symlink/submodule
     PRODUCT_PATH="$PROJECT_ROOT/product"
     if [ -L "$PRODUCT_PATH" ] || [ -d "$PRODUCT_PATH/.git" ]; then
         echo ""
@@ -171,7 +164,7 @@ else
         fi
     fi
 
-    # Step 7: Compare snapshots
+    # Step 6: Compare snapshots
     if [ -f "$SESSION_FILE" ]; then
         SNAPSHOT_BEFORE=$(grep -o '"snapshot_before"[^,}]*' "$SESSION_FILE" | cut -d'"' -f4)
 

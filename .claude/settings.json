@@ -44,6 +44,15 @@
             "command": "if echo \"$TOOL_INPUT\" | grep -q '\"status\":\\s*\"completed\"'; then BRANCH=$(cat .jfl/current-session-branch.txt 2>/dev/null || git branch --show-current); echo ''; echo '═══════════════════════════════════════════════════════════'; echo '📝 JOURNAL REQUIRED: Task completed'; echo '═══════════════════════════════════════════════════════════'; echo 'WRITE JOURNAL ENTRY NOW. File: .jfl/journal/'\"${BRANCH}\"'.jsonl'; echo '═══════════════════════════════════════════════════════════'; fi"
           }
         ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:4313/api/hooks"
+          }
+        ]
       }
     ],
     "UserPromptSubmit": [
@@ -70,6 +79,15 @@
             "command": "./scripts/session/session-cleanup.sh >> .jfl/logs/session-cleanup.log 2>&1 || echo 'Cleanup skipped'; exit 0"
           }
         ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:4313/api/hooks"
+          }
+        ]
       }
     ],
     "PreCompact": [
@@ -83,6 +101,37 @@
           {
             "type": "command",
             "command": "nohup sh -c 'git add -A && git diff --cached --quiet || git commit -m \"auto: pre-compact save\"' > /dev/null 2>&1 & disown; exit 0"
+          }
+        ]
+      },
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:4313/api/hooks"
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:4313/api/hooks"
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://localhost:4313/api/hooks"
           }
         ]
       }
