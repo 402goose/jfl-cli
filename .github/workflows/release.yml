@@ -1,14 +1,14 @@
 name: Release
 
 # Triggers after CI passes on main.
-# - If changesets exist: creates/updates a "Version Packages" PR
-# - If Version PR is merged (no changesets): publishes to npm
+# - If version is bumped vs npm: publishes directly
+# - Otherwise: generates changesets + creates Version Packages PR
 #
-# npm Trusted Publisher setup (one-time, per package):
-#   npmjs.com → jfl package → Settings → Publish Access → Add Provenance
+# npm Trusted Publisher (OIDC — no token needed):
+#   npmjs.com → jfl → Settings → Publishing access → Trusted publishers
 #   Repository: 402goose/jfl-cli
-#   Workflow:   .github/workflows/release.yml
-#   Environment: (leave blank)
+#   Workflow:   release.yml
+#   Environment: (blank)
 
 on:
   workflow_run:
@@ -24,9 +24,9 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event.workflow_run.conclusion == 'success'
     permissions:
-      contents: write        # create git tags, push version commits
-      pull-requests: write   # create/update the Version Packages PR
-      id-token: write        # npm trusted publisher (OIDC provenance)
+      contents: write
+      pull-requests: write
+      id-token: write
 
     steps:
       - uses: actions/checkout@v4
@@ -38,7 +38,6 @@ jobs:
         with:
           node-version: '22'
           cache: 'npm'
-          registry-url: 'https://registry.npmjs.org'
 
       - run: npm ci
 
@@ -57,19 +56,22 @@ jobs:
             echo "Version $LOCAL_VERSION already on npm"
           fi
 
-      - name: Publish if version bumped
+      - name: Publish to npm
         if: steps.check.outputs.needs_publish == 'true'
         run: |
           npm run build
           npm publish --provenance --access public
-          # Create git tag
+        env:
+          # Prefer NPM_TOKEN if set, otherwise OIDC trusted publisher handles auth
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN || '' }}
+
+      - name: Tag and release
+        if: steps.check.outputs.needs_publish == 'true'
+        run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag "v${{ steps.check.outputs.local }}" || true
           git push origin "v${{ steps.check.outputs.local }}" || true
-          echo "Published jfl@${{ steps.check.outputs.local }}"
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create GitHub Release
         if: steps.check.outputs.needs_publish == 'true'
