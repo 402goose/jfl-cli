@@ -413,13 +413,24 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if [ "${{ steps.delta.outputs.improved }}" = "true" ]; then
-            echo "Eval passed — auto-merging PR #${{ github.event.pull_request.number }}"
-            gh pr merge ${{ github.event.pull_request.number }} --merge --delete-branch \
-              --body "Auto-merged by JFL eval: test_pass_rate improved by ${{ steps.delta.outputs.delta }} (${{ steps.baseline.outputs.score }} → ${{ steps.pr_eval.outputs.score }})"
-          elif [ "${{ steps.delta.outputs.improved }}" = "false" ]; then
-            echo "Eval regression — requesting changes on PR #${{ github.event.pull_request.number }}"
-            gh pr review ${{ github.event.pull_request.number }} --request-changes \
+          PR_NUMBER=${{ github.event.pull_request.number }}
+          IMPROVED="${{ steps.delta.outputs.improved }}"
+
+          if [ "$IMPROVED" = "true" ]; then
+            # Check if AI review requested changes
+            REVIEW_STATE=$(gh pr view $PR_NUMBER --json reviews --jq '[.reviews[] | select(.author.login == "github-actions")] | last | .state // "NONE"' 2>/dev/null || echo "NONE")
+
+            if [ "$REVIEW_STATE" = "CHANGES_REQUESTED" ]; then
+              echo "Eval passed but AI review has blockers — holding merge"
+              gh pr comment $PR_NUMBER --body "**JFL Eval passed** (test_pass_rate improved) but **AI review found blockers**. Address red findings, then eval will re-run and auto-merge."
+            else
+              echo "Eval passed, no review blockers — auto-merging PR #$PR_NUMBER"
+              gh pr merge $PR_NUMBER --merge --delete-branch \
+                --body "Auto-merged by JFL eval: test_pass_rate improved by ${{ steps.delta.outputs.delta }} (${{ steps.baseline.outputs.score }} → ${{ steps.pr_eval.outputs.score }})"
+            fi
+          else
+            echo "Eval regression — requesting changes on PR #$PR_NUMBER"
+            gh pr review $PR_NUMBER --request-changes \
               --body "JFL eval regression: test_pass_rate dropped by ${{ steps.delta.outputs.delta }} (${{ steps.baseline.outputs.score }} → ${{ steps.pr_eval.outputs.score }}). Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           fi
 
