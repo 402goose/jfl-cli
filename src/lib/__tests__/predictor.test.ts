@@ -91,6 +91,124 @@ describe('Predictor', () => {
   })
 
   describe('predict', () => {
+    it('throws when both fetch calls fail (network error)', async () => {
+      mockFetch
+        .mockRejectedValueOnce(new Error('Network timeout'))
+        .mockRejectedValueOnce(new Error('Connection refused'))
+
+      const predictor = new Predictor({
+        baseUrl: 'https://test.api',
+        apiKey: 'test-key',
+        projectRoot: '/tmp/test-project',
+      })
+
+      await expect(predictor.predict(makePredictionInput())).rejects.toThrow(
+        'Both Stratus endpoints failed'
+      )
+      expect(mockFetch).toHaveBeenCalledTimes(2)
+    })
+
+    it('throws when both endpoints return non-200', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 500,
+          text: async () => 'Internal Server Error',
+        })
+        .mockResolvedValueOnce({
+          ok: false,
+          status: 502,
+          text: async () => 'Bad Gateway',
+        })
+
+      const predictor = new Predictor({
+        baseUrl: 'https://test.api',
+        apiKey: 'test-key',
+        projectRoot: '/tmp/test-project',
+      })
+
+      await expect(predictor.predict(makePredictionInput())).rejects.toThrow(
+        'Both Stratus endpoints failed'
+      )
+    })
+
+    it('falls back to chat-only when rollout fails', async () => {
+      mockFetch
+        .mockRejectedValueOnce(new Error('Rollout timeout'))
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            id: 'chat-1',
+            choices: [{
+              message: {
+                role: 'assistant',
+                content: JSON.stringify({
+                  predicted_delta: 0.03,
+                  confidence: 0.7,
+                  reasoning: 'Chat-only fallback.',
+                  risks: [],
+                  recommendation: 'proceed',
+                }),
+              },
+              finish_reason: 'stop',
+            }],
+          }),
+        })
+
+      mockMkdirSync.mockReturnValue(undefined)
+
+      const predictor = new Predictor({
+        baseUrl: 'https://test.api',
+        apiKey: 'test-key',
+        projectRoot: '/tmp/test-project',
+      })
+
+      const result = await predictor.predict(makePredictionInput())
+      expect(result.method).toBe('chat')
+      expect(result.predicted_delta).toBe(0.03)
+    })
+
+    it('falls back to rollout-only when chat fails', async () => {
+      mockFetch
+        .mockResolvedValueOnce({
+          ok: true,
+          json: async () => ({
+            id: 'rollout-1',
+            object: 'rollout',
+            created: Date.now(),
+            goal: 'test',
+            initial_state: '{}',
+            action_sequence: [],
+            predictions: [
+              {
+                step: 1,
+                action: { step: 1, action_id: 1, action_name: 'fix', action_category: 'code' },
+                current_state: { step: 0, magnitude: 0.5, confidence: 'high' },
+                predicted_state: { step: 1, magnitude: 0.6, confidence: 'high' },
+                state_change: 0.1,
+                interpretation: 'positive',
+                brain_confidence: 0.85,
+                brain_goal_proximity: 0.7,
+                brain_alternatives: null,
+              },
+            ],
+          }),
+        })
+        .mockRejectedValueOnce(new Error('Chat timeout'))
+
+      mockMkdirSync.mockReturnValue(undefined)
+
+      const predictor = new Predictor({
+        baseUrl: 'https://test.api',
+        apiKey: 'test-key',
+        projectRoot: '/tmp/test-project',
+      })
+
+      const result = await predictor.predict(makePredictionInput())
+      expect(result.method).toBe('rollout')
+      expect(result.brain_goal_proximity).toBe(0.7)
+    })
+
     it('calls both rollout and chat endpoints and returns ensemble result', async () => {
       mockFetch
         .mockResolvedValueOnce({
@@ -161,6 +279,19 @@ describe('Predictor', () => {
   })
 
   describe('resolve', () => {
+    it('handles malformed JSON in predictions file gracefully', async () => {
+      mockExistsSync.mockReturnValue(true)
+      mockReadFileSync.mockReturnValue(
+        '{"prediction_id":"pred_good"}\nnot valid json\n{"prediction_id":"pred_also_good"}\n'
+      )
+
+      const predictor = new Predictor({ projectRoot: '/tmp/test-project' })
+
+      await expect(
+        predictor.resolve('pred_not_here', 0.02, 0.74, 'run-1')
+      ).rejects.toThrow('Prediction pred_not_here not found')
+    })
+
     it('throws on unknown prediction ID', async () => {
       mockExistsSync.mockReturnValue(true)
       mockReadFileSync.mockReturnValue('')
@@ -192,6 +323,26 @@ describe('Predictor', () => {
   })
 
   describe('getAccuracy', () => {
+    it('returns zero stats when all records are unresolved', () => {
+      const r1 = makePredictionRecord('pred_1')
+      const r2 = makePredictionRecord('pred_2')
+      const r3 = makePredictionRecord('pred_3')
+
+      mockExistsSync.mockReturnValue(true)
+      mockReadFileSync.mockReturnValue(
+        [r1, r2, r3].map(r => JSON.stringify(r)).join('\n') + '\n'
+      )
+
+      const predictor = new Predictor({ projectRoot: '/tmp/test-project' })
+      const accuracy = predictor.getAccuracy()
+
+      expect(accuracy.total).toBe(3)
+      expect(accuracy.resolved).toBe(0)
+      expect(accuracy.direction_accuracy).toBe(0)
+      expect(accuracy.mean_delta_error).toBe(0)
+      expect(accuracy.calibration).toBe(0)
+    })
+
     it('returns correct shape with no records', () => {
       mockExistsSync.mockReturnValue(false)
 
