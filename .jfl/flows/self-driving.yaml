@@ -171,3 +171,35 @@ flows:
         entry_type: "discovery"
         title: "Stratus prediction for PP task"
         summary: "Prediction run before PP creates PR. Task: {{data.task}}"
+
+  # ── Cron-driven autonomous experiments ──────────────────────────────
+
+  - name: daily-autoresearch
+    description: "Run 3 rounds of autoresearch daily — policy-head-ranked experiments"
+    enabled: true
+    trigger:
+      pattern: "cron:daily"
+    gate:
+      requires_approval: false
+    actions:
+      - type: log
+        message: "Daily autoresearch starting — 3 rounds with policy head ranking"
+      - type: spawn
+        command: jfl
+        args: ["peter", "autoresearch", "--rounds", "3"]
+        detach: true
+      - type: journal
+        entry_type: "milestone"
+        title: "Daily autoresearch dispatched"
+        summary: "Cron-triggered 3-round autoresearch. Policy head will rank candidates if weights exist."
+
+  - name: hourly-telemetry-check
+    description: "Run telemetry agent hourly to detect patterns and actionable insights"
+    enabled: true
+    trigger:
+      pattern: "cron:hourly"
+    actions:
+      - type: spawn
+        command: jfl
+        args: ["telemetry", "agent", "--cron"]
+        detach: true
