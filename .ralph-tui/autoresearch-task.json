@@ -1,23 +1,22 @@
 {
   "name": "Autoresearch Task",
-  "description": "Improve test_pass_rate score (currently 1.0000)",
-  "branchName": "ralph/autoresearch-1773266967590",
+  "description": "Investigate and improve the ranking/retrieval quality metrics (ndcg and precision) visible in the smoke-test-agent evals, which show scores well below 1.0 (ndcg ~0.52-0.71, precision ~0.38-0.55). Review the query understanding, document scoring, and ranking logic to identify gaps between current behavior and ideal relevance ordering.",
+  "branchName": "ralph/autoresearch-1773187087638",
   "userStories": [
     {
       "id": "US-001",
-      "title": "Improve test_pass_rate score (currently 1.0000)",
-      "description": "Improve test_pass_rate score (currently 1.0000)",
+      "title": "Investigate and improve the ranking/retrieval quality metrics (ndcg and precisio",
+      "description": "Investigate and improve the ranking/retrieval quality metrics (ndcg and precision) visible in the smoke-test-agent evals, which show scores well below 1.0 (ndcg ~0.52-0.71, precision ~0.38-0.55). Review the query understanding, document scoring, and ranking logic to identify gaps between current behavior and ideal relevance ordering.",
       "acceptanceCriteria": [
         "Task completed"
       ],
       "priority": 1,
-      "passes": true,
+      "passes": false,
       "notes": "",
-      "dependsOn": [],
-      "completionNotes": "Completed by agent"
+      "dependsOn": []
     }
   ],
   "metadata": {
-    "updatedAt": "2026-03-11T22:10:32.332Z"
+    "updatedAt": "2026-03-10T23:58:08.189Z"
   }
 }
