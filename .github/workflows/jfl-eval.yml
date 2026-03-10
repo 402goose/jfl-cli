@@ -352,7 +352,12 @@ jobs:
           {"ts":"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)","type":"eval:scored","source":"ci","data":{"agent":"$AGENT","composite":${{ steps.pr_eval.outputs.score }},"baseline":${{ steps.baseline.outputs.score }},"delta":${{ steps.delta.outputs.delta }},"improved":"${{ steps.delta.outputs.improved }}","pr_number":${{ github.event.pull_request.number }},"branch":"${{ github.head_ref }}","run_url":"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}","quality_score":${{ steps.ai_eval.outputs.quality_score }},"dim_correctness":${{ steps.ai_eval.outputs.dim_correctness }},"dim_coverage":${{ steps.ai_eval.outputs.dim_coverage }},"dim_architecture":${{ steps.ai_eval.outputs.dim_architecture }},"dim_value":${{ steps.ai_eval.outputs.dim_value }}}}
           EOF
 
-          git add .jfl/eval.jsonl .jfl/service-events.jsonl
+          # Write training tuple for policy head
+          cat >> .jfl/training-buffer.jsonl << EOF
+          {"id":"tb_ci_${{ github.run_id }}","v":1,"ts":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","agent":"$AGENT","state":{"composite_score":${{ steps.baseline.outputs.score }},"dimension_scores":{},"tests_passing":${{ steps.baseline.outputs.passing }},"tests_total":${{ steps.baseline.outputs.total }},"trajectory_length":0,"recent_deltas":[],"agent":"$AGENT"},"action":{"type":"experiment","description":"${{ github.event.pull_request.title }}","files_affected":[],"scope":"medium","branch":"${{ github.head_ref }}"},"reward":{"composite_delta":${{ steps.delta.outputs.delta }},"dimension_deltas":{},"tests_added":${{ steps.delta.outputs.tests_added }},"quality_score":${{ steps.ai_eval.outputs.quality_score }},"improved":${{ steps.delta.outputs.improved }},"prediction_error":0},"metadata":{"pr_number":${{ github.event.pull_request.number }},"branch":"${{ github.head_ref }}","eval_run_id":"${{ github.run_id }}","prediction_id":"$PRED_ID","source":"ci"}}
+          EOF
+
+          git add .jfl/eval.jsonl .jfl/service-events.jsonl .jfl/training-buffer.jsonl
           git add .jfl/predictions/ 2>/dev/null || true
           git commit -m "eval: scored PR #${{ github.event.pull_request.number }} (composite=${{ steps.pr_eval.outputs.score }}, delta=${{ steps.delta.outputs.delta }})"
           git push origin ${{ github.head_ref }}

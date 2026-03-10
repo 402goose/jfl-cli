@@ -19,6 +19,7 @@ import { getProjectHubUrl } from "../utils/context-hub-port.js"
 import { TrajectoryLoader } from "../lib/trajectory-loader.js"
 import { readEvals } from "../lib/eval-store.js"
 import type { EvalEntry } from "../types/eval.js"
+import { TrainingBuffer } from "../lib/training-buffer.js"
 
 function hasRalphTui(): boolean {
   try {
@@ -898,6 +899,40 @@ Suggest the SINGLE highest-value change. JSON format:
       outcome: delta > 0 ? "confirmed" : delta < 0 ? "rejected" : "inconclusive",
       score_delta: delta,
       agent_id: "peter-parker",
+    })
+
+    const tb = new TrainingBuffer(projectRoot)
+    tb.append({
+      agent: "peter-parker",
+      state: {
+        composite_score: baselineScore,
+        dimension_scores: evals.sort((a, b) => b.ts.localeCompare(a.ts))[0]?.metrics ?? {},
+        tests_passing: evals.sort((a, b) => b.ts.localeCompare(a.ts))[0]?.metrics?.tests_passed as number ?? 0,
+        tests_total: evals.sort((a, b) => b.ts.localeCompare(a.ts))[0]?.metrics?.tests_total as number ?? 1,
+        trajectory_length: results.length,
+        recent_deltas: results.slice(-5).map(r => r.delta),
+        agent: "peter-parker",
+      },
+      action: {
+        type: "experiment",
+        description: proposal.task,
+        files_affected: [],
+        scope: "medium",
+        branch: branchName,
+      },
+      reward: {
+        composite_delta: delta,
+        dimension_deltas: {},
+        tests_added: total - (evals.sort((a, b) => b.ts.localeCompare(a.ts))[0]?.metrics?.tests_total as number ?? total),
+        quality_score: score,
+        improved: delta > 0,
+        prediction_error: Math.abs(proposal.predicted_delta - delta),
+      },
+      metadata: {
+        branch: branchName,
+        autoresearch_round: round,
+        source: "autoresearch",
+      },
     })
 
     gitExec(["checkout", baseBranch], projectRoot)
