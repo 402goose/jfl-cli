@@ -41,8 +41,10 @@ jobs:
       - name: Run tests (baseline from main)
         id: baseline
         run: |
-          git stash --include-untracked || true
-          git checkout origin/main -- . 2>/dev/null || true
+          # Clean switch to main — remove PR-only files, restore main state
+          PR_SHA=$(git rev-parse HEAD)
+          git checkout origin/main --force
+          git clean -fd
           npm ci --ignore-scripts 2>/dev/null || true
 
           RESULT=$(npx jest --json --silent 2>/dev/null || echo '{}')
@@ -64,8 +66,9 @@ jobs:
           echo "total=$TOTAL" >> $GITHUB_OUTPUT
           echo "Baseline: $SCORE ($PASSING/$TOTAL)"
 
-          git checkout - 2>/dev/null || true
-          git stash pop 2>/dev/null || true
+          # Switch back to PR branch
+          git checkout $PR_SHA --force
+          git clean -fd
 
       - name: Run tests (PR branch)
         id: pr_eval
