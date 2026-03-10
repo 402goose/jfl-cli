@@ -47,6 +47,23 @@ function NavIcon({ name }: { name: string }) {
         <path d="m7 16 4-8 4 4 4-6" />
       </>
     ),
+    reviews: (
+      <>
+        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+        <path d="M14 2v6h6" />
+        <path d="m9 15 2 2 4-4" />
+      </>
+    ),
+    chat: (
+      <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+    ),
+    synopsis: (
+      <>
+        <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20" />
+        <path d="M8 7h6" />
+        <path d="M8 11h8" />
+      </>
+    ),
     search: (
       <>
         <circle cx="11" cy="11" r="8" />
@@ -82,6 +99,9 @@ const navItems: NavItemDef[] = [
   { id: "overview", label: "Overview", icon: "dashboard" },
   { id: "activity", label: "Activity", icon: "events" },
   { id: "loop", label: "Loop", icon: "loop" },
+  { id: "reviews", label: "Reviews", icon: "reviews" },
+  { id: "chat", label: "Chat", icon: "chat" },
+  { id: "synopsis", label: "Synopsis", icon: "synopsis" },
   { id: "topology", label: "Topology", icon: "topology" },
   { id: "system", label: "System", icon: "system" },
 ]

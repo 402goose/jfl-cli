@@ -287,4 +287,14 @@ export const api = {
 
   telemetryAgentRun: () =>
     apiFetch<{ ok: boolean; insights: unknown[] }>("/api/telemetry/agent/run", { method: "POST" }),
+
+  childSynopsis: async (port: number, hours = 24): Promise<SynopsisData | null> => {
+    try {
+      const res = await fetch(`http://localhost:${port}/api/synopsis?hours=${hours}`)
+      if (!res.ok) return null
+      return res.json()
+    } catch {
+      return null
+    }
+  },
 }
