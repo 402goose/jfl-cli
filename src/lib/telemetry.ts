@@ -180,6 +180,9 @@ class TelemetryClient {
     this.flushing = true
 
     const batch = this.queue.splice(0, BATCH_SIZE)
+
+    this.archiveLocally(batch)
+
     const url = process.env.JFL_PLATFORM_URL
       ? `${process.env.JFL_PLATFORM_URL}/api/v1/telemetry/ingest`
       : INGEST_URL_DEFAULT
@@ -196,23 +199,19 @@ class TelemetryClient {
       })
 
       if (response.status === 401) {
-        // Disable for remainder of process
         this.disabled = true
         return
       }
 
       if (response.status === 429) {
-        // Re-queue with backoff — just push back for next cycle
         this.queue.unshift(...batch)
         return
       }
 
       if (!response.ok) {
-        // Spillover to disk
         this.spillToDisk(batch)
       }
     } catch {
-      // Network failure → spillover
       this.spillToDisk(batch)
     } finally {
       this.flushing = false
@@ -221,14 +220,25 @@ class TelemetryClient {
 
   private flushSync(): void {
     if (this.queue.length === 0) return
-    // On process exit, we can't reliably complete async network calls.
-    // Spill to disk — the next process will load and flush these.
     const batch = this.queue.splice(0)
+    this.archiveLocally(batch)
     this.spillToDisk(batch)
   }
 
   private get spilloverPath(): string {
     return JFL_FILES.telemetryQueue
+  }
+
+  private archiveLocally(events: TelemetryEvent[]): void {
+    try {
+      const archivePath = JFL_FILES.telemetryArchive
+      const dir = dirname(archivePath)
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true })
+      }
+      const lines = events.map(e => JSON.stringify(e)).join('\n') + '\n'
+      appendFileSync(archivePath, lines)
+    } catch {}
   }
 
   private spillToDisk(events: TelemetryEvent[]): void {

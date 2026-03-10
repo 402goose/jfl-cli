@@ -22,7 +22,7 @@ import {
   restartCoreServices,
   validateCoreServices
 } from "../lib/service-utils.js"
-import { persistProjectPort } from "../utils/context-hub-port.js"
+import { persistProjectPort, getProjectPort } from "../utils/context-hub-port.js"
 
 const TEMPLATE_REPO = "https://github.com/402goose/jfl-template.git"
 const TEMP_DIR = ".jfl-update-temp"
@@ -370,6 +370,9 @@ export async function updateCommand(options: { dry?: boolean; autoUpdate?: boole
       }
     }
 
+    // Ensure HTTP hooks are configured (added in v0.3.x)
+    ensureHttpHooks(cwd)
+
     console.log(chalk.white("\n  Synced from jfl-template:"))
     for (const p of updated) {
       console.log(chalk.gray(`    ✓ ${p}`))
@@ -433,6 +436,54 @@ export async function updateCommand(options: { dry?: boolean; autoUpdate?: boole
     spinner.fail("Update failed")
     console.error(chalk.red(err.message))
   }
+}
+
+const HTTP_HOOK_EVENTS = ["PostToolUse", "Stop", "PreCompact", "SubagentStart", "SubagentStop"]
+
+function ensureHttpHooks(cwd: string): void {
+  const settingsPath = path.join(cwd, ".claude", "settings.json")
+  if (!fs.existsSync(settingsPath)) return
+
+  try {
+    const port = getProjectPort(cwd)
+    if (!port) return
+
+    const hookUrl = `http://localhost:${port}/api/hooks`
+    const settings = JSON.parse(fs.readFileSync(settingsPath, "utf-8"))
+    if (!settings.hooks) settings.hooks = {}
+
+    let added = 0
+    let fixed = 0
+    for (const event of HTTP_HOOK_EVENTS) {
+      if (!settings.hooks[event]) settings.hooks[event] = []
+
+      const existingIdx = settings.hooks[event].findIndex(
+        (entry: any) => entry.hooks?.some((h: any) => h.type === "http" && h.url?.includes("/api/hooks"))
+      )
+
+      if (existingIdx >= 0) {
+        // HTTP hook exists — check if port is correct
+        const entry = settings.hooks[event][existingIdx]
+        const httpHook = entry.hooks.find((h: any) => h.type === "http" && h.url?.includes("/api/hooks"))
+        if (httpHook && httpHook.url !== hookUrl) {
+          httpHook.url = hookUrl
+          fixed++
+        }
+      } else {
+        settings.hooks[event].push({
+          matcher: "",
+          hooks: [{ type: "http", url: hookUrl }],
+        })
+        added++
+      }
+    }
+
+    if (added > 0 || fixed > 0) {
+      fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n")
+      if (added > 0) console.log(chalk.green(`\n  ✓ HTTP hooks added for ${added} events → ${hookUrl}`))
+      if (fixed > 0) console.log(chalk.green(`\n  ✓ HTTP hooks updated for ${fixed} events → ${hookUrl}`))
+    }
+  } catch {}
 }
 
 function copyDirRecursive(src: string, dest: string) {

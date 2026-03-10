@@ -13,18 +13,21 @@ import type {
 import { JFL_FILES } from '../utils/jfl-paths.js'
 
 export function loadLocalEvents(): TelemetryEvent[] {
-  const path = JFL_FILES.telemetryQueue
-  if (!existsSync(path)) return []
+  const paths = [JFL_FILES.telemetryArchive, JFL_FILES.telemetryQueue]
+  const events: TelemetryEvent[] = []
 
-  try {
-    const content = readFileSync(path, 'utf-8').trim()
-    if (!content) return []
-    return content.split('\n').map(line => {
-      try { return JSON.parse(line) } catch { return null }
-    }).filter(Boolean) as TelemetryEvent[]
-  } catch {
-    return []
+  for (const p of paths) {
+    if (!existsSync(p)) continue
+    try {
+      const content = readFileSync(p, 'utf-8').trim()
+      if (!content) continue
+      for (const line of content.split('\n')) {
+        try { events.push(JSON.parse(line)) } catch {}
+      }
+    } catch {}
   }
+
+  return events
 }
 
 export function analyzeEvents(events: TelemetryEvent[], periodHours: number): TelemetryDigest {
