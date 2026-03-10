@@ -212,140 +212,6 @@ jobs:
               .catch(e => console.error('Resolve failed:', e.message));
           " 2>/dev/null || echo "Warning: could not resolve prediction"
 
-      - name: AI quality assessment
-        id: ai_eval
-        env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-          PR_TITLE: ${{ github.event.pull_request.title }}
-        run: |
-          # Get diff for AI assessment
-          git diff origin/main...HEAD -- '*.ts' '*.tsx' '*.js' '*.jsx' | head -3000 > /tmp/eval-diff.txt
-          DIFF_SIZE=$(wc -c < /tmp/eval-diff.txt | tr -d ' ')
-
-          if [ "$DIFF_SIZE" -lt 10 ]; then
-            echo "quality_score=0.5" >> $GITHUB_OUTPUT
-            echo "quality_reason=No code diff to assess" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-
-          # Gather context (same as review workflow)
-          node -e "
-            const fs = require('fs');
-            const sections = [];
-            try { const c = JSON.parse(fs.readFileSync('.jfl/config.json','utf8')); sections.push('Project: ' + (c.name||'unknown') + ' - ' + (c.description||'')); } catch(e) {}
-            try { sections.push(fs.readFileSync('knowledge/ARCHITECTURE.md','utf8').substring(0,1500)); } catch(e) {}
-            try { sections.push(fs.readFileSync('knowledge/SERVICE_SPEC.md','utf8').substring(0,800)); } catch(e) {}
-            fs.writeFileSync('/tmp/eval-context.txt', sections.join('\n'));
-          "
-
-          # Build AI eval payload
-          node -e "
-            const fs = require('fs');
-            const diff = fs.readFileSync('/tmp/eval-diff.txt', 'utf8').substring(0, 8000);
-            const context = fs.readFileSync('/tmp/eval-context.txt', 'utf8').substring(0, 2000);
-            const title = process.env.PR_TITLE || '';
-
-            const testMetrics = {
-              baseline_pass_rate: ${{ steps.baseline.outputs.score }},
-              pr_pass_rate: ${{ steps.pr_eval.outputs.score }},
-              baseline_tests: ${{ steps.baseline.outputs.total }},
-              pr_tests: ${{ steps.pr_eval.outputs.total }},
-              tests_added: ${{ steps.delta.outputs.tests_added }},
-            };
-
-            const payload = {
-              model: 'gpt-4o-mini',
-              messages: [
-                {
-                  role: 'system',
-                  content: [
-                    'You are an AI eval scorer for a software project. Score this PR on overall quality improvement.',
-                    '',
-                    '--- PROJECT CONTEXT ---',
-                    context,
-                    '--- END CONTEXT ---',
-                    '',
-                    'Test metrics: ' + JSON.stringify(testMetrics),
-                    '',
-                    'Score the PR from 0.0 to 1.0 on these dimensions:',
-                    '- correctness: Does the code work? Any bugs?',
-                    '- coverage: Did it add meaningful tests?',
-                    '- architecture: Does it follow project patterns?',
-                    '- value: Does it add real value to the project?',
-                    '',
-                    'Respond in this exact JSON format (no markdown):',
-                    '{\"quality_score\": 0.0-1.0, \"dimensions\": {\"correctness\": 0.0-1.0, \"coverage\": 0.0-1.0, \"architecture\": 0.0-1.0, \"value\": 0.0-1.0}, \"reason\": \"1-2 sentence summary\"}',
-                  ].join('\\n')
-                },
-                { role: 'user', content: 'PR: ' + title + '\\n\\n' + diff }
-              ],
-              max_tokens: 300,
-              temperature: 0.1
-            };
-
-            fs.writeFileSync('/tmp/eval-payload.json', JSON.stringify(payload));
-          "
-
-          # Try OpenAI
-          RESULT=""
-          if [ -n "$OPENAI_API_KEY" ]; then
-            RESPONSE=$(curl -s -X POST https://api.openai.com/v1/chat/completions \
-              -H "Content-Type: application/json" \
-              -H "Authorization: Bearer $OPENAI_API_KEY" \
-              -d @/tmp/eval-payload.json 2>/dev/null)
-            RESULT=$(echo "$RESPONSE" | node -e "
-              let d=''; process.stdin.on('data',c=>d+=c); process.stdin.on('end',()=>{
-                try { console.log(JSON.parse(d).choices[0].message.content); }
-                catch(e) { console.log(''); }
-              })
-            ")
-          fi
-
-          # Fallback to OpenRouter
-          if [ -z "$RESULT" ] && [ -n "$OPENROUTER_API_KEY" ]; then
-            node -e "
-              const fs = require('fs');
-              const p = JSON.parse(fs.readFileSync('/tmp/eval-payload.json', 'utf8'));
-              p.model = 'anthropic/claude-sonnet-4';
-              fs.writeFileSync('/tmp/eval-payload-or.json', JSON.stringify(p));
-            "
-            RESPONSE=$(curl -s -X POST https://openrouter.ai/api/v1/chat/completions \
-              -H "Content-Type: application/json" \
-              -H "Authorization: Bearer $OPENROUTER_API_KEY" \
-              -d @/tmp/eval-payload-or.json 2>/dev/null)
-            RESULT=$(echo "$RESPONSE" | node -e "
-              let d=''; process.stdin.on('data',c=>d+=c); process.stdin.on('end',()=>{
-                try { console.log(JSON.parse(d).choices[0].message.content); }
-                catch(e) { console.log(''); }
-              })
-            ")
-          fi
-
-          # Parse AI eval result
-          node -e "
-            const raw = \`$RESULT\` || '{}';
-            try {
-              const parsed = JSON.parse(raw.match(/\{[\s\S]*\}/)?.[0] || '{}');
-              const score = Math.max(0, Math.min(1, parsed.quality_score || 0.5));
-              const reason = (parsed.reason || 'AI eval unavailable').replace(/\n/g, ' ');
-              const dims = parsed.dimensions || {};
-              console.log('quality_score=' + score.toFixed(2));
-              console.log('quality_reason=' + reason);
-              console.log('dim_correctness=' + (dims.correctness || 0.5).toFixed(2));
-              console.log('dim_coverage=' + (dims.coverage || 0.5).toFixed(2));
-              console.log('dim_architecture=' + (dims.architecture || 0.5).toFixed(2));
-              console.log('dim_value=' + (dims.value || 0.5).toFixed(2));
-            } catch(e) {
-              console.log('quality_score=0.50');
-              console.log('quality_reason=AI eval parse error');
-              console.log('dim_correctness=0.50');
-              console.log('dim_coverage=0.50');
-              console.log('dim_architecture=0.50');
-              console.log('dim_value=0.50');
-            }
-          " >> $GITHUB_OUTPUT
-
       - name: Detect agent from branch
         id: agent
         run: |
@@ -377,17 +243,17 @@ jobs:
           # Write eval entry (matches readEvals path: .jfl/eval.jsonl)
           mkdir -p .jfl
           cat >> .jfl/eval.jsonl << EOF
-          {"v":1,"ts":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","agent":"$AGENT","dataset":"ci-eval","metrics":{"test_pass_rate":${{ steps.pr_eval.outputs.score }},"tests_passed":${{ steps.pr_eval.outputs.passing }},"tests_total":${{ steps.pr_eval.outputs.total }}},"composite":${{ steps.pr_eval.outputs.score }},"delta":{"composite":${{ steps.delta.outputs.delta }}},"model_version":"$AGENT-run","improved":${{ steps.delta.outputs.improved }},"pr_number":${{ github.event.pull_request.number }},"branch":"${{ github.head_ref }}","quality_score":${{ steps.ai_eval.outputs.quality_score }},"dim_correctness":${{ steps.ai_eval.outputs.dim_correctness }},"dim_coverage":${{ steps.ai_eval.outputs.dim_coverage }},"dim_architecture":${{ steps.ai_eval.outputs.dim_architecture }},"dim_value":${{ steps.ai_eval.outputs.dim_value }},"prediction_id":"$PRED_ID"}
+          {"v":1,"ts":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","agent":"$AGENT","dataset":"ci-eval","metrics":{"test_pass_rate":${{ steps.pr_eval.outputs.score }},"tests_passed":${{ steps.pr_eval.outputs.passing }},"tests_total":${{ steps.pr_eval.outputs.total }}},"composite":${{ steps.pr_eval.outputs.score }},"delta":{"composite":${{ steps.delta.outputs.delta }}},"model_version":"$AGENT-run","improved":${{ steps.delta.outputs.improved }},"pr_number":${{ github.event.pull_request.number }},"branch":"${{ github.head_ref }}","prediction_id":"$PRED_ID"}
           EOF
 
           # Write eval:scored event for hub file watcher
           cat >> .jfl/service-events.jsonl << EOF
-          {"ts":"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)","type":"eval:scored","source":"ci","data":{"agent":"$AGENT","composite":${{ steps.pr_eval.outputs.score }},"baseline":${{ steps.baseline.outputs.score }},"delta":${{ steps.delta.outputs.delta }},"improved":"${{ steps.delta.outputs.improved }}","pr_number":${{ github.event.pull_request.number }},"branch":"${{ github.head_ref }}","run_url":"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}","quality_score":${{ steps.ai_eval.outputs.quality_score }},"dim_correctness":${{ steps.ai_eval.outputs.dim_correctness }},"dim_coverage":${{ steps.ai_eval.outputs.dim_coverage }},"dim_architecture":${{ steps.ai_eval.outputs.dim_architecture }},"dim_value":${{ steps.ai_eval.outputs.dim_value }}}}
+          {"ts":"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)","type":"eval:scored","source":"ci","data":{"agent":"$AGENT","composite":${{ steps.pr_eval.outputs.score }},"baseline":${{ steps.baseline.outputs.score }},"delta":${{ steps.delta.outputs.delta }},"improved":"${{ steps.delta.outputs.improved }}","pr_number":${{ github.event.pull_request.number }},"branch":"${{ github.head_ref }}","run_url":"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}}
           EOF
 
           # Write training tuple for policy head
           cat >> .jfl/training-buffer.jsonl << EOF
-          {"id":"tb_ci_${{ github.run_id }}","v":1,"ts":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","agent":"$AGENT","state":{"composite_score":${{ steps.baseline.outputs.score }},"dimension_scores":{},"tests_passing":${{ steps.baseline.outputs.passing }},"tests_total":${{ steps.baseline.outputs.total }},"trajectory_length":0,"recent_deltas":[],"agent":"$AGENT"},"action":{"type":"experiment","description":"${{ github.event.pull_request.title }}","files_affected":[],"scope":"medium","branch":"${{ github.head_ref }}"},"reward":{"composite_delta":${{ steps.delta.outputs.delta }},"dimension_deltas":{},"tests_added":${{ steps.delta.outputs.tests_added }},"quality_score":${{ steps.ai_eval.outputs.quality_score }},"improved":${{ steps.delta.outputs.improved }},"prediction_error":0},"metadata":{"pr_number":${{ github.event.pull_request.number }},"branch":"${{ github.head_ref }}","eval_run_id":"${{ github.run_id }}","prediction_id":"$PRED_ID","source":"ci"}}
+          {"id":"tb_ci_${{ github.run_id }}","v":1,"ts":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","agent":"$AGENT","state":{"composite_score":${{ steps.baseline.outputs.score }},"dimension_scores":{},"tests_passing":${{ steps.baseline.outputs.passing }},"tests_total":${{ steps.baseline.outputs.total }},"trajectory_length":0,"recent_deltas":[],"agent":"$AGENT"},"action":{"type":"experiment","description":"${{ github.event.pull_request.title }}","files_affected":[],"scope":"medium","branch":"${{ github.head_ref }}"},"reward":{"composite_delta":${{ steps.delta.outputs.delta }},"dimension_deltas":{},"tests_added":${{ steps.delta.outputs.tests_added }},"improved":${{ steps.delta.outputs.improved }},"prediction_error":0},"metadata":{"pr_number":${{ github.event.pull_request.number }},"branch":"${{ github.head_ref }}","eval_run_id":"${{ github.run_id }}","prediction_id":"$PRED_ID","source":"ci"}}
           EOF
 
           git add .jfl/eval.jsonl .jfl/service-events.jsonl .jfl/training-buffer.jsonl
@@ -480,12 +346,7 @@ jobs:
             else if (testsPassingAdded > 0) verdict = 'IMPROVED (more tests)';
 
             const testsDeltaStr = testsAdded > 0 ? `+${testsAdded}` : `${testsAdded}`;
-            const qualityScore = parseFloat('${{ steps.ai_eval.outputs.quality_score }}') || 0.5;
-            const qualityReason = '${{ steps.ai_eval.outputs.quality_reason }}' || 'N/A';
-            const dimCorrectness = '${{ steps.ai_eval.outputs.dim_correctness }}' || '—';
-            const dimCoverage = '${{ steps.ai_eval.outputs.dim_coverage }}' || '—';
-            const dimArchitecture = '${{ steps.ai_eval.outputs.dim_architecture }}' || '—';
-            const dimValue = '${{ steps.ai_eval.outputs.dim_value }}' || '—';
+            // AI quality assessment removed — PR Sentinel handles code review
 
             // Prediction data (optional)
             const predId = '${{ steps.predict.outputs.prediction_id }}' || '';
@@ -517,16 +378,6 @@ jobs:
               `| test_count | ${baselineTotal} | ${prTotal} | ${testsDeltaStr} |`,
               `| tests_passing | ${baselinePassing} | ${prPassing} | ${testsPassingAdded > 0 ? '+' : ''}${testsPassingAdded} |`,
               '',
-              `### AI Quality Score: ${qualityScore.toFixed(2)}`,
-              '',
-              '| Dimension | Score |',
-              '|-----------|-------|',
-              `| Correctness | ${dimCorrectness} |`,
-              `| Coverage | ${dimCoverage} |`,
-              `| Architecture | ${dimArchitecture} |`,
-              `| Value | ${dimValue} |`,
-              '',
-              `> ${qualityReason}`,
               ...predictionSection,
               `**Verdict: ${verdict}**`,
               '',

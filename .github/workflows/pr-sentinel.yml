@@ -1,0 +1,46 @@
+name: PR Sentinel
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  issues:
+    types: [opened, labeled]
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: pr-sentinel-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  sentinel:
+    name: PR Sentinel
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: |
+      (github.event_name == 'pull_request') ||
+      (github.event_name == 'issues') ||
+      (github.event_name == 'issue_comment' && (
+        contains(github.event.comment.body, '@pr-sentinel') ||
+        contains(github.event.comment.body, '/bot')
+      )) ||
+      (github.event_name == 'pull_request_review_comment')
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: hathbanger/pr-sentinel@main
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
