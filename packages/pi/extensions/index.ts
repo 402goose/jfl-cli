@@ -34,6 +34,10 @@ import { initStratusBridge, onAgentStart as onStratusStart, onAgentEnd as onStra
 import { setupPeterParker } from "./peter-parker.js"
 import { setupPortfolioBridge, onPortfolioShutdown } from "./portfolio-bridge.js"
 import { setupAgentGrid, emitAgentHealth } from "./agent-grid.js"
+import { setupPolicyHeadTool } from "./policy-head-tool.js"
+import { setupTrainingBufferTool, onTrainingAgentEnd } from "./training-buffer-tool.js"
+import { setupAutoresearch } from "./autoresearch.js"
+import { setupEvalTool } from "./eval-tool.js"
 
 function readJflConfig(projectRoot: string): JflConfig {
   const configPath = join(projectRoot, ".jfl", "config.json")
@@ -196,6 +200,10 @@ export default async function jflExtension(pi: any): Promise<void> {
     await setupPeterParker(ctx, config)
     await setupPortfolioBridge(ctx, config)
     setupAgentGrid(ctx)
+    await setupPolicyHeadTool(ctx, config)
+    await setupTrainingBufferTool(ctx, config)
+    await setupAutoresearch(ctx, config)
+    await setupEvalTool(ctx, config)
 
     // If running as an RPC team agent, emit health heartbeats to the grid
     const agentName = process.env.JFL_AGENT_NAME
@@ -260,6 +268,7 @@ export default async function jflExtension(pi: any): Promise<void> {
     latestPiCtx = piCtx
     await onStratusEnd(ctx, event)
     await onEvalEnd(ctx, event)
+    await onTrainingAgentEnd(ctx, event)
     await updateHudWidget(ctx)
     await onJournalAgentEnd(ctx, event)
   })
