@@ -99,3 +99,37 @@ flows:
         summary: "Review: {{data.model}} on {{data.branch}}. Findings: red={{data.counts.red}} yellow={{data.counts.yellow}} blue={{data.counts.blue}}. Blockers: {{data.has_blockers}}"
       - type: log
         message: "Review training data logged: PR#{{data.pr_number}} findings={{data.total_findings}} blockers={{data.has_blockers}}"
+
+  # PP auto-response to review findings
+  - name: pp-address-review-blockers
+    description: "Spawn Peter Parker to address blocker findings from AI review"
+    enabled: true
+    trigger:
+      pattern: "review:findings"
+      condition: 'data.has_blockers == "true"'
+    gate:
+      requires_approval: true
+      max_iterations: 3
+    actions:
+      - type: log
+        message: "PP dispatched to fix {{data.counts.red}} blocker(s) on PR #{{data.pr_number}}"
+      - type: spawn
+        command: jfl
+        args: ["peter", "run", "--task", "Address AI review blockers on PR #{{data.pr_number}} (branch: {{data.branch}}). Findings: {{data.counts.red}} red, {{data.counts.yellow}} yellow. Read the review comment with 'gh pr view {{data.pr_number}} --comments', fix each red finding, commit and push to the same branch. Do NOT create a new PR."]
+        detach: true
+      - type: journal
+        entry_type: "milestone"
+        title: "PP auto-fix dispatched: PR #{{data.pr_number}}"
+        summary: "Peter Parker spawned to address {{data.counts.red}} review blockers on {{data.branch}}. Max 3 iterations."
+
+  # Training tuple enrichment with AI quality score
+  - name: log-quality-training-tuple
+    description: "Log enriched training tuple with AI quality dimensions"
+    enabled: true
+    trigger:
+      pattern: "eval:scored"
+    actions:
+      - type: journal
+        entry_type: "discovery"
+        title: "Quality tuple: {{data.agent}} quality={{data.quality_score}}"
+        summary: "Enriched tuple — State: baseline={{data.baseline}}, Action: PR #{{data.pr_number}}, Reward: delta={{data.delta}} quality={{data.quality_score}}. Dims: correctness={{data.dim_correctness}} coverage={{data.dim_coverage}} architecture={{data.dim_architecture}} value={{data.dim_value}}"
