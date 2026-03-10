@@ -38,6 +38,38 @@ jobs:
       - name: Build
         run: npx tsc --build --noEmit
 
+      - name: Predict eval delta (Stratus, optional)
+        id: predict
+        if: env.STRATUS_API_KEY != ''
+        continue-on-error: true
+        env:
+          STRATUS_API_KEY: ${{ secrets.STRATUS_API_KEY }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          DIFF_SUMMARY=$(git diff origin/main...HEAD --stat | tail -5)
+          CURRENT_SCORE=$(cat .jfl/eval.jsonl 2>/dev/null | tail -1 | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{console.log(JSON.parse(d).composite||0)}catch{console.log(0)}})" 2>/dev/null || echo "0")
+
+          RESULT=$(node -e "
+            const { Predictor } = require('./dist/lib/predictor.js');
+            const p = new Predictor();
+            p.predict({
+              proposal: { description: '$PR_TITLE — $DIFF_SUMMARY', change_type: 'fix', scope: 'medium' },
+              current_score: $CURRENT_SCORE,
+              goal: 'test_pass_rate >= 1.0',
+              recent_trajectory: [],
+            }).then(r => {
+              console.log(JSON.stringify({id: r.prediction_id, delta: r.predicted_delta, confidence: r.confidence, recommendation: r.recommendation}));
+            }).catch(e => {
+              console.error('Prediction failed:', e.message);
+              console.log(JSON.stringify({id: '', delta: 0, confidence: 0, recommendation: 'revise'}));
+            });
+          " 2>/dev/null || echo '{"id":"","delta":0,"confidence":0,"recommendation":"revise"}')
+
+          echo "prediction_id=$(echo "$RESULT" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{console.log(JSON.parse(d).id)}catch{console.log('')}})")" >> $GITHUB_OUTPUT
+          echo "predicted_delta=$(echo "$RESULT" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{console.log(JSON.parse(d).delta)}catch{console.log(0)}})")" >> $GITHUB_OUTPUT
+          echo "confidence=$(echo "$RESULT" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{console.log(JSON.parse(d).confidence)}catch{console.log(0)}})")" >> $GITHUB_OUTPUT
+          echo "recommendation=$(echo "$RESULT" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{console.log(JSON.parse(d).recommendation)}catch{console.log('revise')}})")" >> $GITHUB_OUTPUT
+
       - name: Run tests (baseline from main)
         id: baseline
         run: |
@@ -128,6 +160,24 @@ jobs:
           echo "tests_added=$TESTS_ADDED" >> $GITHUB_OUTPUT
           echo "tests_passing_added=$TESTS_PASSING_ADDED" >> $GITHUB_OUTPUT
           echo "Delta: $DELTA, tests_added=$TESTS_ADDED (improved=$IMPROVED)"
+
+      - name: Resolve prediction (Stratus, optional)
+        if: steps.predict.outputs.prediction_id != ''
+        continue-on-error: true
+        env:
+          STRATUS_API_KEY: ${{ secrets.STRATUS_API_KEY }}
+        run: |
+          PRED_ID="${{ steps.predict.outputs.prediction_id }}"
+          DELTA=${{ steps.delta.outputs.delta }}
+          PR_SCORE=${{ steps.pr_eval.outputs.score }}
+
+          node -e "
+            const { Predictor } = require('./dist/lib/predictor.js');
+            const p = new Predictor();
+            p.resolve('$PRED_ID', $DELTA, $PR_SCORE, '${{ github.run_id }}')
+              .then(() => console.log('Prediction resolved: $PRED_ID'))
+              .catch(e => console.error('Resolve failed:', e.message));
+          " 2>/dev/null || echo "Warning: could not resolve prediction"
 
       - name: AI quality assessment
         id: ai_eval
@@ -263,6 +313,23 @@ jobs:
             }
           " >> $GITHUB_OUTPUT
 
+      - name: Detect agent from branch
+        id: agent
+        run: |
+          BRANCH="${{ github.head_ref }}"
+          # Extract agent from branch prefix: pp/* → peter-parker, bot/* → bot, etc.
+          if [[ "$BRANCH" == pp/* ]]; then
+            echo "name=peter-parker" >> $GITHUB_OUTPUT
+          elif [[ "$BRANCH" == bot/* ]]; then
+            echo "name=bot" >> $GITHUB_OUTPUT
+          elif [[ "$BRANCH" == agent/* ]]; then
+            # agent/agent-name/description → agent-name
+            AGENT_NAME=$(echo "$BRANCH" | cut -d'/' -f2)
+            echo "name=$AGENT_NAME" >> $GITHUB_OUTPUT
+          else
+            echo "name=${{ github.event.pull_request.user.login }}" >> $GITHUB_OUTPUT
+          fi
+
       - name: Commit eval entry to PR branch
         run: |
           git config user.name "github-actions[bot]"
@@ -271,18 +338,22 @@ jobs:
           # Checkout the actual PR branch (not detached HEAD)
           git checkout ${{ github.head_ref }}
 
-          # Write eval entry
-          mkdir -p .jfl/eval
-          cat >> .jfl/eval/eval.jsonl << EOF
-          {"v":1,"ts":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","agent":"peter-parker","dataset":"ci-eval","metrics":{"test_pass_rate":${{ steps.pr_eval.outputs.score }},"tests_passed":${{ steps.pr_eval.outputs.passing }},"tests_total":${{ steps.pr_eval.outputs.total }}},"composite":${{ steps.pr_eval.outputs.score }},"delta":{"composite":${{ steps.delta.outputs.delta }}},"model_version":"pp-run","improved":${{ steps.delta.outputs.improved }},"pr_number":${{ github.event.pull_request.number }},"branch":"${{ github.head_ref }}"}
+          AGENT="${{ steps.agent.outputs.name }}"
+          PRED_ID="${{ steps.predict.outputs.prediction_id }}"
+
+          # Write eval entry (matches readEvals path: .jfl/eval.jsonl)
+          mkdir -p .jfl
+          cat >> .jfl/eval.jsonl << EOF
+          {"v":1,"ts":"$(date -u +%Y-%m-%dT%H:%M:%SZ)","agent":"$AGENT","dataset":"ci-eval","metrics":{"test_pass_rate":${{ steps.pr_eval.outputs.score }},"tests_passed":${{ steps.pr_eval.outputs.passing }},"tests_total":${{ steps.pr_eval.outputs.total }}},"composite":${{ steps.pr_eval.outputs.score }},"delta":{"composite":${{ steps.delta.outputs.delta }}},"model_version":"$AGENT-run","improved":${{ steps.delta.outputs.improved }},"pr_number":${{ github.event.pull_request.number }},"branch":"${{ github.head_ref }}","quality_score":${{ steps.ai_eval.outputs.quality_score }},"dim_correctness":${{ steps.ai_eval.outputs.dim_correctness }},"dim_coverage":${{ steps.ai_eval.outputs.dim_coverage }},"dim_architecture":${{ steps.ai_eval.outputs.dim_architecture }},"dim_value":${{ steps.ai_eval.outputs.dim_value }},"prediction_id":"$PRED_ID"}
           EOF
 
           # Write eval:scored event for hub file watcher
           cat >> .jfl/service-events.jsonl << EOF
-          {"ts":"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)","type":"eval:scored","source":"ci","data":{"agent":"peter-parker","composite":${{ steps.pr_eval.outputs.score }},"baseline":${{ steps.baseline.outputs.score }},"delta":${{ steps.delta.outputs.delta }},"improved":"${{ steps.delta.outputs.improved }}","pr_number":${{ github.event.pull_request.number }},"branch":"${{ github.head_ref }}","run_url":"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}","quality_score":${{ steps.ai_eval.outputs.quality_score }},"dim_correctness":${{ steps.ai_eval.outputs.dim_correctness }},"dim_coverage":${{ steps.ai_eval.outputs.dim_coverage }},"dim_architecture":${{ steps.ai_eval.outputs.dim_architecture }},"dim_value":${{ steps.ai_eval.outputs.dim_value }}}}
+          {"ts":"$(date -u +%Y-%m-%dT%H:%M:%S.000Z)","type":"eval:scored","source":"ci","data":{"agent":"$AGENT","composite":${{ steps.pr_eval.outputs.score }},"baseline":${{ steps.baseline.outputs.score }},"delta":${{ steps.delta.outputs.delta }},"improved":"${{ steps.delta.outputs.improved }}","pr_number":${{ github.event.pull_request.number }},"branch":"${{ github.head_ref }}","run_url":"${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}","quality_score":${{ steps.ai_eval.outputs.quality_score }},"dim_correctness":${{ steps.ai_eval.outputs.dim_correctness }},"dim_coverage":${{ steps.ai_eval.outputs.dim_coverage }},"dim_architecture":${{ steps.ai_eval.outputs.dim_architecture }},"dim_value":${{ steps.ai_eval.outputs.dim_value }}}}
           EOF
 
-          git add .jfl/eval/eval.jsonl .jfl/service-events.jsonl
+          git add .jfl/eval.jsonl .jfl/service-events.jsonl
+          git add .jfl/predictions/ 2>/dev/null || true
           git commit -m "eval: scored PR #${{ github.event.pull_request.number }} (composite=${{ steps.pr_eval.outputs.score }}, delta=${{ steps.delta.outputs.delta }})"
           git push origin ${{ github.head_ref }}
 
@@ -301,7 +372,7 @@ jobs:
                 "pr_url": "${{ github.event.pull_request.html_url }}",
                 "branch": "${{ github.head_ref }}",
                 "commit_sha": "${{ github.sha }}",
-                "agent": "peter-parker",
+                "agent": "${{ steps.agent.outputs.name }}",
                 "metrics": {
                   "test_pass_rate": ${{ steps.pr_eval.outputs.score }},
                   "test_count": ${{ steps.pr_eval.outputs.total }},
@@ -350,6 +421,27 @@ jobs:
             const dimArchitecture = '${{ steps.ai_eval.outputs.dim_architecture }}' || '—';
             const dimValue = '${{ steps.ai_eval.outputs.dim_value }}' || '—';
 
+            // Prediction data (optional)
+            const predId = '${{ steps.predict.outputs.prediction_id }}' || '';
+            const predDelta = parseFloat('${{ steps.predict.outputs.predicted_delta }}') || 0;
+            const predConf = parseFloat('${{ steps.predict.outputs.confidence }}') || 0;
+            const predRec = '${{ steps.predict.outputs.recommendation }}' || '';
+
+            const predictionSection = predId ? [
+              '',
+              `### Stratus Prediction`,
+              '',
+              `| Metric | Value |`,
+              `|--------|-------|`,
+              `| Predicted delta | ${predDelta >= 0 ? '+' : ''}${predDelta.toFixed(4)} |`,
+              `| Actual delta | ${delta >= 0 ? '+' : ''}${delta.toFixed(4)} |`,
+              `| Prediction error | ${Math.abs(predDelta - delta).toFixed(4)} |`,
+              `| Confidence | ${Math.round(predConf * 100)}% |`,
+              `| Recommendation | ${predRec} |`,
+              `| Direction correct | ${(predDelta >= 0) === (delta >= 0) ? ':white_check_mark:' : ':x:'} |`,
+              '',
+            ] : [];
+
             const body = [
               `## JFL Eval Results ${emoji}`,
               '',
@@ -369,7 +461,7 @@ jobs:
               `| Value | ${dimValue} |`,
               '',
               `> ${qualityReason}`,
-              '',
+              ...predictionSection,
               `**Verdict: ${verdict}**`,
               '',
               improved

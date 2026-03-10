@@ -858,11 +858,13 @@ program
 program
   .command("peter")
   .description("Peter Parker - model-routed agent orchestrator")
-  .argument("[action]", "setup, run, pr, experiment, status, or dashboard")
+  .argument("[action]", "setup, run, pr, experiment, autoresearch, status, or dashboard")
   .option("--cost", "Cost-optimized model routing (haiku-heavy)")
   .option("--balanced", "Balanced model routing (default)")
   .option("--quality", "Quality-first model routing (opus-heavy)")
   .option("-t, --task <task>", "Task to run (for run action)")
+  .option("-r, --rounds <n>", "Number of autoresearch rounds (default: 5)")
+  .option("--mode <mode>", "Experiment mode: default or autoresearch")
   .action(async (action, options) => {
     await peterCommand(action, options)
   })

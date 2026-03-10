@@ -56,7 +56,7 @@ describe("ci-setup", () => {
     const evalContent = readFileSync(join(templateDir, "jfl-eval.yml"), "utf-8")
 
     // Should commit eval entries
-    expect(evalContent).toContain(".jfl/eval/eval.jsonl")
+    expect(evalContent).toContain(".jfl/eval.jsonl")
     expect(evalContent).toContain("service-events.jsonl")
     expect(evalContent).toContain("git push")
   })
