@@ -250,6 +250,8 @@ Telemetry Agent detects issue
 | `insight-triggers-pp` | `telemetry:insight` (high) | Spawn PP to create fix PR |
 | `predict-before-pr` | `peter:pr-proposed` | Run Stratus prediction before acting |
 
+**Review gate:** Eval checks for AI review blockers before auto-merging. If the AI review requested changes (red findings), eval holds the merge even if tests improved. PRs must pass both eval AND review to auto-merge.
+
 **CI Workflows** that close the loop:
 
 - **`jfl-eval.yml`** — Runs on PP pull requests (`pp/` prefix). Checks out main for baseline, runs tests on PR, computes delta, runs AI quality assessment, posts `eval:scored` event to hub, comments on PR with eval results.
@@ -492,6 +494,7 @@ jfl services                  # Interactive TUI (no args)
 | `jfl validate-settings [--fix] [--json]` | Validate and repair .claude/settings.json |
 | `jfl preferences [--clear-ai] [--show]` | Manage JFL preferences |
 | `jfl profile [action]` | Manage profile (show, edit, export, import, generate) |
+| `jfl ci setup` | Deploy eval + review CI workflows to project |
 | `jfl test` | Test onboarding flow (isolated environment) |
 
 ### Context Hub
@@ -589,6 +592,7 @@ jfl services                  # Interactive TUI (no args)
 | `jfl peter setup [--cost\|--balanced\|--quality]` | Configure model routing profile |
 | `jfl peter run [--task text]` | Run orchestrator (interactive or headless) |
 | `jfl peter pr --task <text>` | Run agent, create PR on pp/ branch, emit event |
+| `jfl peter experiment` | Proactive: analyze trajectory, pick highest-value task, execute |
 | `jfl peter status` | Show config and recent events |
 | `jfl peter dashboard` | Live event stream TUI |
 | `jfl ralph [args]` | Ralph-tui agent loop orchestrator |
@@ -905,6 +909,16 @@ jfl wallet                    # Wallet and day pass status
 ---
 
 ## What's New
+
+**0.4.3**
+- Feat: **Self-driving loop proven end-to-end** — eval CI auto-merges improved PRs, requests changes on regressions. First auto-merged PP PR (#16) in 90 seconds
+- Feat: **`jfl peter experiment`** — proactive experiment selection. Analyzes trajectory history + eval trends, uses Stratus to rank proposals (heuristic fallback), picks highest-value task, spawns PP to execute
+- Feat: **`jfl ci setup`** — deploys eval + review CI workflows to any project with secret setup instructions
+- Feat: **Review gate** — eval checks for AI review blockers before auto-merging. PRs must pass both eval AND review
+- Feat: **Cron triggers** in flow engine — `cron:daily`, `cron:hourly`, `cron:every-30-minutes` patterns for proactive flows
+- Feat: **`jfl update` syncs flows** — new flow files deployed on update (merge-only, never overwrites customizations)
+- Fix: Eval CI self-sufficient — commits eval entries + service events to PR branch, no hub dependency for core loop
+- Test: 274 tests (up from 266)
 
 **0.4.2**
 - Fix: HTTP hook port correction — `jfl init` and `jfl update` now detect and fix hooks pointing to wrong Context Hub port
