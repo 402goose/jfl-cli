@@ -149,9 +149,7 @@ export async function onJournalAgentEnd(
   // Pi's AgentEndEvent has messages array; count them as turns
   const turnCount = (event.messages?.length ?? event.turnCount ?? 0)
   if (turnCount > 3) {
-    ctx.ui.setWidget("aboveEditor", [
-      "Journal entry recommended — use /journal to capture what was built.",
-    ])
+    ctx.ui.setStatus("journal", "Journal entry recommended — /journal")
   }
 }
 

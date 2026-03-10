@@ -51,6 +51,18 @@ function findPiSkills(cwd: string): string | null {
   return null
 }
 
+function findPiTheme(cwd: string): string | null {
+  const candidates = [
+    join(cwd, "node_modules", "@jfl", "pi", "themes", "jfl.theme.json"),
+    join(cwd, "packages", "pi", "themes", "jfl.theme.json"),
+    join(dirname(fileURLToPath(import.meta.url)), "..", "..", "packages", "pi", "themes", "jfl.theme.json"),
+  ]
+  for (const c of candidates) {
+    if (existsSync(c)) return c
+  }
+  return null
+}
+
 function hasPi(): boolean {
   try {
     execSync("which pi", { stdio: "ignore" })
@@ -71,16 +83,19 @@ export async function piCommand(options: PiOptions, extraArgs: string[] = []): P
   const cwd = process.cwd()
   const extensionPath = findPiExtension(cwd)
   const skillsPath = findPiSkills(cwd)
+  const themePath = findPiTheme(cwd)
 
   const args: string[] = [
     "--extension", extensionPath,
   ]
 
   if (skillsPath) {
-    args.push("--skills", skillsPath)
+    args.push("--skill", skillsPath)
   }
 
-  args.push("--theme", "jfl")
+  if (themePath) {
+    args.push("--theme", themePath)
+  }
 
   if (options.yolo) args.push("--yolo")
   if (options.mode) args.push("--mode", options.mode)
@@ -174,7 +189,7 @@ export async function piAgentsRunCommand(options: AgentsRunOptions): Promise<voi
     ]
 
     if (skillsPath) {
-      args.push("--skills", skillsPath)
+      args.push("--skill", skillsPath)
     }
 
     const env = {
