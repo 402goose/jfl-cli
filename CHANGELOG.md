@@ -1,0 +1,15 @@
+# jfl
+
+## 0.4.0
+
+### Minor Changes
+
+- 510bc67: surface registered services, openclaw agents, and service paths in dashboard
+- 510bc67: dashboard V2 — redesigned sidebar, flows page, health page, event filters, journal search
+- 510bc67: GTM → Portfolio full journal sync (#8)
+- 510bc67: CI/CD — Changesets + npm Trusted Publisher (#9)
+- 510bc67: context scope visualization + project navigation
+
+### Patch Changes
+
+- 510bc67: dashboard data accuracy — group agents by product, fix service hierarchy
