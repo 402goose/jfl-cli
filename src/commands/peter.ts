@@ -20,6 +20,8 @@ import { TrajectoryLoader } from "../lib/trajectory-loader.js"
 import { readEvals } from "../lib/eval-store.js"
 import type { EvalEntry } from "../types/eval.js"
 import { TrainingBuffer } from "../lib/training-buffer.js"
+import { PolicyHeadInference } from "../lib/policy-head.js"
+import type { RLState, RLAction } from "../lib/training-buffer.js"
 
 function hasRalphTui(): boolean {
   try {
@@ -436,6 +438,62 @@ interface ExperimentProposal {
   risk: string
 }
 
+function buildRLState(evals: EvalEntry[], trajectoryLength: number, recentDeltas: number[]): RLState {
+  const latest = evals.sort((a, b) => b.ts.localeCompare(a.ts))[0]
+  return {
+    composite_score: latest?.composite ?? 0,
+    dimension_scores: latest?.metrics ?? {},
+    tests_passing: (latest?.metrics?.tests_passed as number) ?? 0,
+    tests_total: (latest?.metrics?.tests_total as number) ?? 1,
+    trajectory_length: trajectoryLength,
+    recent_deltas: recentDeltas,
+    agent: "peter-parker",
+  }
+}
+
+function proposalToRLAction(p: ExperimentProposal): RLAction {
+  return {
+    type: "experiment",
+    description: p.task,
+    files_affected: [],
+    scope: "medium",
+    branch: "",
+  }
+}
+
+async function rerankWithPolicyHead(
+  projectRoot: string,
+  proposals: ExperimentProposal[],
+  evals: EvalEntry[],
+  recentDeltas: number[],
+): Promise<ExperimentProposal[]> {
+  const ph = new PolicyHeadInference(projectRoot)
+  if (!ph.isLoaded || proposals.length < 2) return proposals
+
+  const state = buildRLState(evals, 0, recentDeltas)
+  const actions = proposals.map(proposalToRLAction)
+
+  try {
+    const ranked = await ph.rankActions(state, actions)
+    const reordered = ranked.map(r => proposals[actions.indexOf(r.action)])
+
+    const stats = ph.stats!
+    console.log(chalk.magenta(`  Policy head re-ranked ${proposals.length} proposals (trained on ${stats.trained_on} tuples, rank_corr=${stats.rank_correlation.toFixed(3)})`))
+
+    for (let i = 0; i < ranked.length; i++) {
+      const r = ranked[i]
+      const p = reordered[i]
+      console.log(chalk.gray(`    #${i + 1} [pred=${r.predictedReward.toFixed(4)}] ${p.task.slice(0, 60)}`))
+    }
+    console.log()
+
+    return reordered
+  } catch (err: any) {
+    console.log(chalk.yellow(`  Policy head ranking failed: ${err.message}`))
+    return proposals
+  }
+}
+
 function writeJournalEntry(projectRoot: string, entry: Record<string, unknown>): void {
   const journalDir = path.join(projectRoot, ".jfl", "journal")
   if (!fs.existsSync(journalDir)) {
@@ -571,9 +629,16 @@ Respond with ONLY a JSON array, no other text.`
 
       const jsonMatch = content.match(/\[[\s\S]*\]/)
       if (jsonMatch) {
-        const proposals: ExperimentProposal[] = JSON.parse(jsonMatch[0])
+        let proposals: ExperimentProposal[] = JSON.parse(jsonMatch[0])
         if (proposals.length > 0) {
           proposals.sort((a, b) => b.predicted_delta - a.predicted_delta)
+
+          const recentDeltas = experimentEntries
+            .slice(0, 5)
+            .map(e => (e as any).score_delta ?? 0)
+            .filter((d: number) => typeof d === "number")
+
+          proposals = await rerankWithPolicyHead(projectRoot, proposals, evals, recentDeltas)
 
           console.log(chalk.bold("  Top 3 Proposals:\n"))
           for (let i = 0; i < Math.min(3, proposals.length); i++) {
@@ -731,7 +796,23 @@ async function runAutoresearch(projectRoot: string, rounds: number): Promise<voi
           }))
         ), 15)
 
-        const prompt = `Autoresearch round ${round}/${rounds}. Suggest ONE specific improvement.
+        const policyHead = new PolicyHeadInference(projectRoot)
+        const useMultiProposal = policyHead.isLoaded
+
+        const prompt = useMultiProposal
+          ? `Autoresearch round ${round}/${rounds}. Suggest 3 specific improvements ranked by expected impact.
+
+Eval history:
+${evalSummary}
+
+Already tried (avoid these):
+${pastTitles.map(t => `- ${t}`).join("\n") || "Nothing yet"}
+
+Previous rounds this session:
+${results.map(r => `- Round ${r.round}: "${r.task}" → delta=${r.delta > 0 ? "+" : ""}${r.delta.toFixed(4)}`).join("\n") || "None yet"}
+
+Respond with ONLY a JSON array of 3 objects: [{"task": "...", "predicted_delta": 0.0-1.0, "reasoning": "...", "risk": "..."}, ...]`
+          : `Autoresearch round ${round}/${rounds}. Suggest ONE specific improvement.
 
 Eval history:
 ${evalSummary}
@@ -747,14 +828,27 @@ Suggest the SINGLE highest-value change. JSON format:
 
         const response = await stratus.reason(prompt, {
           temperature: 0.8 + (round * 0.05),
-          maxTokens: 500,
+          maxTokens: useMultiProposal ? 1500 : 500,
           featureContext: "autoresearch",
         })
 
         const content = response.choices[0]?.message?.content || ""
-        const jsonMatch = content.match(/\{[\s\S]*\}/)
-        if (jsonMatch) {
-          proposal = JSON.parse(jsonMatch[0]) as ExperimentProposal
+
+        if (useMultiProposal) {
+          const jsonMatch = content.match(/\[[\s\S]*\]/)
+          if (jsonMatch) {
+            let proposals: ExperimentProposal[] = JSON.parse(jsonMatch[0])
+            const recentDeltas = results.slice(-5).map(r => r.delta)
+            proposals = await rerankWithPolicyHead(projectRoot, proposals, evals, recentDeltas)
+            if (proposals.length > 0) proposal = proposals[0]
+          }
+        }
+
+        if (!proposal) {
+          const jsonMatch = content.match(/\{[\s\S]*\}/)
+          if (jsonMatch) {
+            proposal = JSON.parse(jsonMatch[0]) as ExperimentProposal
+          }
         }
       } catch (err: any) {
         console.log(chalk.yellow(`  Stratus failed: ${err.message}`))
