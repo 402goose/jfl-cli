@@ -11,6 +11,7 @@
   },
   "files": [
     "dist",
+    "packages/pi",
     "scripts",
     "template",
     "clawdbot-skill",
