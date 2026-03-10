@@ -1,14 +1,15 @@
 {
   "id": "3629d3f8-d44a-4873-92ef-126116659bc4",
-  "status": "running",
+  "status": "interrupted",
   "startedAt": "2026-03-10T20:37:21.004Z",
-  "updatedAt": "2026-03-10T20:37:21.004Z",
+  "updatedAt": "2026-03-10T20:47:56.033Z",
   "agentPlugin": "claude",
   "trackerPlugin": "json",
   "prdPath": "/Users/alectaggart/CascadeProjects/jfl-cli/.ralph-tui/autoresearch-task.json",
-  "currentIteration": 0,
+  "currentIteration": 1,
   "maxIterations": 10,
   "totalTasks": 0,
-  "tasksCompleted": 0,
-  "cwd": "/Users/alectaggart/CascadeProjects/jfl-cli"
+  "tasksCompleted": 1,
+  "cwd": "/Users/alectaggart/CascadeProjects/jfl-cli",
+  "endedAt": "2026-03-10T20:47:56.033Z"
 }
