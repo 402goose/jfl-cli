@@ -775,11 +775,35 @@ async function runAutoresearch(projectRoot: string, rounds: number): Promise<voi
 
   const baseBranch = "main"
   const latestEval = evals.sort((a, b) => b.ts.localeCompare(a.ts))[0]
-  const baselinePassRate = latestEval?.composite ?? 0
   const baselineTotal = (latestEval?.metrics?.tests_total as number) ?? 0
-  const baselineScore = baselinePassRate + (baselineTotal > 0 ? baselineTotal * 0.001 : 0)
 
-  console.log(chalk.gray(`  Baseline composite: ${baselineScore.toFixed(4)} (${baselineTotal} tests)`))
+  // Run fresh baseline eval with current multi-dim formula
+  console.log(chalk.gray("  Running baseline eval..."))
+  const baselineTest = spawnSync("npx", ["jest", "--json", "--silent"], {
+    cwd: projectRoot, encoding: "utf-8", stdio: "pipe", timeout: 120000,
+  })
+  let baselinePassing = 0, baselineTotalFresh = 1
+  try {
+    const baseJson = JSON.parse(baselineTest.stdout || "{}")
+    baselinePassing = baseJson.numPassedTests || 0
+    baselineTotalFresh = baseJson.numTotalTests || 1
+  } catch {}
+  const baselinePassRate = baselineTotalFresh > 0 ? baselinePassing / baselineTotalFresh : 0
+  const baselineTscResult = spawnSync("npx", ["tsc", "--noEmit"], {
+    cwd: projectRoot, encoding: "utf-8", stdio: "pipe", timeout: 60000,
+  })
+  const baselineTscErrors = (baselineTscResult.stdout || "").split("\n").filter(l => l.includes("error TS")).length
+  const baselineTscScore = baselineTscErrors === 0 ? 1.0 : Math.max(0, 1.0 - (baselineTscErrors * 0.05))
+  const baselineComposite = (
+    baselinePassRate * 0.4 +
+    baselineTscScore * 0.2 +
+    1.0 * 0.15 +  // lint (assume clean)
+    1.0 * 0.15 +  // telemetry
+    0.0 * 0.1     // no new tests for baseline
+  )
+  const baselineScore = baselineComposite + (baselineTotalFresh > 0 ? baselineTotalFresh * 0.001 : 0)
+
+  console.log(chalk.gray(`  Baseline composite: ${baselineScore.toFixed(4)} (${baselinePassing}/${baselineTotalFresh} tests, tsc=${baselineTscScore.toFixed(2)})`))
 
   interface ExperimentResult {
     round: number
