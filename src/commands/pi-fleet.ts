@@ -84,8 +84,8 @@ export async function fleetSetup(options: { backend?: string; cpus?: number; mem
     console.log()
 
     await backend.createBase(baseName, {
-      cpus: options.cpus ?? 2,
-      memory: options.memory ?? 2048,
+      cpus: options.cpus ?? 4,
+      memory: options.memory ?? 4096,
     })
 
     console.log(chalk.yellow("\n  Base VM created. Next steps:"))
