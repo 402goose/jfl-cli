@@ -7,6 +7,9 @@
  * @purpose Client for calling Stratus X1 reasoning API to synthesize context
  */
 
+import { readFileSync, existsSync } from "node:fs"
+import { resolve } from "node:path"
+
 // ============================================================================
 // Types
 // ============================================================================
@@ -89,15 +92,13 @@ export class StratusClient {
 
   private readDotenv(): Record<string, string> {
     try {
-      const fs = require("fs")
-      const p = require("path")
-      const envPath = p.resolve(process.cwd(), ".env")
-      if (!fs.existsSync(envPath)) return {}
-      const content = fs.readFileSync(envPath, "utf-8") as string
+      const envPath = resolve(process.cwd(), ".env")
+      if (!existsSync(envPath)) return {}
+      const content = readFileSync(envPath, "utf-8")
       const result: Record<string, string> = {}
       for (const line of content.split("\n")) {
-        const match = line.match(/^([A-Z_]+)=(.+)$/)
-        if (match) result[match[1]] = match[2].trim()
+        const match = line.match(/^([A-Z_][A-Z0-9_]*)=(.+)$/)
+        if (match) result[match[1]] = match[2].trim().replace(/^["']|["']$/g, "")
       }
       return result
     } catch { return {} }
