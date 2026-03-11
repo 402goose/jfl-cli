@@ -7,3 +7,4 @@
 =======
 {"v":1,"ts":"2026-03-11T19:44:14.936Z","agent":"autoresearch","run_id":"autoresearch-r3-1773258254936","dataset":"local-eval","metrics":{"test_pass_rate":0.9963503649635036,"tests_passed":273,"tests_total":274},"composite":0.9963503649635036,"delta":{"composite":-0.2739999999999999},"model_version":"pp-autoresearch","notes":"branch:pp/autoresearch-r3-1773258244194 improved:false"}
 >>>>>>> 7f8dc9c (feat: multi-dimension eval (tests + tsc + lint + telemetry + new tests))
+{"v":1,"ts":"2026-03-11T19:53:03Z","agent":"peter-parker","dataset":"ci-eval","metrics":{"test_pass_rate":0.0000,"tests_passed":0,"tests_total":1},"composite":0.0000,"delta":{"composite":0.0000},"model_version":"peter-parker-run","improved":false,"pr_number":21,"branch":"pp/fix-1773258692608","quality_score":0.5,"dim_correctness":,"dim_coverage":,"dim_architecture":,"dim_value":,"prediction_id":""}
