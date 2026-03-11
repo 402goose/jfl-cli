@@ -35,6 +35,7 @@ export function analyzeEvents(events: TelemetryEvent[], periodHours: number): Te
   const filtered = events.filter(e => e.ts >= cutoff)
 
   const costMap = new Map<string, CostBreakdown>()
+  const operationalCostMap = new Map<string, CostBreakdown>()
   const cmdMap = new Map<string, { count: number; totalDuration: number; successes: number }>()
   const errorsByType: Record<string, number> = {}
   let totalErrors = 0
@@ -47,8 +48,10 @@ export function analyzeEvents(events: TelemetryEvent[], periodHours: number): Te
 
   for (const e of filtered) {
     if (e.event === 'stratus:api_call' || e.event === 'peter:agent_cost') {
+      const isOperational = e.event === 'peter:agent_cost'
+      const targetMap = isOperational ? operationalCostMap : costMap
       const model = e.model_name || e.stratus_model || 'unknown'
-      const existing = costMap.get(model) || {
+      const existing = targetMap.get(model) || {
         model,
         calls: 0,
         promptTokens: 0,
@@ -63,7 +66,7 @@ export function analyzeEvents(events: TelemetryEvent[], periodHours: number): Te
       existing.totalTokens += e.total_tokens || 0
       existing.estimatedCostUsd += e.estimated_cost_usd || 0
       existing.avgLatencyMs = ((existing.avgLatencyMs * (existing.calls - 1)) + (e.duration_ms || 0)) / existing.calls
-      costMap.set(model, existing)
+      targetMap.set(model, existing)
     }
 
     if (e.category === 'command' && e.command) {
@@ -139,6 +142,9 @@ export function analyzeEvents(events: TelemetryEvent[], periodHours: number): Te
   const costs = Array.from(costMap.values()).sort((a, b) => b.estimatedCostUsd - a.estimatedCostUsd)
   const totalCostUsd = costs.reduce((sum, c) => sum + c.estimatedCostUsd, 0)
 
+  const operationalCosts = Array.from(operationalCostMap.values()).sort((a, b) => b.estimatedCostUsd - a.estimatedCostUsd)
+  const totalOperationalCostUsd = operationalCosts.reduce((sum, c) => sum + c.estimatedCostUsd, 0)
+
   const commands: CommandStats[] = Array.from(cmdMap.entries())
     .map(([command, stats]) => ({
       command,
@@ -154,6 +160,8 @@ export function analyzeEvents(events: TelemetryEvent[], periodHours: number): Te
     totalEvents: filtered.length,
     costs,
     totalCostUsd,
+    operationalCosts,
+    totalOperationalCostUsd,
     commands,
     errors: { total: totalErrors, byType: errorsByType },
     hubHealth: {
@@ -318,8 +326,8 @@ export function formatDigest(digest: TelemetryDigest, format: 'text' | 'json'): 
   lines.push(`  Generated: ${digest.generatedAt.replace('T', ' ').slice(0, 19)}`)
   lines.push(`  Total events: ${digest.totalEvents}\n`)
 
-  if (digest.costs.length > 0) {
-    lines.push('  Model Costs')
+  if (digest.costs.length > 0 || digest.operationalCosts?.length > 0) {
+    lines.push('  Session Costs (monitored for anomalies)')
     lines.push('  ' + '-'.repeat(72))
     lines.push('  ' + 'Model'.padEnd(35) + 'Calls'.padEnd(8) + 'Tokens'.padEnd(12) + 'Cost')
     lines.push('  ' + '-'.repeat(72))
@@ -333,8 +341,26 @@ export function formatDigest(digest: TelemetryDigest, format: 'text' | 'json'): 
       )
     }
     lines.push('  ' + '-'.repeat(72))
-    lines.push('  ' + 'Total'.padEnd(55) + `$${digest.totalCostUsd.toFixed(4)}`)
+    lines.push('  ' + 'Session Total'.padEnd(55) + `$${digest.totalCostUsd.toFixed(4)}`)
     lines.push('')
+
+    if (digest.operationalCosts?.length > 0) {
+      lines.push('  Operational Costs (PP, training — not monitored for spikes)')
+      lines.push('  ' + '-'.repeat(72))
+      for (const c of digest.operationalCosts) {
+        lines.push(
+          '  ' +
+          c.model.padEnd(35) +
+          String(c.calls).padEnd(8) +
+          String(c.totalTokens).padEnd(12) +
+          `$${c.estimatedCostUsd.toFixed(4)}`
+        )
+      }
+      lines.push('  ' + '-'.repeat(72))
+      lines.push('  ' + 'Operational Total'.padEnd(55) + `$${(digest.totalOperationalCostUsd ?? 0).toFixed(4)}`)
+      lines.push('  ' + 'Grand Total'.padEnd(55) + `$${(digest.totalCostUsd + (digest.totalOperationalCostUsd ?? 0)).toFixed(4)}`)
+      lines.push('')
+    }
   }
 
   if (digest.commands.length > 0) {

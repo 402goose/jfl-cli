@@ -139,14 +139,16 @@ export class TelemetryAgent {
       }
     }
 
-    if (this.state.baseline_cost > 0 && digest.totalCostUsd > this.state.baseline_cost * 2) {
+    const sessionCost = digest.totalCostUsd
+    const operationalCost = digest.totalOperationalCostUsd
+    if (this.state.baseline_cost > 0 && sessionCost > this.state.baseline_cost * 2) {
       insights.push({
         id: 'cost:spike',
         ts: now,
         type: 'cost_spike',
         severity: 'high',
-        title: 'Cost spike detected',
-        description: `Cost $${digest.totalCostUsd.toFixed(4)} is ${(digest.totalCostUsd / this.state.baseline_cost).toFixed(1)}x the baseline $${this.state.baseline_cost.toFixed(4)}`,
+        title: 'Session cost spike detected',
+        description: `Session cost $${sessionCost.toFixed(4)} is ${(sessionCost / this.state.baseline_cost).toFixed(1)}x the baseline $${this.state.baseline_cost.toFixed(4)} (operational cost $${operationalCost.toFixed(4)} excluded from spike detection)`,
         source_pattern: 'cost',
         is_new: true,
       })
@@ -191,15 +193,13 @@ export class TelemetryAgent {
     // A "spike" is defined as 3x the current baseline (or 2x for errors)
     const EMA_ALPHA = 0.15 // Weight for new value (lower = smoother, less reactive to spikes)
 
-    if (digest.totalCostUsd > 0) {
-      const costSpike = this.state.baseline_cost > 0 && digest.totalCostUsd > this.state.baseline_cost * 3
+    if (sessionCost > 0) {
+      const costSpike = this.state.baseline_cost > 0 && sessionCost > this.state.baseline_cost * 3
       if (!costSpike) {
-        // Update baseline using EMA: new_baseline = alpha * current + (1-alpha) * old_baseline
         this.state.baseline_cost = this.state.baseline_cost === 0
-          ? digest.totalCostUsd
-          : EMA_ALPHA * digest.totalCostUsd + (1 - EMA_ALPHA) * this.state.baseline_cost
+          ? sessionCost
+          : EMA_ALPHA * sessionCost + (1 - EMA_ALPHA) * this.state.baseline_cost
       }
-      // If it's a spike, we don't update the baseline - let it remain stable
     }
 
     if (digest.errors.total > 0) {
@@ -224,7 +224,9 @@ export class TelemetryAgent {
       health_trajectory: this.state.health_trajectory.slice(-10),
       digest_summary: {
         events: digest.totalEvents,
-        cost: digest.totalCostUsd,
+        session_cost: digest.totalCostUsd,
+        operational_cost: digest.totalOperationalCostUsd,
+        total_cost: digest.totalCostUsd + digest.totalOperationalCostUsd,
         errors: digest.errors.total,
         sessions: digest.sessions.started,
         flows_triggered: digest.flows.triggered,

@@ -32,6 +32,8 @@ export class FlowEngine {
   private children: ChildHubInfo[] = []
   private childAbortControllers: AbortController[] = []
   private cronTimers: ReturnType<typeof setInterval>[] = []
+  private activeSpawns = new Map<string, { pid: number; startedAt: string; worktree?: string }>()
+  private lastSpawnTime = new Map<string, number>()
 
   constructor(eventBus: MAPEventBus, projectRoot: string) {
     this.eventBus = eventBus
@@ -512,10 +514,34 @@ export class FlowEngine {
       }
 
       case "spawn": {
-        const { spawn: nodeSpawn } = await import("child_process")
+        const { spawn: nodeSpawn, execSync: spawnExecSync } = await import("child_process")
+
+        if (this.activeSpawns.has(flow.name)) {
+          const active = this.activeSpawns.get(flow.name)!
+          try {
+            process.kill(active.pid, 0)
+            console.log(`[FlowEngine] Spawn skipped for "${flow.name}": already running (PID ${active.pid})`)
+            break
+          } catch {
+            this.cleanupSpawn(flow.name)
+          }
+        }
+
+        const cooldownHours = action.cooldown_hours ?? 0
+        if (cooldownHours > 0) {
+          const lastSpawn = this.lastSpawnTime.get(flow.name) || 0
+          const cooldownMs = cooldownHours * 60 * 60 * 1000
+          const elapsed = Date.now() - lastSpawn
+          if (elapsed < cooldownMs) {
+            const remaining = Math.round((cooldownMs - elapsed) / 3600000 * 10) / 10
+            console.log(`[FlowEngine] Spawn skipped for "${flow.name}": cooldown (${remaining}h remaining)`)
+            break
+          }
+        }
+
         const cmd = this.interpolate(action.command, event)
         const args = (action.args || []).map(a => this.interpolate(a, event))
-        const cwd = action.cwd ? this.interpolate(action.cwd, event) : this.projectRoot
+        const target = action.target || "worktree"
         const env: Record<string, string> = { ...process.env as Record<string, string> }
         delete env.CLAUDECODE
         delete env.CLAUDE_CODE
@@ -524,16 +550,57 @@ export class FlowEngine {
             env[k] = this.interpolate(v, event)
           }
         }
+
+        let cwd: string
+        let worktreePath: string | undefined
+
+        if (target === "worktree") {
+          const worktreeId = `pp-${flow.name}-${Date.now()}`
+          worktreePath = path.join("/tmp", `jfl-${worktreeId}`)
+          try {
+            spawnExecSync(`git worktree add "${worktreePath}" -b "${worktreeId}" origin/main`, {
+              cwd: this.projectRoot,
+              stdio: "pipe",
+              timeout: 30000,
+            })
+            console.log(`[FlowEngine] Worktree created for "${flow.name}": ${worktreePath}`)
+          } catch (err: any) {
+            console.error(`[FlowEngine] Worktree creation failed for "${flow.name}": ${err.message}`)
+            break
+          }
+          cwd = worktreePath
+          env.JFL_WORKTREE = worktreePath
+          env.JFL_SPAWN_FLOW = flow.name
+        } else {
+          cwd = action.cwd ? this.interpolate(action.cwd, event) : this.projectRoot
+        }
+
         const child = nodeSpawn(cmd, args, {
           cwd,
           env,
           stdio: "ignore",
           detached: action.detach ?? true,
         })
+
         child.on('error', (err) => {
           console.error(`[FlowEngine] Spawn failed in flow "${flow.name}": ${err.message}`)
+          this.cleanupSpawn(flow.name)
         })
+
+        child.on('exit', () => {
+          this.cleanupSpawn(flow.name)
+        })
+
         if (action.detach !== false) child.unref()
+
+        this.activeSpawns.set(flow.name, {
+          pid: child.pid!,
+          startedAt: new Date().toISOString(),
+          worktree: worktreePath,
+        })
+        this.lastSpawnTime.set(flow.name, Date.now())
+
+        console.log(`[FlowEngine] Spawned "${flow.name}" (PID ${child.pid}, target=${target}${worktreePath ? `, worktree=${worktreePath}` : ''})`)
         break
       }
     }
@@ -564,6 +631,31 @@ export class FlowEngine {
       if (typeof value === "object") return JSON.stringify(value)
       return String(value)
     })
+  }
+
+  private cleanupSpawn(flowName: string): void {
+    const active = this.activeSpawns.get(flowName)
+    if (!active) return
+
+    if (active.worktree) {
+      try {
+        const { execSync: cleanupExec } = require("child_process")
+        cleanupExec(`git worktree remove "${active.worktree}" --force 2>/dev/null; git branch -D "pp-${flowName}-"* 2>/dev/null || true`, {
+          cwd: this.projectRoot,
+          stdio: "pipe",
+          timeout: 15000,
+        })
+        console.log(`[FlowEngine] Worktree cleaned up for "${flowName}": ${active.worktree}`)
+      } catch {
+        console.warn(`[FlowEngine] Worktree cleanup failed for "${flowName}" — manual cleanup may be needed`)
+      }
+    }
+
+    this.activeSpawns.delete(flowName)
+  }
+
+  getActiveSpawns(): Map<string, { pid: number; startedAt: string; worktree?: string }> {
+    return new Map(this.activeSpawns)
   }
 
   private evaluateGate(gate?: FlowGate): "time" | "approval" | null {

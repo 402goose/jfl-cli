@@ -25,6 +25,8 @@ export interface TelemetryDigest {
   totalEvents: number
   costs: CostBreakdown[]
   totalCostUsd: number
+  operationalCosts: CostBreakdown[]
+  totalOperationalCostUsd: number
   commands: CommandStats[]
   errors: {
     total: number
