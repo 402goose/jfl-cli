@@ -870,8 +870,35 @@ async function runAutoresearch(projectRoot: string, rounds: number): Promise<voi
 
         const contextBlock = `${journalContext}${knowledgeContext}${trainingContext}`
 
+        const systemContext = `You are an autoresearch agent improving a TypeScript CLI codebase.
+
+IMPORTANT: The baseline has ALL ${baselineTotal} tests passing (pass_rate=1.0). DO NOT try to "fix failing tests" — there are none on the baseline. Any test failures you see in eval history were CAUSED by previous experiment attempts, not pre-existing issues.
+
+Scoring dimensions (weighted composite):
+- test_pass_rate (40%): Must stay at 1.0 — DO NOT break existing tests
+- tsc_errors (20%): TypeScript compilation must stay clean
+- lint_score (15%): ESLint errors if configured
+- telemetry_health (15%): Runtime error rate
+- new_tests_added (10%): BONUS for adding new test coverage
+
+HIGH-VALUE experiment types (prefer these):
+- Add new test files covering untested modules
+- Refactor bloated files (reduce complexity without changing behavior)
+- Fix TypeScript strict mode issues
+- Add missing error handling
+- Improve code documentation
+- Remove dead code or unused imports
+- Optimize hot paths identified by telemetry
+
+LOW-VALUE experiments (avoid these):
+- "Fix the failing test" — there is no failing test on baseline
+- Rewriting working code without measurable improvement
+- Changes that risk breaking existing tests`
+
         const prompt = useMultiProposal
-          ? `Autoresearch round ${round}/${rounds}. Suggest 3 specific improvements ranked by expected impact.
+          ? `${systemContext}
+
+Autoresearch round ${round}/${rounds}. Suggest 3 specific improvements ranked by expected impact.
 
 Eval history:
 ${evalSummary}
@@ -884,7 +911,9 @@ ${results.map(r => `- Round ${r.round}: "${r.task}" → delta=${r.delta > 0 ? "+
 ${contextBlock}
 
 Respond with ONLY a JSON array of 3 objects: [{"task": "...", "predicted_delta": 0.0-1.0, "reasoning": "...", "risk": "..."}, ...]`
-          : `Autoresearch round ${round}/${rounds}. Suggest ONE specific improvement.
+          : `${systemContext}
+
+Autoresearch round ${round}/${rounds}. Suggest ONE specific improvement.
 
 Eval history:
 ${evalSummary}
