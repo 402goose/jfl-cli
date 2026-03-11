@@ -30,12 +30,30 @@ export interface VMBackend {
   copyFrom(name: string, remotePath: string, localPath: string): Promise<void>
 }
 
+function lumeBin(): string {
+  const localBin = join(process.env.HOME || "", ".local", "bin", "lume")
+  if (existsSync(localBin)) return localBin
+  try {
+    return execSync("which lume", { stdio: "pipe" }).toString().trim()
+  } catch {
+    return "lume"
+  }
+}
+
+function lume(args: string, opts?: { stdio?: "pipe" | "inherit"; timeout?: number }): string {
+  const bin = lumeBin()
+  return execSync(`"${bin}" ${args}`, {
+    stdio: opts?.stdio ?? "pipe",
+    timeout: opts?.timeout ?? 30000,
+  }).toString().trim()
+}
+
 export class LumeBackend implements VMBackend {
   name = "lume"
 
   isInstalled(): boolean {
     try {
-      execSync("which lume", { stdio: "pipe" })
+      lume("--version")
       return true
     } catch {
       return false
@@ -51,18 +69,19 @@ export class LumeBackend implements VMBackend {
     const cpus = opts?.cpus ?? 2
     const memory = opts?.memory ?? 2048
     console.log(`  Creating base VM "${name}" (${cpus} CPU, ${memory}MB RAM)...`)
-    execSync(`lume create ${name} --os macos --cpu ${cpus} --memory ${memory}`, { stdio: "inherit", timeout: 1800000 })
+    lume(`create ${name} --os macos --cpu ${cpus} --memory ${memory} --ipsw latest --unattended sequoia`, { stdio: "inherit", timeout: 1800000 })
   }
 
   async clone(base: string, name: string): Promise<void> {
-    execSync(`lume clone ${base} ${name}`, { stdio: "pipe", timeout: 60000 })
+    lume(`clone ${base} ${name}`, { timeout: 60000 })
   }
 
   async start(name: string, headless = true): Promise<void> {
+    const bin = lumeBin()
     const args = ["run", name]
     if (headless) args.push("--no-display")
 
-    const child = nodeSpawn("lume", args, {
+    const child = nodeSpawn(bin, args, {
       stdio: "ignore",
       detached: true,
     })
@@ -79,25 +98,21 @@ export class LumeBackend implements VMBackend {
   }
 
   async stop(name: string): Promise<void> {
-    try {
-      execSync(`lume stop ${name}`, { stdio: "pipe", timeout: 30000 })
-    } catch {}
+    try { lume(`stop ${name}`) } catch {}
   }
 
   async destroy(name: string): Promise<void> {
     await this.stop(name)
-    try {
-      execSync(`lume delete ${name}`, { stdio: "pipe", timeout: 30000 })
-    } catch {}
+    try { lume(`delete ${name} --force`) } catch {}
   }
 
   async getIP(name: string): Promise<string> {
     try {
-      const output = execSync(`lume get ${name} -f json`, { stdio: "pipe", timeout: 10000 }).toString().trim()
+      const output = lume(`get ${name} -f json`, { timeout: 10000 })
       const info = JSON.parse(output)
       return info.ip || info.IP || info.ipAddress || ""
     } catch {
-      const output = execSync(`lume get ${name}`, { stdio: "pipe", timeout: 10000 }).toString().trim()
+      const output = lume(`get ${name}`, { timeout: 10000 })
       const match = output.match(/(?:ip|IP|address)[:\s]+(\d+\.\d+\.\d+\.\d+)/)
       return match?.[1] || ""
     }
@@ -105,7 +120,7 @@ export class LumeBackend implements VMBackend {
 
   async list(): Promise<VMInfo[]> {
     try {
-      const output = execSync("lume ls -f json", { stdio: "pipe", timeout: 10000 }).toString().trim()
+      const output = lume("ls -f json", { timeout: 10000 })
       if (!output) return []
       const vms = JSON.parse(output)
       return (Array.isArray(vms) ? vms : []).map((vm: any) => ({
@@ -116,7 +131,7 @@ export class LumeBackend implements VMBackend {
         memory: vm.memory || vm.Memory,
       }))
     } catch {
-      const output = execSync("lume ls", { stdio: "pipe", timeout: 10000 }).toString().trim()
+      const output = lume("ls", { timeout: 10000 })
       const vms: VMInfo[] = []
       for (const line of output.split("\n").slice(1)) {
         const parts = line.trim().split(/\s+/)
@@ -129,17 +144,13 @@ export class LumeBackend implements VMBackend {
   }
 
   async exec(name: string, command: string): Promise<string> {
-    const ip = await this.getIP(name)
-    return execSync(
-      `ssh -o StrictHostKeyChecking=no -o ConnectTimeout=5 admin@${ip} '${command.replace(/'/g, "'\\''")}'`,
-      { stdio: "pipe", timeout: 60000 }
-    ).toString().trim()
+    return lume(`ssh ${name} -- ${command}`, { timeout: 60000 })
   }
 
   async copyTo(name: string, localPath: string, remotePath: string): Promise<void> {
     const ip = await this.getIP(name)
     execSync(
-      `scp -o StrictHostKeyChecking=no "${localPath}" admin@${ip}:"${remotePath}"`,
+      `scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null "${localPath}" admin@${ip}:"${remotePath}"`,
       { stdio: "pipe", timeout: 60000 }
     )
   }
@@ -147,7 +158,7 @@ export class LumeBackend implements VMBackend {
   async copyFrom(name: string, remotePath: string, localPath: string): Promise<void> {
     const ip = await this.getIP(name)
     execSync(
-      `scp -o StrictHostKeyChecking=no admin@${ip}:"${remotePath}" "${localPath}"`,
+      `scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null admin@${ip}:"${remotePath}" "${localPath}"`,
       { stdio: "pipe", timeout: 60000 }
     )
   }

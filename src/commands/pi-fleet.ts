@@ -42,21 +42,29 @@ export async function fleetSetup(options: { backend?: string; cpus?: number; mem
     console.log(chalk.green(`  ✓ ${backend.name} installed`))
   }
 
-  // Step 2: Boot arg for >2 VMs
+  // Step 2: Boot arg for >2 macOS VMs
   if (!options.skipBootArg) {
     try {
       const quota = execSync("nvram hv_apple_isa_vm_quota 2>/dev/null || echo 'not set'", { stdio: "pipe" }).toString().trim()
       if (quota.includes("not set") || quota.includes("hv_apple_isa_vm_quota\t0")) {
-        console.log(chalk.yellow("\n  VM quota boot arg not set (limits to 2 macOS VMs)"))
-        console.log(chalk.white("  To allow up to 255 concurrent VMs, run:"))
+        console.log(chalk.yellow("\n  VM quota boot arg not set"))
+        console.log(chalk.gray("  Apple limits macOS VMs to 2 concurrent by default."))
+        console.log(chalk.gray("  For agent fleets (3+ VMs), this needs to be raised.\n"))
+        console.log(chalk.white("  What it does:"))
+        console.log(chalk.gray("    Sets hv_apple_isa_vm_quota=255 in NVRAM"))
+        console.log(chalk.gray("    Tells the Hypervisor.framework to allow up to 255 VMs"))
+        console.log(chalk.gray("    Persists across reboots. Reversible with:"))
+        console.log(chalk.gray("      sudo nvram -d hv_apple_isa_vm_quota\n"))
+        console.log(chalk.white("  To set it:"))
         console.log(chalk.cyan("    sudo nvram hv_apple_isa_vm_quota=255"))
-        console.log(chalk.gray("  Then reboot. This is safe and reversible."))
-        console.log(chalk.gray("  Skip with --skip-boot-arg if you only need 1-2 agents.\n"))
+        console.log(chalk.gray("    Then reboot.\n"))
+        console.log(chalk.gray("  Skip this check: --skip-boot-arg (limits fleet to 2 agents)"))
       } else {
-        console.log(chalk.green(`  ✓ VM quota: ${quota.split("\t").pop()}`))
+        const val = quota.split("\t").pop() || "?"
+        console.log(chalk.green(`  ✓ VM quota: ${val} (up to ${parseInt(val) || "?"} concurrent VMs)`))
       }
     } catch {
-      console.log(chalk.gray("  ⚠ Could not check VM quota boot arg"))
+      console.log(chalk.gray("  ⚠ Could not check VM quota (nvram access may require full disk access)"))
     }
   }
 
