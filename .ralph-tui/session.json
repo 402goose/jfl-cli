@@ -1,12 +1,12 @@
 {
   "version": 1,
   "sessionId": "d40ca7b6-6570-4ac5-a98a-924a0b5dfa00",
-  "status": "running",
+  "status": "interrupted",
   "startedAt": "2026-03-10T23:58:08.187Z",
-  "updatedAt": "2026-03-10T23:58:08.189Z",
-  "currentIteration": 0,
+  "updatedAt": "2026-03-11T00:09:57.693Z",
+  "currentIteration": 1,
   "maxIterations": 10,
-  "tasksCompleted": 0,
+  "tasksCompleted": 1,
   "isPaused": false,
   "agentPlugin": "claude",
   "trackerState": {
@@ -17,16 +17,25 @@
       {
         "id": "US-001",
         "title": "Investigate and improve the ranking/retrieval quality metrics (ndcg and precisio",
-        "status": "open",
-        "completedInSession": false
+        "status": "completed",
+        "completedInSession": true
       }
     ]
   },
-  "iterations": [],
+  "iterations": [
+    {
+      "iteration": 1,
+      "status": "completed",
+      "taskId": "US-001",
+      "taskTitle": "Investigate and improve the ranking/retrieval quality metrics (ndcg and precisio",
+      "taskCompleted": true,
+      "durationMs": 341910,
+      "startedAt": "2026-03-10T23:58:08.189Z",
+      "endedAt": "2026-03-11T00:03:50.099Z"
+    }
+  ],
   "skippedTaskIds": [],
   "cwd": "/Users/alectaggart/CascadeProjects/jfl-cli",
-  "activeTaskIds": [
-    "US-001"
-  ],
+  "activeTaskIds": [],
   "subagentPanelVisible": false
 }
