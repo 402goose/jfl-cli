@@ -17,7 +17,7 @@ import { writePeterParkerConfig, readCurrentProfile } from "../lib/peter-parker-
 import { PeterParkerBridge } from "../lib/peter-parker-bridge.js"
 import { getProjectHubUrl } from "../utils/context-hub-port.js"
 import { TrajectoryLoader } from "../lib/trajectory-loader.js"
-import { readEvals } from "../lib/eval-store.js"
+import { readEvals, appendEval } from "../lib/eval-store.js"
 import type { EvalEntry } from "../types/eval.js"
 import { TrainingBuffer } from "../lib/training-buffer.js"
 import { PolicyHeadInference } from "../lib/policy-head.js"
@@ -501,6 +501,37 @@ function writeJournalEntry(projectRoot: string, entry: Record<string, unknown>):
   }
   const journalFile = path.join(journalDir, "peter-experiment.jsonl")
   fs.appendFileSync(journalFile, JSON.stringify(entry) + "\n")
+}
+
+/**
+ * Infer scope labels from changed file paths.
+ * Maps file paths to semantic scope identifiers for cross-repo impact detection.
+ * e.g., src/commands/eval.ts → cli:commands/eval
+ */
+function inferScopes(changedFiles: string[]): string[] {
+  const scopes = new Set<string>()
+  for (const file of changedFiles) {
+    if (file.startsWith("src/commands/")) {
+      const cmd = file.replace("src/commands/", "").replace(/\.ts$/, "").replace(/__tests__\/.*/, "")
+      if (cmd) scopes.add(`cli:commands/${cmd}`)
+    } else if (file.startsWith("src/lib/")) {
+      const lib = file.replace("src/lib/", "").replace(/\.ts$/, "")
+      scopes.add(`cli:lib/${lib}`)
+    } else if (file.startsWith("src/types/")) {
+      scopes.add("cli:types")
+    } else if (file.startsWith("dashboard/")) {
+      scopes.add("cli:dashboard")
+    } else if (file.startsWith(".github/")) {
+      scopes.add("cli:ci")
+    } else if (file === "README.md" || file.startsWith("docs/")) {
+      scopes.add("cli:docs")
+    } else if (file === "package.json" || file === "tsconfig.json") {
+      scopes.add("cli:config")
+    } else if (file.startsWith(".jfl/")) {
+      scopes.add("cli:jfl-config")
+    }
+  }
+  return [...scopes]
 }
 
 function buildEvalSummary(evals: EvalEntry[], limit: number = 10): string {
@@ -999,6 +1030,31 @@ Suggest the SINGLE highest-value change. JSON format:
       agent_id: "peter-parker",
     })
 
+    // Persist eval entry (dual-writes to GTM parent automatically)
+    appendEval({
+      v: 1,
+      ts: new Date().toISOString(),
+      agent: "autoresearch",
+      run_id: `autoresearch-r${round}-${Date.now()}`,
+      dataset: "local-eval",
+      metrics: {
+        test_pass_rate: passRate,
+        tests_passed: passing,
+        tests_total: total,
+      },
+      composite: score,
+      delta: { composite: delta },
+      model_version: "pp-autoresearch",
+      notes: `branch:${branchName} improved:${delta > 0 || testsAdded > 0}`,
+    }, projectRoot)
+
+    // Detect scope from changed files
+    const changedFilesResult = spawnSync("git", ["diff", "--name-only", "HEAD~1"], {
+      cwd: projectRoot, encoding: "utf-8", stdio: "pipe",
+    })
+    const changedFiles = (changedFilesResult.stdout || "").trim().split("\n").filter(Boolean)
+    const scopes = inferScopes(changedFiles)
+
     const tb = new TrainingBuffer(projectRoot)
     tb.append({
       agent: "peter-parker",
@@ -1014,7 +1070,7 @@ Suggest the SINGLE highest-value change. JSON format:
       action: {
         type: "experiment",
         description: proposal.task,
-        files_affected: [],
+        files_affected: changedFiles,
         scope: "medium",
         branch: branchName,
       },
@@ -1030,6 +1086,8 @@ Suggest the SINGLE highest-value change. JSON format:
         branch: branchName,
         autoresearch_round: round,
         source: "autoresearch",
+        scopes,
+        changed_files: changedFiles,
       },
     })
 

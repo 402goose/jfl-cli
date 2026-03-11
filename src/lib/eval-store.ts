@@ -65,20 +65,52 @@ export function appendEval(entry: EvalEntry, projectRoot?: string): void {
   }
 }
 
-export function readEvals(projectRoot?: string): EvalEntry[] {
-  const root = projectRoot ?? findProjectRoot()
-  const evalPath = getEvalPath(root)
-
+function readEvalsFromPath(evalPath: string): EvalEntry[] {
   if (!fs.existsSync(evalPath)) return []
-
   const entries: EvalEntry[] = []
   const lines = fs.readFileSync(evalPath, "utf-8").split("\n")
-
   for (const line of lines) {
     if (!line.trim()) continue
     try {
       entries.push(JSON.parse(line) as EvalEntry)
     } catch {}
+  }
+  return entries
+}
+
+/**
+ * Read evals from local .jfl/eval.jsonl AND from registered service paths
+ * when running as a GTM or portfolio hub. This gives the GTM dashboard
+ * a unified view of all agents across all services.
+ */
+export function readEvals(projectRoot?: string): EvalEntry[] {
+  const root = projectRoot ?? findProjectRoot()
+  const evalPath = getEvalPath(root)
+
+  const entries = readEvalsFromPath(evalPath)
+
+  // If this is a GTM or portfolio, also read from registered services
+  const config = loadConfig(root)
+  if (config && (config.type === "gtm" || config.type === "portfolio")) {
+    const services = (config as any).registered_services as Array<{
+      name: string; path: string
+    }> | undefined
+
+    if (services) {
+      const seen = new Set(entries.map(e => `${e.agent}:${e.ts}:${e.run_id}`))
+      for (const svc of services) {
+        if (!svc.path) continue
+        const svcEvalPath = getEvalPath(svc.path)
+        const svcEntries = readEvalsFromPath(svcEvalPath)
+        for (const entry of svcEntries) {
+          const key = `${entry.agent}:${entry.ts}:${entry.run_id}`
+          if (!seen.has(key)) {
+            entries.push(entry)
+            seen.add(key)
+          }
+        }
+      }
+    }
   }
 
   return entries

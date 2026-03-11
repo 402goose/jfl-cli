@@ -50,6 +50,8 @@ export interface TrainingBufferEntry {
     autoresearch_round?: number
     source: "ci" | "autoresearch" | "experiment" | "manual" | "mined"
     mine_source?: string
+    scopes?: string[]
+    changed_files?: string[]
   }
 }
 
@@ -93,18 +95,51 @@ export class TrainingBuffer {
   }
 
   read(): TrainingBufferEntry[] {
-    if (!existsSync(this.bufferPath)) return []
+    return TrainingBuffer.readFromPath(this.bufferPath)
+  }
 
+  /**
+   * Read training buffer entries from all registered services.
+   * Use this from GTM hub to get cross-project training data.
+   */
+  readAll(): TrainingBufferEntry[] {
+    const entries = this.read()
+
+    // Check if this project is a GTM or portfolio — aggregate from services
+    const configPath = join(this.projectRoot, ".jfl", "config.json")
+    if (existsSync(configPath)) {
+      try {
+        const config = JSON.parse(readFileSync(configPath, "utf-8"))
+        if ((config.type === "gtm" || config.type === "portfolio") && config.registered_services) {
+          const seen = new Set(entries.map(e => e.id))
+          for (const svc of config.registered_services) {
+            if (!svc.path) continue
+            const svcBufferPath = join(svc.path, ".jfl", "training-buffer.jsonl")
+            const svcEntries = TrainingBuffer.readFromPath(svcBufferPath)
+            for (const entry of svcEntries) {
+              if (!seen.has(entry.id)) {
+                entries.push(entry)
+                seen.add(entry.id)
+              }
+            }
+          }
+        }
+      } catch {}
+    }
+
+    return entries
+  }
+
+  private static readFromPath(bufferPath: string): TrainingBufferEntry[] {
+    if (!existsSync(bufferPath)) return []
     const entries: TrainingBufferEntry[] = []
-    const lines = readFileSync(this.bufferPath, "utf-8").split("\n")
-
+    const lines = readFileSync(bufferPath, "utf-8").split("\n")
     for (const line of lines) {
       if (!line.trim()) continue
       try {
         entries.push(JSON.parse(line) as TrainingBufferEntry)
       } catch {}
     }
-
     return entries
   }
 
