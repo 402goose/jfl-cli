@@ -1,0 +1,22 @@
+{
+  "name": "Autoresearch Task",
+  "description": "Implement BM25 scoring with tuned k1 and b parameters to replace or augment the current ranking function, specifically optimizing term frequency saturation (k1=1.2-1.5) and field length normalization (b=0.6-0.75) based on the document collection characteristics",
+  "branchName": "ralph/autoresearch-1773188101352",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Implement BM25 scoring with tuned k1 and b parameters to replace or augment the ",
+      "description": "Implement BM25 scoring with tuned k1 and b parameters to replace or augment the current ranking function, specifically optimizing term frequency saturation (k1=1.2-1.5) and field length normalization (b=0.6-0.75) based on the document collection characteristics",
+      "acceptanceCriteria": [
+        "Task completed"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    }
+  ],
+  "metadata": {
+    "updatedAt": "2026-03-11T00:15:01.612Z"
+  }
+}
