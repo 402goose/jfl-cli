@@ -1,12 +1,12 @@
 {
   "name": "Autoresearch Task",
-  "description": "Investigate and improve the ranking/retrieval quality metrics (ndcg and precision) visible in the smoke-test-agent evals, which show scores well below 1.0 (ndcg ~0.52-0.71, precision ~0.38-0.55). Review the query understanding, document scoring, and ranking logic to identify gaps between current behavior and ideal relevance ordering.",
-  "branchName": "ralph/autoresearch-1773187087638",
+  "description": "Implement BM25 or TF-IDF based re-ranking as a second-pass scoring step on top of the current retrieval results. After initial candidate retrieval, apply BM25 scoring between the query terms and document content to reorder results before returning them. This addresses the gap between semantic/vector retrieval and lexical relevance that often causes low precision and NDCG scores.",
+  "branchName": "ralph/autoresearch-1773187820848",
   "userStories": [
     {
       "id": "US-001",
-      "title": "Investigate and improve the ranking/retrieval quality metrics (ndcg and precisio",
-      "description": "Investigate and improve the ranking/retrieval quality metrics (ndcg and precision) visible in the smoke-test-agent evals, which show scores well below 1.0 (ndcg ~0.52-0.71, precision ~0.38-0.55). Review the query understanding, document scoring, and ranking logic to identify gaps between current behavior and ideal relevance ordering.",
+      "title": "Implement BM25 or TF-IDF based re-ranking as a second-pass scoring step on top o",
+      "description": "Implement BM25 or TF-IDF based re-ranking as a second-pass scoring step on top of the current retrieval results. After initial candidate retrieval, apply BM25 scoring between the query terms and document content to reorder results before returning them. This addresses the gap between semantic/vector retrieval and lexical relevance that often causes low precision and NDCG scores.",
       "acceptanceCriteria": [
         "Task completed"
       ],
@@ -17,6 +17,6 @@
     }
   ],
   "metadata": {
-    "updatedAt": "2026-03-10T23:58:08.189Z"
+    "updatedAt": "2026-03-11T00:10:21.290Z"
   }
 }

@@ -747,10 +747,12 @@ async function runAutoresearch(projectRoot: string, rounds: number): Promise<voi
   }
 
   const baseBranch = "main"
-  const baselineScore = evals
-    .sort((a, b) => b.ts.localeCompare(a.ts))[0]?.composite ?? 0
+  const latestEval = evals.sort((a, b) => b.ts.localeCompare(a.ts))[0]
+  const baselinePassRate = latestEval?.composite ?? 0
+  const baselineTotal = (latestEval?.metrics?.tests_total as number) ?? 0
+  const baselineScore = baselinePassRate + (baselineTotal > 0 ? baselineTotal * 0.001 : 0)
 
-  console.log(chalk.gray(`  Baseline composite: ${baselineScore.toFixed(4)}`))
+  console.log(chalk.gray(`  Baseline composite: ${baselineScore.toFixed(4)} (${baselineTotal} tests)`))
 
   interface ExperimentResult {
     round: number
@@ -957,7 +959,9 @@ Suggest the SINGLE highest-value change. JSON format:
       total = json.numTotalTests || 1
     } catch {}
 
-    const score = total > 0 ? passing / total : 0
+    const passRate = total > 0 ? passing / total : 0
+    const testsAdded = total - baselineTotal
+    const score = passRate + (testsAdded > 0 ? testsAdded * 0.001 : 0)
     const delta = score - baselineScore
 
     const result: ExperimentResult = {
@@ -973,9 +977,9 @@ Suggest the SINGLE highest-value change. JSON format:
 
     const emoji = delta > 0 ? "+" : delta < 0 ? "" : "="
     console.log(chalk.bold(`  Round ${round} result: ${score.toFixed(4)} (${emoji}${delta.toFixed(4)})`))
-    console.log(chalk.gray(`  Tests: ${passing}/${total}`))
+    console.log(chalk.gray(`  Tests: ${passing}/${total}${testsAdded > 0 ? chalk.green(` (+${testsAdded} new)`) : ""}`))
 
-    if (!bestResult || result.score > bestResult.score) {
+    if (!bestResult || result.delta > bestResult.delta) {
       bestResult = result
       console.log(chalk.green(`  New best! (round ${round})`))
     }
@@ -985,7 +989,7 @@ Suggest the SINGLE highest-value change. JSON format:
       ts: new Date().toISOString(),
       session: "autoresearch",
       type: "experiment",
-      status: delta > 0 ? "complete" : "incomplete",
+      status: (delta > 0 || testsAdded > 0) ? "complete" : "incomplete",
       title: `Autoresearch R${round}: ${proposal.task.slice(0, 60)}`,
       summary: `Score: ${score.toFixed(4)}, delta: ${delta > 0 ? "+" : ""}${delta.toFixed(4)}`,
       detail: `Task: ${proposal.task}\nResult: ${passing}/${total} tests passing`,
@@ -1017,9 +1021,9 @@ Suggest the SINGLE highest-value change. JSON format:
       reward: {
         composite_delta: delta,
         dimension_deltas: {},
-        tests_added: total - (evals.sort((a, b) => b.ts.localeCompare(a.ts))[0]?.metrics?.tests_total as number ?? total),
-        quality_score: score,
-        improved: delta > 0,
+        tests_added: testsAdded,
+        quality_score: passRate,
+        improved: delta > 0 || testsAdded > 0,
         prediction_error: Math.abs(proposal.predicted_delta - delta),
       },
       metadata: {
