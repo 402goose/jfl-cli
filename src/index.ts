@@ -1271,8 +1271,8 @@ piFleet
   .command("setup")
   .description("Install VM backend, check boot arg, create base image")
   .option("--backend <name>", "VM backend: lume (default)", "lume")
-  .option("--cpus <n>", "CPUs per VM", "2")
-  .option("--memory <mb>", "Memory per VM in MB", "2048")
+  .option("--cpus <n>", "CPUs per VM", "4")
+  .option("--memory <mb>", "Memory per VM in MB", "4096")
   .option("--skip-boot-arg", "Skip VM quota boot arg check")
   .action(async (options) => {
     const { fleetSetup } = await import("./commands/pi-fleet.js")
