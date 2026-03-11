@@ -397,39 +397,19 @@ interface MemoryResult {
   relevance: 'high' | 'medium' | 'low'
 }
 
-function formatMemoryResults(results: MemoryResult[]): string {
+function formatMemoryResults(results: any[]): string {
   if (results.length === 0) {
     return "No memories found."
   }
 
-  const items = results.map((result, index) => {
-    const { memory, score, relevance } = result
+  const items = results.map((r, index) => {
+    const relevanceBadge = r.relevance === 'high' ? '●' : r.relevance === 'medium' ? '◐' : '○'
+    const type = r.type || 'unknown'
+    const date = r.ts ? new Date(r.ts).toISOString().split('T')[0] : ''
 
-    // Format relevance badge
-    const relevanceBadge = relevance === 'high' ? '●' : relevance === 'medium' ? '◐' : '○'
-
-    // Format type
-    const type = memory.type || 'unknown'
-
-    // Format date
-    const date = new Date(memory.created_at).toISOString().split('T')[0]
-
-    // Extract files from metadata
-    let files = ''
-    if (memory.metadata) {
-      try {
-        const metadata = JSON.parse(memory.metadata)
-        if (metadata.files && metadata.files.length > 0) {
-          files = `\n  Files: ${metadata.files.slice(0, 3).join(', ')}${metadata.files.length > 3 ? '...' : ''}`
-        }
-      } catch {
-        // Ignore parse errors
-      }
-    }
-
-    return `${index + 1}. [${type}] ${memory.title}
-   ${date} | ${relevanceBadge} Relevance: ${score.toFixed(2)}
-   ${memory.summary || memory.content.slice(0, 150)}${files}`
+    return `${index + 1}. [${type}] ${r.title}
+   ${date} | ${relevanceBadge} Relevance: ${(r.score || 0).toFixed(2)}
+   ${r.summary || r.content?.slice(0, 150) || ''}`
   }).join('\n\n')
 
   return `Found ${results.length} ${results.length === 1 ? 'memory' : 'memories'}:\n\n${items}`

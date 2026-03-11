@@ -973,7 +973,17 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus,
             return
           }
 
-          const results = await searchMemories(query, { type, maxItems, since })
+          const raw = await searchMemories(query, { type, maxItems, since })
+          const results = raw.map(r => ({
+            title: r.memory.title,
+            content: r.memory.content,
+            summary: r.memory.summary,
+            type: r.memory.type,
+            source: r.memory.source,
+            ts: r.memory.created_at,
+            score: r.score,
+            relevance: r.relevance,
+          }))
 
           res.writeHead(200, { "Content-Type": "application/json" })
           res.end(JSON.stringify({ results }))

@@ -7,7 +7,7 @@ import {
   ActivityPage,
   LoopPage,
   SystemPage,
-  ServicesPage,
+  TopologyPage,
   ReviewsPage,
   ChatPage,
   SynopsisPage,
@@ -24,7 +24,7 @@ const pageMap: Record<PageId, (props: { status: WorkspaceStatus | null }) => pre
   reviews: () => <ReviewsPage />,
   chat: () => <ChatPage />,
   synopsis: SynopsisPage,
-  topology: ServicesPage,
+  topology: TopologyPage,
   system: SystemPage,
 }
 
