@@ -611,20 +611,16 @@ async function runExperiment(projectRoot: string): Promise<void> {
 
   let proposal: ExperimentProposal | null = null
 
-  const stratusKey = process.env.STRATUS_API_KEY
-  const stratusUrl = process.env.STRATUS_API_URL || "https://api.stratus.run"
+  // Let StratusClient resolve the key (reads .env first, then shell env)
+  const { StratusClient } = await import("../lib/stratus-client.js")
+  const stratusProbe = new StratusClient({ model: "stratus-x1ac-base-claude-sonnet-4-6", timeout: 60000 })
+  const stratusKey = (stratusProbe as any).apiKey
 
   if (stratusKey) {
     console.log(chalk.gray("  Using Stratus to rank experiment proposals...\n"))
 
     try {
-      const { StratusClient } = await import("../lib/stratus-client.js")
-      const stratus = new StratusClient({
-        baseUrl: stratusUrl,
-        apiKey: stratusKey,
-        model: "stratus-x1ac-base-claude-sonnet-4-6",
-        timeout: 60000,
-      })
+      const stratus = stratusProbe
 
       const evalSummary = buildEvalSummary(evals, 15)
       const trajectoryContext = loader.renderForContext(
@@ -809,16 +805,13 @@ async function runAutoresearch(projectRoot: string, rounds: number): Promise<voi
 
     let proposal: ExperimentProposal | null = null
 
-    const stratusKey = process.env.STRATUS_API_KEY
-    if (stratusKey) {
+    // Let StratusClient resolve key from .env first, then shell env
+    const { StratusClient: StratusClientBatch } = await import("../lib/stratus-client.js")
+    const stratusBatch = new StratusClientBatch({ model: "stratus-x1ac-base-claude-sonnet-4-6", timeout: 60000 })
+    const stratusKeyBatch = (stratusBatch as any).apiKey
+    if (stratusKeyBatch) {
       try {
-        const { StratusClient } = await import("../lib/stratus-client.js")
-        const stratus = new StratusClient({
-          baseUrl: process.env.STRATUS_API_URL || "https://api.stratus.run",
-          apiKey: stratusKey,
-          model: "stratus-x1ac-base-claude-sonnet-4-6",
-          timeout: 60000,
-        })
+        const stratus = stratusBatch
 
         const evalSummary = buildEvalSummary(evals.concat(
           results.map(r => ({
