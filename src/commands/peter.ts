@@ -1018,7 +1018,9 @@ Suggest the SINGLE highest-value change. JSON format:
     gitExec(["add", "-A"], projectRoot)
     gitExec(["commit", "-m", `autoresearch: round ${round} - ${proposal.task}`], projectRoot)
 
-    console.log(chalk.gray("  Running local eval..."))
+    console.log(chalk.gray("  Running multi-dimension eval..."))
+
+    // Dimension 1: Tests
     const testResult = spawnSync("npx", ["jest", "--json", "--silent"], {
       cwd: projectRoot, encoding: "utf-8", stdio: "pipe", timeout: 120000,
     })
@@ -1032,8 +1034,66 @@ Suggest the SINGLE highest-value change. JSON format:
 
     const passRate = total > 0 ? passing / total : 0
     const testsAdded = total - baselineTotal
-    const score = passRate + (testsAdded > 0 ? testsAdded * 0.001 : 0)
+
+    // Dimension 2: TypeScript compilation (0 errors = 1.0)
+    const tscResult = spawnSync("npx", ["tsc", "--noEmit"], {
+      cwd: projectRoot, encoding: "utf-8", stdio: "pipe", timeout: 60000,
+    })
+    const tscErrors = (tscResult.stdout || "").split("\n").filter(l => l.includes("error TS")).length
+    const tscScore = tscErrors === 0 ? 1.0 : Math.max(0, 1.0 - (tscErrors * 0.05))
+
+    // Dimension 3: Lint (eslint if available)
+    let lintScore = 1.0
+    const eslintConfig = fs.existsSync(path.join(projectRoot, ".eslintrc.json")) ||
+      fs.existsSync(path.join(projectRoot, "eslint.config.js")) ||
+      fs.existsSync(path.join(projectRoot, "eslint.config.mjs"))
+    if (eslintConfig) {
+      const lintResult = spawnSync("npx", ["eslint", "src/", "--format", "json", "--quiet"], {
+        cwd: projectRoot, encoding: "utf-8", stdio: "pipe", timeout: 60000,
+      })
+      try {
+        const lintJson = JSON.parse(lintResult.stdout || "[]")
+        const lintErrors = lintJson.reduce((sum: number, f: any) => sum + (f.errorCount || 0), 0)
+        lintScore = lintErrors === 0 ? 1.0 : Math.max(0, 1.0 - (lintErrors * 0.02))
+      } catch {}
+    }
+
+    // Dimension 4: Code size / bloat detection
+    const srcFiles = spawnSync("find", ["src", "-name", "*.ts", "-not", "-path", "*__tests__*", "-not", "-path", "*node_modules*"], {
+      cwd: projectRoot, encoding: "utf-8", stdio: "pipe",
+    })
+    const srcFileCount = (srcFiles.stdout || "").trim().split("\n").filter(Boolean).length
+    const totalLines = spawnSync("sh", ["-c", "find src -name '*.ts' -not -path '*__tests__*' -not -path '*node_modules*' | xargs wc -l 2>/dev/null | tail -1"], {
+      cwd: projectRoot, encoding: "utf-8", stdio: "pipe",
+    })
+    const lineCount = parseInt((totalLines.stdout || "0").trim().split(/\s+/)[0]) || 0
+
+    // Dimension 5: Telemetry health (error rate from recent telemetry)
+    let telemetryScore = 1.0
+    const telemetryState = path.join(projectRoot, ".jfl", "telemetry-agent-state.json")
+    if (fs.existsSync(telemetryState)) {
+      try {
+        const tState = JSON.parse(fs.readFileSync(telemetryState, "utf-8"))
+        const errorRate = tState.baseline_crash_rate || 0
+        telemetryScore = Math.max(0, 1.0 - errorRate)
+      } catch {}
+    }
+
+    // Composite: weighted multi-dimension score
+    const weights = { tests: 0.4, tsc: 0.2, lint: 0.15, telemetry: 0.15, newTests: 0.1 }
+    const newTestBonus = testsAdded > 0 ? Math.min(1.0, testsAdded * 0.1) : 0
+    const compositeScore = (
+      passRate * weights.tests +
+      tscScore * weights.tsc +
+      lintScore * weights.lint +
+      telemetryScore * weights.telemetry +
+      newTestBonus * weights.newTests
+    )
+    const score = compositeScore + (total > 0 ? total * 0.001 : 0)
     const delta = score - baselineScore
+
+    console.log(chalk.gray(`  Dimensions: tests=${passRate.toFixed(2)} tsc=${tscScore.toFixed(2)} lint=${lintScore.toFixed(2)} telemetry=${telemetryScore.toFixed(2)} newTests=${newTestBonus.toFixed(2)}`))
+    console.log(chalk.gray(`  Source: ${srcFileCount} files, ${lineCount} lines`))
 
     const result: ExperimentResult = {
       round,
