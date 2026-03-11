@@ -960,6 +960,119 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus,
       return
     }
 
+    // RAG Chat — search context + memory, then stream LLM response
+    if (url.pathname === "/api/chat" && req.method === "POST") {
+      let body = ""
+      req.on("data", chunk => body += chunk)
+      req.on("end", async () => {
+        try {
+          const { message, history = [] } = JSON.parse(body || "{}")
+          if (!message) {
+            res.writeHead(400, { "Content-Type": "application/json" })
+            res.end(JSON.stringify({ error: "message required" }))
+            return
+          }
+
+          const [memRaw, ctxResult] = await Promise.allSettled([
+            searchMemories(message, { maxItems: 5 }),
+            getPortfolioContext(projectRoot, message, undefined, 5),
+          ])
+
+          const memResults = memRaw.status === "fulfilled"
+            ? memRaw.value.map(r => ({ title: r.memory.title, content: r.memory.content, type: r.memory.type, relevance: r.relevance }))
+            : []
+          const ctxResults = ctxResult.status === "fulfilled"
+            ? (ctxResult.value.items || []).slice(0, 5).map((i: any) => ({ title: i.title || i.path, content: i.content?.slice(0, 500), type: i.type }))
+            : []
+
+          const sources = [...memResults, ...ctxResults]
+
+          let contextBlock = ""
+          if (sources.length > 0) {
+            contextBlock = "Here is relevant context from the project:\n\n" +
+              sources.map((s, i) => `[${i + 1}] ${s.title} (${s.type})\n${s.content}`).join("\n\n") +
+              "\n\n---\n\n"
+          }
+
+          // Load .env from project root for API keys
+          const envPath = path.join(projectRoot, ".env")
+          if (fs.existsSync(envPath)) {
+            for (const line of fs.readFileSync(envPath, "utf-8").split("\n")) {
+              const match = line.match(/^([A-Z_]+)=(.+)$/)
+              if (match && !process.env[match[1]]) process.env[match[1]] = match[2].trim()
+            }
+          }
+
+          const apiKey = process.env.STRATUS_API_KEY || process.env.OPENAI_API_KEY || process.env.ANTHROPIC_API_KEY
+          if (!apiKey) {
+            res.writeHead(200, {
+              "Content-Type": "text/event-stream",
+              "Cache-Control": "no-cache",
+              "Connection": "keep-alive",
+            })
+            const fallback = sources.length > 0
+              ? "I found relevant context but no LLM API key is configured. Set STRATUS_API_KEY, OPENAI_API_KEY, or ANTHROPIC_API_KEY in your .env.\n\n**Sources found:**\n" +
+                sources.map((s, i) => `${i + 1}. **${s.title}** \`${s.type}\`\n   ${s.content?.slice(0, 150)}`).join("\n")
+              : "No API key configured and no relevant context found."
+            res.write(`data: ${JSON.stringify({ sources })}\n\n`)
+            res.write(`data: ${JSON.stringify({ delta: fallback })}\n\n`)
+            res.write("data: [DONE]\n\n")
+            res.end()
+            return
+          }
+
+          const useStratus = apiKey === process.env.STRATUS_API_KEY
+          const baseURL = useStratus ? "https://api.stratus.run/v1" : undefined
+          const model = useStratus ? "stratus-x1ac-huge-claude-sonnet-4-6" : "gpt-4o-mini"
+
+          const OpenAI = (await import("openai")).default
+          const client = new OpenAI({ apiKey, baseURL })
+
+          const messages: any[] = [
+            {
+              role: "system",
+              content: `You are JFL Assistant, helping the user understand their project context. Answer questions based on the provided context from journal entries, knowledge docs, and code files. Be concise and direct. If the context doesn't contain enough information, say so. Reference specific sources when possible.\n\n${contextBlock}`
+            },
+            ...history.slice(-6).map((m: any) => ({ role: m.role, content: m.content })),
+            { role: "user", content: message },
+          ]
+
+          res.writeHead(200, {
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+          })
+
+          res.write(`data: ${JSON.stringify({ sources })}\n\n`)
+
+          try {
+            const stream = await client.chat.completions.create({
+              model,
+              messages,
+              stream: true,
+              max_tokens: 1024,
+            })
+
+            for await (const chunk of stream) {
+              const delta = chunk.choices?.[0]?.delta?.content
+              if (delta) {
+                res.write(`data: ${JSON.stringify({ delta })}\n\n`)
+              }
+            }
+          } catch (llmErr: any) {
+            res.write(`data: ${JSON.stringify({ delta: `\n\nLLM error: ${llmErr.message}` })}\n\n`)
+          }
+
+          res.write("data: [DONE]\n\n")
+          res.end()
+        } catch (err: any) {
+          res.writeHead(500, { "Content-Type": "application/json" })
+          res.end(JSON.stringify({ error: err.message }))
+        }
+      })
+      return
+    }
+
     // Memory search
     if (url.pathname === "/api/memory/search" && req.method === "POST") {
       let body = ""

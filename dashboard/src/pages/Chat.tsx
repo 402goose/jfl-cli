@@ -1,4 +1,5 @@
 import { api } from "@/api"
+import { streamChat, ChatSource } from "@/api/client"
 import { cn, timeAgo } from "@/lib/hooks"
 import { useState, useRef, useEffect } from "preact/hooks"
 
@@ -8,14 +9,7 @@ interface ChatMessage {
   content: string
   ts: string
   sources?: ChatSource[]
-}
-
-interface ChatSource {
-  title: string
-  type: string
-  source: string
-  relevance?: string
-  snippet?: string
+  streaming?: boolean
 }
 
 export function ChatPage() {
@@ -43,83 +37,59 @@ export function ChatPage() {
       content: query,
       ts: new Date().toISOString(),
     }
-    setMessages((prev) => [...prev, userMsg])
+
+    const assistantId = `a-${Date.now()}`
+    const assistantMsg: ChatMessage = {
+      id: assistantId,
+      role: "assistant",
+      content: "",
+      ts: new Date().toISOString(),
+      streaming: true,
+    }
+
+    setMessages((prev) => [...prev, userMsg, assistantMsg])
     setInput("")
     setLoading(true)
 
-    try {
-      const [memoryResult, contextResult] = await Promise.allSettled([
-        api.memorySearch(query),
-        api.search(query),
-      ])
+    const history = messages
+      .filter((m) => !m.streaming)
+      .slice(-8)
+      .map((m) => ({ role: m.role, content: m.content }))
 
-      const sources: ChatSource[] = []
-      const sections: string[] = []
-
-      const memResults = memoryResult.status === "fulfilled"
-        ? ((memoryResult.value as any).results || [])
-        : []
-      const ctxResults = contextResult.status === "fulfilled"
-        ? ((contextResult.value as any).results || (contextResult.value as any).items || [])
-        : []
-
-      if (memResults.length > 0) {
-        sections.push(`**Memory** (${memResults.length} results)`)
-        for (const r of memResults.slice(0, 5)) {
-          const title = r.title || r.content?.slice(0, 80) || "Untitled"
-          const type = r.type || "unknown"
-          const snippet = r.summary || r.content?.slice(0, 200) || ""
-          sections.push(`- **${title}** \`${type}\`${snippet ? `\n  ${snippet}` : ""}`)
-          sources.push({
-            title,
-            type,
-            source: "memory",
-            relevance: r.relevance,
-            snippet: snippet.slice(0, 100),
-          })
-        }
-      }
-
-      if (ctxResults.length > 0) {
-        sections.push(`\n**Context** (${ctxResults.length} results)`)
-        for (const r of ctxResults.slice(0, 5)) {
-          const title = r.title || r.path || "Untitled"
-          const type = r.type || r.source || "unknown"
-          const snippet = r.content?.slice(0, 200) || ""
-          sections.push(`- **${title}** \`${type}\`${snippet ? `\n  ${snippet}` : ""}`)
-          sources.push({
-            title,
-            type,
-            source: "context",
-            snippet: snippet.slice(0, 100),
-          })
-        }
-      }
-
-      const content = sections.length > 0
-        ? sections.join("\n")
-        : "No results found. Try a different query."
-
-      const assistantMsg: ChatMessage = {
-        id: `a-${Date.now()}`,
-        role: "assistant",
-        content,
-        ts: new Date().toISOString(),
-        sources,
-      }
-      setMessages((prev) => [...prev, assistantMsg])
-    } catch (err: any) {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: `e-${Date.now()}`,
-          role: "assistant",
-          content: `Search failed: ${err.message}`,
-          ts: new Date().toISOString(),
-        },
-      ])
-    }
-    setLoading(false)
+    await streamChat(
+      query,
+      history,
+      (sources) => {
+        setMessages((prev) =>
+          prev.map((m) => (m.id === assistantId ? { ...m, sources } : m)),
+        )
+      },
+      (delta) => {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId ? { ...m, content: m.content + delta } : m,
+          ),
+        )
+      },
+      () => {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId ? { ...m, streaming: false } : m,
+          ),
+        )
+        setLoading(false)
+      },
+      (err) => {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId
+              ? { ...m, content: `Error: ${err}`, streaming: false }
+              : m,
+          ),
+        )
+        setLoading(false)
+      },
+    )
   }
 
   return (
@@ -147,20 +117,23 @@ export function ChatPage() {
                 <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
               </svg>
             </div>
-            <div class="text-sm text-muted-foreground mb-1">Search your project context</div>
+            <div class="text-sm text-muted-foreground mb-1">Ask about your project</div>
             <div class="text-xs text-muted-foreground/60 max-w-sm">
-              Ask about decisions, features, bugs, or anything in your journal and knowledge base.
+              Answers grounded in your journal, knowledge base, and code context.
             </div>
             <div class="flex flex-wrap gap-1.5 mt-4 justify-center">
               {[
-                "What decisions were made?",
-                "Recent features built",
+                "What decisions were made recently?",
+                "What features were built this week?",
                 "What bugs were fixed?",
-                "Show eval results",
+                "Summarize the current roadmap",
               ].map((q) => (
                 <button
                   key={q}
-                  onClick={() => { setInput(q); inputRef.current?.focus() }}
+                  onClick={() => {
+                    setInput(q)
+                    inputRef.current?.focus()
+                  }}
                   class="text-[11px] mono px-2.5 py-1 rounded-md bg-muted/50 text-muted-foreground hover:text-foreground hover:bg-muted/80 transition-colors"
                 >
                   {q}
@@ -173,17 +146,6 @@ export function ChatPage() {
         {messages.map((msg) => (
           <MessageBubble key={msg.id} message={msg} />
         ))}
-
-        {loading && (
-          <div class="flex gap-3 animate-fade-in">
-            <div class="w-6 h-6 rounded-full bg-info/15 flex items-center justify-center shrink-0">
-              <span class="text-[10px] text-info font-bold">J</span>
-            </div>
-            <div class="bg-card rounded-lg border border-border px-3 py-2">
-              <span class="text-sm text-muted-foreground animate-pulse-dot">Searching...</span>
-            </div>
-          </div>
-        )}
 
         <div ref={bottomRef} />
       </div>
@@ -223,52 +185,110 @@ export function ChatPage() {
 
 function MessageBubble({ message }: { message: ChatMessage }) {
   const isUser = message.role === "user"
+  const [showSources, setShowSources] = useState(false)
 
   return (
     <div class={cn("flex gap-3 animate-fade-in", isUser && "flex-row-reverse")}>
-      <div class={cn(
-        "w-6 h-6 rounded-full flex items-center justify-center shrink-0",
-        isUser ? "bg-foreground/10" : "bg-info/15",
-      )}>
+      <div
+        class={cn(
+          "w-6 h-6 rounded-full flex items-center justify-center shrink-0 mt-0.5",
+          isUser ? "bg-foreground/10" : "bg-info/15",
+        )}
+      >
         <span class={cn("text-[10px] font-bold", isUser ? "text-foreground" : "text-info")}>
           {isUser ? "Y" : "J"}
         </span>
       </div>
 
-      <div class={cn(
-        "rounded-lg px-3 py-2 max-w-[80%]",
-        isUser
-          ? "bg-foreground/5 border border-border"
-          : "bg-card border border-border",
-      )}>
-        {isUser ? (
-          <div class="text-sm">{message.content}</div>
-        ) : (
-          <div class="text-sm space-y-2">
-            {message.content.split("\n").map((line, i) => {
-              if (line.startsWith("**") && line.endsWith(")")) {
-                return <div key={i} class="text-xs font-medium text-muted-foreground uppercase tracking-wider mt-2 first:mt-0">{renderInline(line)}</div>
-              }
-              if (line.startsWith("- **")) {
-                return <div key={i} class="text-xs pl-2 border-l-2 border-border ml-1">{renderInline(line.slice(2))}</div>
-              }
-              if (line.startsWith("  ")) {
-                return <div key={i} class="text-xs text-muted-foreground pl-4 ml-1">{line.trim()}</div>
-              }
-              if (line.trim() === "") return null
-              return <div key={i} class="text-sm">{renderInline(line)}</div>
-            })}
+      <div class="max-w-[80%] space-y-2">
+        <div
+          class={cn(
+            "rounded-lg px-3 py-2",
+            isUser ? "bg-foreground/5 border border-border" : "bg-card border border-border",
+          )}
+        >
+          {isUser ? (
+            <div class="text-sm">{message.content}</div>
+          ) : (
+            <div class="text-sm space-y-1.5">
+              {message.content ? (
+                message.content.split("\n").map((line, i) => {
+                  if (!line.trim()) return <div key={i} class="h-2" />
+                  if (line.startsWith("# "))
+                    return (
+                      <div key={i} class="font-semibold text-sm mt-2 first:mt-0">
+                        {line.slice(2)}
+                      </div>
+                    )
+                  if (line.startsWith("## "))
+                    return (
+                      <div key={i} class="font-medium text-sm text-muted-foreground mt-2">
+                        {line.slice(3)}
+                      </div>
+                    )
+                  if (line.startsWith("- "))
+                    return (
+                      <div key={i} class="text-sm pl-3">
+                        <span class="text-muted-foreground mr-1.5">•</span>
+                        {renderInline(line.slice(2))}
+                      </div>
+                    )
+                  return (
+                    <div key={i} class="text-sm">
+                      {renderInline(line)}
+                    </div>
+                  )
+                })
+              ) : message.streaming ? (
+                <span class="text-muted-foreground animate-pulse-dot">Thinking...</span>
+              ) : null}
+              {message.streaming && message.content && (
+                <span class="inline-block w-1.5 h-4 bg-info/60 animate-pulse ml-0.5 align-middle" />
+              )}
+            </div>
+          )}
+
+          <div class="flex items-center gap-2 mt-1.5">
+            <span class="text-[10px] text-muted-foreground/50 mono">{timeAgo(message.ts)}</span>
+            {message.sources && message.sources.length > 0 && (
+              <button
+                onClick={() => setShowSources(!showSources)}
+                class="text-[10px] text-info/70 hover:text-info mono transition-colors"
+              >
+                {message.sources.length} sources {showSources ? "▾" : "▸"}
+              </button>
+            )}
+          </div>
+        </div>
+
+        {showSources && message.sources && (
+          <div class="bg-card/50 border border-border/50 rounded-lg p-2 space-y-1.5 animate-fade-in">
+            {message.sources.map((s, i) => (
+              <div key={i} class="flex items-start gap-2 text-[11px]">
+                <span
+                  class={cn(
+                    "shrink-0 px-1.5 py-0.5 rounded mono uppercase text-[9px]",
+                    s.type === "decision"
+                      ? "bg-warning/15 text-warning"
+                      : s.type === "feature"
+                        ? "bg-success/15 text-success"
+                        : s.type === "fix"
+                          ? "bg-destructive/15 text-destructive"
+                          : "bg-info/15 text-info",
+                  )}
+                >
+                  {s.type || "ctx"}
+                </span>
+                <div class="min-w-0">
+                  <div class="font-medium truncate">{s.title}</div>
+                  {s.content && (
+                    <div class="text-muted-foreground line-clamp-2 mt-0.5">{s.content.slice(0, 150)}</div>
+                  )}
+                </div>
+              </div>
+            ))}
           </div>
         )}
-
-        <div class="flex items-center gap-2 mt-1.5">
-          <span class="text-[10px] text-muted-foreground/50 mono">{timeAgo(message.ts)}</span>
-          {message.sources && message.sources.length > 0 && (
-            <span class="text-[10px] text-muted-foreground/50 mono">
-              {message.sources.length} sources
-            </span>
-          )}
-        </div>
       </div>
     </div>
   )
@@ -293,11 +313,19 @@ function renderInline(text: string): preact.JSX.Element {
 
     if (boldIdx <= codeIdx && boldMatch) {
       if (boldIdx > 0) parts.push(<span key={key++}>{remaining.slice(0, boldIdx)}</span>)
-      parts.push(<span key={key++} class="font-medium">{boldMatch[1]}</span>)
+      parts.push(
+        <span key={key++} class="font-medium">
+          {boldMatch[1]}
+        </span>,
+      )
       remaining = remaining.slice(boldIdx + boldMatch[0].length)
     } else if (codeMatch) {
       if (codeIdx > 0) parts.push(<span key={key++}>{remaining.slice(0, codeIdx)}</span>)
-      parts.push(<span key={key++} class="mono text-info text-[10px] bg-info/10 px-1 py-0.5 rounded">{codeMatch[1]}</span>)
+      parts.push(
+        <span key={key++} class="mono text-info text-[10px] bg-info/10 px-1 py-0.5 rounded">
+          {codeMatch[1]}
+        </span>,
+      )
       remaining = remaining.slice(codeIdx + codeMatch[0].length)
     }
   }

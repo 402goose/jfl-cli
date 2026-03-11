@@ -53,3 +53,62 @@ export interface SSEEvent {
   data: Record<string, unknown>
   ts: string
 }
+
+export interface ChatSource {
+  title: string
+  content: string
+  type: string
+  relevance?: string
+}
+
+export async function streamChat(
+  message: string,
+  history: { role: string; content: string }[],
+  onSources: (sources: ChatSource[]) => void,
+  onDelta: (text: string) => void,
+  onDone: () => void,
+  onError: (err: string) => void,
+): Promise<void> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    ...(token() ? { Authorization: `Bearer ${token()}` } : {}),
+  }
+
+  const res = await fetch("/api/chat", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ message, history }),
+  })
+
+  if (!res.ok) {
+    onError(`API error: ${res.status}`)
+    return
+  }
+
+  const reader = res.body?.getReader()
+  if (!reader) { onError("No response body"); return }
+
+  const decoder = new TextDecoder()
+  let buffer = ""
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split("\n")
+    buffer = lines.pop() || ""
+
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue
+      const payload = line.slice(6)
+      if (payload === "[DONE]") { onDone(); return }
+      try {
+        const data = JSON.parse(payload)
+        if (data.sources) onSources(data.sources)
+        if (data.delta) onDelta(data.delta)
+      } catch {}
+    }
+  }
+  onDone()
+}
