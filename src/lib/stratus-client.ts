@@ -87,14 +87,32 @@ export class StratusClient {
   private model: string
   private timeout: number
 
+  private readDotenv(): Record<string, string> {
+    try {
+      const fs = require("fs")
+      const p = require("path")
+      const envPath = p.resolve(process.cwd(), ".env")
+      if (!fs.existsSync(envPath)) return {}
+      const content = fs.readFileSync(envPath, "utf-8") as string
+      const result: Record<string, string> = {}
+      for (const line of content.split("\n")) {
+        const match = line.match(/^([A-Z_]+)=(.+)$/)
+        if (match) result[match[1]] = match[2].trim()
+      }
+      return result
+    } catch { return {} }
+  }
+
   constructor(options: {
     baseUrl?: string
     apiKey?: string
     model?: string
     timeout?: number
   } = {}) {
-    this.baseUrl = options.baseUrl || process.env.STRATUS_API_URL || "http://212.115.124.137:8000"
-    this.apiKey = options.apiKey || process.env.STRATUS_API_KEY || ""
+    // Read .env file first (shell env may have stale keys)
+    const dotenv = this.readDotenv()
+    this.baseUrl = options.baseUrl || dotenv.STRATUS_API_URL || process.env.STRATUS_API_URL || "https://api.stratus.run"
+    this.apiKey = options.apiKey || dotenv.STRATUS_API_KEY || process.env.STRATUS_API_KEY || ""
     this.model = options.model || "stratus-x1ac-base-claude-sonnet-4"
     this.timeout = options.timeout || 30000 // 30 seconds default
   }
