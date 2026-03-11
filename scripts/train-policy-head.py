@@ -404,8 +404,8 @@ def main():
         sys.exit(1)
 
     entries = load_buffer(args.buffer)
-    if len(entries) < 10:
-        print(f"Error: Need at least 10 tuples, got {len(entries)}", file=sys.stderr)
+    if len(entries) < 3:
+        print(f"Error: Need at least 3 tuples, got {len(entries)}", file=sys.stderr)
         sys.exit(1)
 
     print(f"\n  Policy Head Trainer")
