@@ -1,14 +1,15 @@
 {
-  "id": "9e077017-83cf-4ba9-aa71-8eee0257c6ce",
-  "status": "running",
-  "startedAt": "2026-03-11T00:15:01.510Z",
-  "updatedAt": "2026-03-11T00:18:30.321Z",
+  "id": "4ff19a16-b9ed-4558-bebe-f8be606923c1",
+  "status": "failed",
+  "startedAt": "2026-03-11T20:21:34.706Z",
+  "updatedAt": "2026-03-11T20:21:35.574Z",
   "agentPlugin": "claude",
   "trackerPlugin": "json",
-  "prdPath": "/Users/alectaggart/CascadeProjects/jfl-cli/.ralph-tui/autoresearch-task.json",
-  "currentIteration": 1,
+  "prdPath": "/private/tmp/jfl-pp-insight-triggers-pp-1773260492412/.ralph-tui/peter-task.json",
+  "currentIteration": 0,
   "maxIterations": 10,
   "totalTasks": 0,
-  "tasksCompleted": 1,
-  "cwd": "/Users/alectaggart/CascadeProjects/jfl-cli"
+  "tasksCompleted": 0,
+  "cwd": "/private/tmp/jfl-pp-insight-triggers-pp-1773260492412",
+  "endedAt": "2026-03-11T20:21:35.574Z"
 }
