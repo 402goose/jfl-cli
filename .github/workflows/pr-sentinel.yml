@@ -40,7 +40,73 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: hathbanger/pr-sentinel@main
+        id: review
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
           openai_api_key: ${{ secrets.OPENAI_API_KEY }}
           github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Write review event to JFL
+        if: github.event_name == 'pull_request'
+        env:
+          REVIEW_JSON: ${{ steps.review.outputs.review_json }}
+          FINDINGS_COUNT: ${{ steps.review.outputs.findings_count }}
+          REVIEW_ACTION: ${{ steps.review.outputs.action }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_BRANCH: ${{ github.head_ref }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout "$PR_BRANCH"
+
+          mkdir -p .jfl
+
+          node -e "
+            const fs = require('fs');
+            const ts = new Date().toISOString();
+            const action = process.env.REVIEW_ACTION || 'unknown';
+            const findingsCount = parseInt(process.env.FINDINGS_COUNT) || 0;
+            const hasBlockers = action === 'request_changes';
+
+            let findings = [];
+            let counts = { high: 0, medium: 0, low: 0 };
+            try {
+              const review = JSON.parse(process.env.REVIEW_JSON || '{}');
+              findings = (review.findings || []).map(f => ({
+                severity: f.severity,
+                type: f.type,
+                file: f.file,
+                title: f.title,
+                source: f.source,
+              }));
+              findings.forEach(f => { counts[f.severity] = (counts[f.severity] || 0) + 1; });
+            } catch(e) {}
+
+            const event = {
+              ts,
+              type: 'review:findings',
+              source: 'pr-sentinel',
+              data: {
+                pr_number: parseInt(process.env.PR_NUMBER) || 0,
+                branch: process.env.PR_BRANCH || '',
+                action,
+                findings_count: findingsCount,
+                has_blockers: hasBlockers,
+                counts,
+                findings,
+                run_url: process.env.RUN_URL || '',
+              }
+            };
+
+            fs.appendFileSync('.jfl/service-events.jsonl', JSON.stringify(event) + '\n');
+            console.log('Wrote review:findings event (' + findingsCount + ' findings, action=' + action + ')');
+          " || echo "Warning: could not write review event"
+
+          git add .jfl/service-events.jsonl 2>/dev/null
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "review: PR #${PR_NUMBER} scored by pr-sentinel (action=${REVIEW_ACTION}, findings=${FINDINGS_COUNT})"
+            git push origin "$PR_BRANCH"
+          fi

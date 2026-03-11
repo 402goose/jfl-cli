@@ -26,14 +26,6 @@ on:
     secrets:
       STRATUS_API_KEY:
         required: false
-      OPENAI_API_KEY:
-        required: false
-      OPENROUTER_API_KEY:
-        required: false
-      JFL_HUB_URL:
-        required: false
-      JFL_HUB_TOKEN:
-        required: false
 
 permissions:
   contents: write
@@ -49,8 +41,6 @@ jobs:
       || contains(github.event.pull_request.labels.*.name, 'run-eval')
 
     env:
-      JFL_HUB_URL: ${{ secrets.JFL_HUB_URL }}
-      JFL_HUB_TOKEN: ${{ secrets.JFL_HUB_TOKEN }}
       JFL_TELEMETRY: 'off'
       NODE_OPTIONS: '--experimental-vm-modules'
       TEST_COMMAND: ${{ inputs.test-command || 'npx jest --json --silent' }}
@@ -261,39 +251,6 @@ jobs:
           git commit -m "eval: scored PR #${{ github.event.pull_request.number }} (composite=${{ steps.pr_eval.outputs.score }}, delta=${{ steps.delta.outputs.delta }})"
           git push origin ${{ github.head_ref }}
 
-      - name: Post eval:scored event to hub (best-effort)
-        if: env.JFL_HUB_URL != ''
-        continue-on-error: true
-        run: |
-          curl -sf -X POST "${JFL_HUB_URL}/api/events" \
-            -H "Content-Type: application/json" \
-            -H "Authorization: Bearer ${JFL_HUB_TOKEN}" \
-            -d '{
-              "type": "eval:scored",
-              "source": "github-actions",
-              "data": {
-                "pr_number": ${{ github.event.pull_request.number }},
-                "pr_url": "${{ github.event.pull_request.html_url }}",
-                "branch": "${{ github.head_ref }}",
-                "commit_sha": "${{ github.sha }}",
-                "agent": "${{ steps.agent.outputs.name }}",
-                "metrics": {
-                  "test_pass_rate": ${{ steps.pr_eval.outputs.score }},
-                  "test_count": ${{ steps.pr_eval.outputs.total }},
-                  "tests_passing": ${{ steps.pr_eval.outputs.passing }}
-                },
-                "baseline": ${{ steps.baseline.outputs.score }},
-                "baseline_total": ${{ steps.baseline.outputs.total }},
-                "baseline_passing": ${{ steps.baseline.outputs.passing }},
-                "composite": ${{ steps.pr_eval.outputs.score }},
-                "delta": ${{ steps.delta.outputs.delta }},
-                "tests_added": ${{ steps.delta.outputs.tests_added }},
-                "tests_passing_added": ${{ steps.delta.outputs.tests_passing_added }},
-                "improved": ${{ steps.delta.outputs.improved }},
-                "run_id": "${{ github.run_id }}",
-                "run_url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-              }
-            }' || echo "Warning: could not post to hub (hub may not be running)"
 
       - name: Auto-retrain policy head (if enough new tuples)
         if: env.STRATUS_API_KEY != ''
@@ -432,12 +389,12 @@ jobs:
           fi
 
           if [ "$IMPROVED" = "true" ]; then
-            # Check if AI review requested changes
-            REVIEW_STATE=$(gh pr view $PR_NUMBER --json reviews --jq '[.reviews[] | select(.author.login == "github-actions")] | last | .state // "NONE"' 2>/dev/null || echo "NONE")
+            # Check if PR Sentinel requested changes
+            REVIEW_STATE=$(gh pr view $PR_NUMBER --json reviews --jq '[.reviews[] | select(.author.login == "github-actions" or .author.login == "github-actions[bot]")] | last | .state // "NONE"' 2>/dev/null || echo "NONE")
 
             if [ "$REVIEW_STATE" = "CHANGES_REQUESTED" ]; then
-              echo "Eval passed but AI review has blockers — holding merge"
-              gh pr comment $PR_NUMBER --body "**JFL Eval passed** (test_pass_rate improved) but **AI review found blockers**. Address red findings, then eval will re-run and auto-merge."
+              echo "Eval passed but PR Sentinel has blockers — holding merge"
+              gh pr comment $PR_NUMBER --body "**JFL Eval passed** (test_pass_rate improved) but **PR Sentinel found blockers**. Address findings, then eval will re-run and auto-merge."
             else
               echo "Eval passed, no review blockers — auto-merging PR #$PR_NUMBER"
               gh pr merge $PR_NUMBER --merge --delete-branch \
