@@ -66,10 +66,28 @@ export class LumeBackend implements VMBackend {
   }
 
   async createBase(name: string, opts?: { cpus?: number; memory?: number }): Promise<void> {
-    const cpus = opts?.cpus ?? 2
+    const cpus = opts?.cpus ?? 4
     const memoryMB = opts?.memory ?? 4096
+    const bin = lumeBin()
     console.log(`  Creating base VM "${name}" (${cpus} CPU, ${memoryMB}MB RAM)...`)
-    lume(`create ${name} --os macos --cpu ${cpus} --memory ${memoryMB}MB --ipsw latest --unattended sequoia`, { stdio: "inherit", timeout: 1800000 })
+    console.log("  This includes IPSW download + unattended macOS setup (30-60 min).")
+
+    return new Promise((resolve, reject) => {
+      const child = nodeSpawn(bin, [
+        "create", name,
+        "--os", "macos",
+        "--cpu", String(cpus),
+        "--memory", `${memoryMB}MB`,
+        "--ipsw", "latest",
+        "--unattended", "sequoia",
+      ], { stdio: "inherit" })
+
+      child.on("close", (code) => {
+        if (code === 0) resolve()
+        else reject(new Error(`lume create exited with code ${code}`))
+      })
+      child.on("error", reject)
+    })
   }
 
   async clone(base: string, name: string): Promise<void> {

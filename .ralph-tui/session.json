@@ -1,9 +1,9 @@
 {
   "version": 1,
   "sessionId": "9e077017-83cf-4ba9-aa71-8eee0257c6ce",
-  "status": "running",
+  "status": "interrupted",
   "startedAt": "2026-03-11T00:15:01.610Z",
-  "updatedAt": "2026-03-11T00:15:01.613Z",
+  "updatedAt": "2026-03-11T02:11:36.650Z",
   "currentIteration": 0,
   "maxIterations": 10,
   "tasksCompleted": 0,
@@ -25,8 +25,6 @@
   "iterations": [],
   "skippedTaskIds": [],
   "cwd": "/Users/alectaggart/CascadeProjects/jfl-cli",
-  "activeTaskIds": [
-    "US-001"
-  ],
+  "activeTaskIds": [],
   "subagentPanelVisible": false
 }
