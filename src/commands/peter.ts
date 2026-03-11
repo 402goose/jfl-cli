@@ -1023,37 +1023,51 @@ Suggest the SINGLE highest-value change. JSON format:
       continue
     }
 
+    // Spawn Claude Code directly — no ralph-tui middleman
     await new Promise<void>((resolve) => {
-      const ralphDir = path.join(projectRoot, ".ralph-tui")
-      if (!fs.existsSync(ralphDir)) fs.mkdirSync(ralphDir, { recursive: true })
+      const taskPrompt = `You are an autonomous coding agent working on the jfl-cli project.
 
-      const prdPath = path.join(ralphDir, "autoresearch-task.json")
-      const prd = {
-        name: "Autoresearch Task",
-        branchName: `ralph/autoresearch-${Date.now()}`,
-        description: proposal!.task,
-        userStories: [{
-          id: "US-001",
-          title: proposal!.task.slice(0, 80),
-          description: proposal!.task,
-          acceptanceCriteria: ["Task completed"],
-          priority: 1, passes: false, notes: "", dependsOn: [],
-        }],
-        metadata: { updatedAt: new Date().toISOString() },
-      }
-      fs.writeFileSync(prdPath, JSON.stringify(prd, null, 2))
+YOUR TASK: ${proposal!.task}
+
+RULES:
+- Make the actual code changes. Edit source files in src/.
+- Do NOT modify test files unless the task specifically asks you to add tests.
+- Do NOT modify .ralph-tui/ or .jfl/ files.
+- Run "npx jest --silent" before finishing to verify all tests still pass.
+- If your changes break tests, revert them and try a different approach.
+- Keep changes minimal and focused on the task.
+
+EVAL DIMENSIONS (how your work will be scored):
+- test_pass_rate (40%): All 274 tests must pass
+- tsc_errors (20%): No TypeScript compilation errors  
+- lint_score (15%): Clean ESLint output
+- telemetry_health (15%): No crashes in telemetry state
+- new_tests_added (10%): Bonus for adding new passing tests
+
+The baseline is CLEAN: 274/274 tests, 0 tsc errors, clean lint.
+Your goal is to IMPROVE the codebase, not fix anything broken.`
 
       const env = { ...process.env }
       delete env.CLAUDECODE
       delete env.CLAUDE_CODE
-      env.JFL_AUTORESEARCH = "1"  // Skip session-init.sh branch creation
+      env.JFL_AUTORESEARCH = "1"
 
-      const child = spawn("ralph-tui", ["run", "--listen", "--prd", prdPath, "--headless", "--force"], {
+      const child = spawn("claude", [
+        "--dangerously-skip-permissions",
+        "-p", taskPrompt,
+        "--output-format", "text",
+      ], {
         cwd: projectRoot, stdio: "inherit", env,
       })
 
-      child.on("error", () => { try { fs.unlinkSync(prdPath) } catch {} resolve() })
-      child.on("exit", () => { try { fs.unlinkSync(prdPath) } catch {} resolve() })
+      child.on("error", (err) => {
+        console.log(chalk.yellow(`  Claude agent error: ${err.message}`))
+        resolve()
+      })
+      child.on("exit", (code) => {
+        console.log(chalk.gray(`  Claude agent exited (code ${code})`))
+        resolve()
+      })
     })
 
     const diffCheck = gitExec(["diff", "--quiet", "HEAD"], projectRoot)
