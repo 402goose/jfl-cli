@@ -1265,5 +1265,63 @@ piAgents
 
 // ============================================================================
 
+const piFleet = piCmd.command("fleet").description("VM agent fleet — spawn, collect, destroy waves of autonomous agents")
+
+piFleet
+  .command("setup")
+  .description("Install VM backend, check boot arg, create base image")
+  .option("--backend <name>", "VM backend: lume (default)", "lume")
+  .option("--cpus <n>", "CPUs per VM", "2")
+  .option("--memory <mb>", "Memory per VM in MB", "2048")
+  .option("--skip-boot-arg", "Skip VM quota boot arg check")
+  .action(async (options) => {
+    const { fleetSetup } = await import("./commands/pi-fleet.js")
+    await fleetSetup({ ...options, cpus: parseInt(options.cpus), memory: parseInt(options.memory) })
+  })
+
+piFleet
+  .command("spawn <count>")
+  .description("Spawn N agent VMs for parallel autoresearch")
+  .option("--rounds <n>", "Autoresearch rounds per agent", "5")
+  .option("--repo <url>", "Target repo (defaults to git remote origin)")
+  .action(async (count, options) => {
+    const { fleetSpawn } = await import("./commands/pi-fleet.js")
+    await fleetSpawn(parseInt(count), { ...options, rounds: parseInt(options.rounds) })
+  })
+
+piFleet
+  .command("status")
+  .description("Show running agents, tuple counts, health")
+  .action(async () => {
+    const { fleetStatus } = await import("./commands/pi-fleet.js")
+    await fleetStatus()
+  })
+
+piFleet
+  .command("collect [waveId]")
+  .description("Pull tuples from agents, dedup, append to training buffer")
+  .action(async (waveId) => {
+    const { fleetCollect } = await import("./commands/pi-fleet.js")
+    await fleetCollect(waveId)
+  })
+
+piFleet
+  .command("destroy [waveId]")
+  .description("Tear down a wave of agent VMs")
+  .action(async (waveId) => {
+    const { fleetDestroy } = await import("./commands/pi-fleet.js")
+    await fleetDestroy(waveId)
+  })
+
+piFleet
+  .command("logs <agent>")
+  .description("Tail an agent's autoresearch log")
+  .action(async (agent) => {
+    const { fleetLogs } = await import("./commands/pi-fleet.js")
+    await fleetLogs(agent)
+  })
+
+// ============================================================================
+
 // Parse and run
 program.parse()
