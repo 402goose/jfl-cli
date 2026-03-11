@@ -275,7 +275,7 @@ describe('formatDigest', () => {
     const digest = analyzeEvents(events, 24)
     const text = formatDigest(digest, 'text')
     expect(text).toContain('Telemetry Digest')
-    expect(text).toContain('Model Costs')
+    expect(text).toContain('Session Costs')
     expect(text).toContain('claude-sonnet-4-6')
     expect(text).toContain('Top Commands')
     expect(text).toContain('synopsis')
