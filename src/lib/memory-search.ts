@@ -22,6 +22,7 @@ export interface SearchOptions {
   type?: string
   since?: string
   method?: 'tfidf' | 'embedding' | 'hybrid'
+  rerank?: boolean
 }
 
 /**
@@ -307,6 +308,88 @@ async function searchMemoriesHybrid(
 }
 
 /**
+ * BM25 re-ranking as a second-pass scoring step.
+ *
+ * Applies Okapi BM25 between query terms and document content to
+ * re-order initial retrieval results. This bridges the gap between
+ * semantic/vector retrieval and lexical relevance.
+ *
+ * @param results - Initial retrieval results (first-pass candidates)
+ * @param query - Original search query
+ * @param k1 - Term frequency saturation (default 1.5)
+ * @param b - Length normalization factor (default 0.75)
+ */
+function reRankWithBM25(
+  results: SearchResult[],
+  query: string,
+  k1: number = 1.5,
+  b: number = 0.75
+): SearchResult[] {
+  if (results.length === 0) return results
+
+  const queryTokens = tokenize(query)
+  if (queryTokens.length === 0) return results
+
+  const docs = results.map(r => {
+    const text = [r.memory.title, r.memory.content, r.memory.summary]
+      .filter(Boolean)
+      .join(' ')
+    return tokenize(text)
+  })
+
+  const N = docs.length
+  const avgdl = docs.reduce((sum, d) => sum + d.length, 0) / N
+
+  const docFreq = new Map<string, number>()
+  for (const token of queryTokens) {
+    let count = 0
+    for (const doc of docs) {
+      if (doc.includes(token)) count++
+    }
+    docFreq.set(token, count)
+  }
+
+  const reranked: SearchResult[] = results.map((result, i) => {
+    const doc = docs[i]
+    const dl = doc.length
+    if (dl === 0) return { ...result, score: 0 }
+
+    const termCounts = new Map<string, number>()
+    for (const token of doc) {
+      termCounts.set(token, (termCounts.get(token) || 0) + 1)
+    }
+
+    let bm25Score = 0
+    for (const token of queryTokens) {
+      const tf = termCounts.get(token) || 0
+      const df = docFreq.get(token) || 0
+
+      const idf = Math.log((N - df + 0.5) / (df + 0.5) + 1)
+      const tfNorm = (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * (dl / avgdl)))
+      bm25Score += idf * tfNorm
+    }
+
+    const originalWeight = 0.4
+    const bm25Weight = 0.6
+    const combinedScore = result.score * originalWeight + bm25Score * bm25Weight
+
+    return {
+      ...result,
+      score: combinedScore,
+      relevance: combinedScore > 0.7 ? 'high' as const : combinedScore > 0.4 ? 'medium' as const : 'low' as const
+    }
+  })
+
+  reranked.sort((a, b) => b.score - a.score)
+
+  const normalized = normalizeScores(reranked)
+  return normalized.map(r => ({
+    ...r,
+    relevance: r.score > 0.7 ? 'high' as const : r.score > 0.4 ? 'medium' as const : 'low' as const
+  }))
+}
+
+/**
  * Main search function
  */
 export async function searchMemories(
@@ -317,7 +400,8 @@ export async function searchMemories(
     maxItems = 10,
     type,
     since,
-    method = 'hybrid'
+    method = 'hybrid',
+    rerank = true
   } = options
 
   // Get all memories
@@ -333,13 +417,21 @@ export async function searchMemories(
   }
 
   // Search based on method
+  let results: SearchResult[]
   if (method === 'tfidf') {
-    return searchMemoriesTFIDF(query, memories, maxItems)
+    results = await searchMemoriesTFIDF(query, memories, maxItems * 2)
   } else if (method === 'embedding') {
-    return searchMemoriesEmbedding(query, memories, maxItems)
+    results = await searchMemoriesEmbedding(query, memories, maxItems * 2)
   } else {
-    return searchMemoriesHybrid(query, memories, maxItems)
+    results = await searchMemoriesHybrid(query, memories, maxItems * 2)
   }
+
+  // Second-pass: BM25 re-ranking
+  if (rerank && results.length > 1) {
+    results = reRankWithBM25(results, query)
+  }
+
+  return results.slice(0, maxItems)
 }
 
 /**
