@@ -12,6 +12,12 @@
 
 set -e
 
+# Skip session init when running as autoresearch (peter.ts sets this)
+if [ "${JFL_AUTORESEARCH:-}" = "1" ]; then
+  echo "Skipping session init (autoresearch mode)"
+  exit 0
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="${JFL_REPO_DIR:-$(pwd)}"
 WORKTREES_DIR="$REPO_DIR/worktrees"

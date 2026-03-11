@@ -1022,8 +1022,9 @@ Suggest the SINGLE highest-value change. JSON format:
       const env = { ...process.env }
       delete env.CLAUDECODE
       delete env.CLAUDE_CODE
+      env.JFL_AUTORESEARCH = "1"  // Skip session-init.sh branch creation
 
-      const child = spawn("ralph-tui", ["run", "--listen", "--prd", prdPath, "--headless"], {
+      const child = spawn("ralph-tui", ["run", "--listen", "--prd", prdPath, "--headless", "--force"], {
         cwd: projectRoot, stdio: "inherit", env,
       })
 
