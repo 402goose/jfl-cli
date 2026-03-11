@@ -186,8 +186,31 @@ export class TelemetryAgent {
 
     this.state.last_run = now
     this.state.last_insights = suggestions.map(s => `${s.type}:${s.title}`)
-    this.state.baseline_cost = digest.totalCostUsd || this.state.baseline_cost
-    this.state.baseline_errors = digest.errors.total || this.state.baseline_errors
+
+    // Update baselines using EMA, but only if current value is not a spike
+    // A "spike" is defined as 3x the current baseline (or 2x for errors)
+    const EMA_ALPHA = 0.15 // Weight for new value (lower = smoother, less reactive to spikes)
+
+    if (digest.totalCostUsd > 0) {
+      const costSpike = this.state.baseline_cost > 0 && digest.totalCostUsd > this.state.baseline_cost * 3
+      if (!costSpike) {
+        // Update baseline using EMA: new_baseline = alpha * current + (1-alpha) * old_baseline
+        this.state.baseline_cost = this.state.baseline_cost === 0
+          ? digest.totalCostUsd
+          : EMA_ALPHA * digest.totalCostUsd + (1 - EMA_ALPHA) * this.state.baseline_cost
+      }
+      // If it's a spike, we don't update the baseline - let it remain stable
+    }
+
+    if (digest.errors.total > 0) {
+      const errorSpike = this.state.baseline_errors > 0 && digest.errors.total > this.state.baseline_errors * 3
+      if (!errorSpike) {
+        this.state.baseline_errors = this.state.baseline_errors === 0
+          ? digest.errors.total
+          : EMA_ALPHA * digest.errors.total + (1 - EMA_ALPHA) * this.state.baseline_errors
+      }
+    }
+
     this.state.run_count++
     this.saveState()
 
