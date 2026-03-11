@@ -825,6 +825,51 @@ async function runAutoresearch(projectRoot: string, rounds: number): Promise<voi
         const policyHead = new PolicyHeadInference(projectRoot)
         const useMultiProposal = policyHead.isLoaded
 
+        // Load journal context for informed experiment selection
+        let journalContext = ""
+        const journalDir2 = path.join(projectRoot, ".jfl", "journal")
+        if (fs.existsSync(journalDir2)) {
+          const journalFiles = fs.readdirSync(journalDir2).filter(f => f.endsWith(".jsonl"))
+          const recentEntries: string[] = []
+          for (const file of journalFiles.slice(-3)) {
+            const lines = fs.readFileSync(path.join(journalDir2, file), "utf-8").split("\n").filter(Boolean)
+            for (const line of lines.slice(-10)) {
+              try {
+                const entry = JSON.parse(line)
+                if (entry.title) recentEntries.push(`[${entry.type || "note"}] ${entry.title}: ${entry.summary || ""}`.slice(0, 200))
+              } catch {}
+            }
+          }
+          if (recentEntries.length > 0) journalContext = `\n\nRecent journal (what happened, what worked):\n${recentEntries.slice(-15).join("\n")}`
+        }
+
+        // Load knowledge/research context
+        let knowledgeContext = ""
+        const researchDir = path.join(projectRoot, "knowledge", "research")
+        if (fs.existsSync(researchDir)) {
+          const researchFiles = fs.readdirSync(researchDir).filter(f => f.endsWith(".md"))
+          const summaries: string[] = []
+          for (const file of researchFiles.slice(0, 5)) {
+            const content = fs.readFileSync(path.join(researchDir, file), "utf-8")
+            const firstLines = content.split("\n").slice(0, 5).join(" ").slice(0, 150)
+            summaries.push(`- ${file}: ${firstLines}`)
+          }
+          if (summaries.length > 0) knowledgeContext = `\n\nResearch context:\n${summaries.join("\n")}`
+        }
+
+        // Load training buffer insights
+        let trainingContext = ""
+        const tbCtx = new TrainingBuffer(projectRoot)
+        const tuples = tbCtx.read().slice(-10)
+        if (tuples.length > 0) {
+          const insights = tuples.map(t =>
+            `- ${t.action.type}/${t.action.scope}: delta=${t.reward.composite_delta > 0 ? "+" : ""}${t.reward.composite_delta.toFixed(4)} "${t.action.description.slice(0, 80)}"`
+          )
+          trainingContext = `\n\nPast experiments (what worked/failed):\n${insights.join("\n")}`
+        }
+
+        const contextBlock = `${journalContext}${knowledgeContext}${trainingContext}`
+
         const prompt = useMultiProposal
           ? `Autoresearch round ${round}/${rounds}. Suggest 3 specific improvements ranked by expected impact.
 
@@ -836,6 +881,7 @@ ${pastTitles.map(t => `- ${t}`).join("\n") || "Nothing yet"}
 
 Previous rounds this session:
 ${results.map(r => `- Round ${r.round}: "${r.task}" → delta=${r.delta > 0 ? "+" : ""}${r.delta.toFixed(4)}`).join("\n") || "None yet"}
+${contextBlock}
 
 Respond with ONLY a JSON array of 3 objects: [{"task": "...", "predicted_delta": 0.0-1.0, "reasoning": "...", "risk": "..."}, ...]`
           : `Autoresearch round ${round}/${rounds}. Suggest ONE specific improvement.
@@ -848,6 +894,7 @@ ${pastTitles.map(t => `- ${t}`).join("\n") || "Nothing yet"}
 
 Previous rounds this session:
 ${results.map(r => `- Round ${r.round}: "${r.task}" → delta=${r.delta > 0 ? "+" : ""}${r.delta.toFixed(4)}`).join("\n") || "None yet"}
+${contextBlock}
 
 Suggest the SINGLE highest-value change. JSON format:
 {"task": "...", "predicted_delta": 0.0-1.0, "reasoning": "...", "risk": "..."}`
