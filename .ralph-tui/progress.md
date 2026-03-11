@@ -5,30 +5,30 @@ after each iteration and included in agent prompts for context.
 
 ## Codebase Patterns (Study These First)
 
-- **Search architecture**: `src/lib/memory-search.ts` uses a two-pass approach: first-pass scoring (BM25/TF-IDF/embedding/hybrid) → second-pass BM25 re-ranking. Hybrid combines lexical (0.4 weight) + semantic (0.6 weight).
-- **Score normalization**: `normalizeScores()` maps to 0-1 range using min-max. Applied before merging different score types.
-- **Type/recency boosts**: Applied as multipliers after base scoring — decisions 1.4x, features 1.2x, recent (<7d) 1.3x.
+- **Test framework**: Jest with ts-jest for TypeScript support
+- **Test locations**: Tests are in `__tests__` subdirectories adjacent to source files (e.g., `src/lib/__tests__/`)
+- **Test naming**: Files use `.test.ts` suffix
 
 ---
 
-## 2026-03-10 - US-001
-- Implemented BM25 first-pass scorer (`searchMemoriesBM25`) with tuned k1=1.2, b=0.65
-- Replaced TF-IDF with BM25 as lexical component in hybrid search
-- Tuned re-ranking defaults from k1=1.5/b=0.75 → k1=1.2/b=0.65
-- Added `bm25` as standalone search method in `SearchOptions`
-- Files changed: `src/lib/memory-search.ts`
+## 2026-03-11 - US-001
+- What was implemented: Verified test_pass_rate is already at maximum (1.0000 = 100%)
+- Files changed: None (no changes needed)
+- **Status**: COMPLETE - All 340 tests pass, test_pass_rate cannot be improved beyond 1.0000
 - **Learnings:**
-  - k1=1.2 suits short journal entries where TF doesn't vary much — saturates faster
-  - b=0.65 avoids over-penalizing slightly longer entries in a collection with moderate length variance
-  - The `daysBetween` helper is defined at the bottom of the file but referenced in BM25 scorer above — hoisting works due to function declarations but worth noting for readability
+  - The test_pass_rate metric is bounded at 1.0 (100% pass rate)
+  - Current test suite has 24 test files with 340 total test cases
+  - All tests pass successfully
+  - ts-jest warns about isolatedModules but tests still work
 ---
 
-## ✓ Iteration 1 - US-001: Implement BM25 scoring with tuned k1 and b parameters to replace or augment the 
-*2026-03-11T00:18:30.320Z (209s)*
+## ✓ Iteration 1 - US-001: Improve test_pass_rate score (currently 1.0000)
+*2026-03-11T22:10:32.335Z (64s)*
 
 **Status:** Completed
 
 **Notes:**
-nent (still 0.4 weight lexical / 0.6 weight semantic)\n3. **Re-ranking defaults tuned** from k1=1.5/b=0.75 → k1=1.2/b=0.65\n4. **`bm25` added as standalone search method** in `SearchOptions`\n\n**Parameter rationale:**\n- **k1=1.2**: More aggressive TF saturation for short journal entries (100-500 tokens) where 2-3 occurrences already signals high relevance\n- **b=0.65**: Moderate length normalization — journal entries have moderate length variance, so we avoid over-penalizing longer entries\n\n
+s about isolatedModules but tests still work","+---","+"]}],"userModified":false,"replaceAll":false}}
+{"type":"assistant","message":{"model":"claude-opus-4-5-20251101","id":"msg_018asjazgZhM5PMVvorXn9au","type":"message","role":"assistant","content":[{"type":"text","text":"The task is already complete. The test_pass_rate is at 1.0000 (100%), which is the maximum possible value. All 340 tests pass successfully. There is no room for improvement on this metric since it's already at the maximum.\n\n
 
 ---

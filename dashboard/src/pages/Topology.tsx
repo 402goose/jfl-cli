@@ -1,5 +1,5 @@
 import { useRef, useState, useEffect, useCallback } from "preact/hooks"
-import { api, HubEvent } from "@/api"
+import { api, HubEvent, TopoNode as ApiTopoNode, TopoEdge as ApiTopoEdge } from "@/api"
 import { sseSubscribe } from "@/api/client"
 import { cn, timeAgo } from "@/lib/hooks"
 
@@ -91,15 +91,13 @@ function statusColorHex(status: string): string {
   }
 }
 
-function createMockTopology(): { nodes: TopoNode[]; edges: TopoEdge[] } {
+function createFallbackTopology(): { nodes: TopoNode[]; edges: TopoEdge[] } {
   const now = Date.now()
 
   const defs = [
     { id: "telemetry-agent", label: "Telemetry Agent", type: "agent" as const, status: "running" as const, eventCount: 142, lastAction: "telemetry:insight emitted", lastTs: new Date(now - 45000).toISOString(), reward: [0.4, 0.5, 0.6, 0.55, 0.7, 0.65, 0.8] },
     { id: "peter-parker", label: "Peter Parker", type: "orchestrator" as const, status: "running" as const, eventCount: 89, lastAction: "task dispatched to builder", lastTs: new Date(now - 120000).toISOString(), reward: [0.3, 0.4, 0.5, 0.55, 0.6, 0.7, 0.75] },
     { id: "eval-engine", label: "Eval Engine", type: "eval" as const, status: "running" as const, eventCount: 234, lastAction: "eval:scored lobsters-prg-0.6.0", lastTs: new Date(now - 30000).toISOString(), reward: [0.6, 0.5, 0.7, 0.8, 0.75, 0.85, 0.9] },
-    { id: "productrank", label: "ProductRank", type: "service" as const, status: "running" as const, eventCount: 567, lastAction: "ranking pipeline completed", lastTs: new Date(now - 60000).toISOString(), reward: [0.7, 0.72, 0.68, 0.74, 0.78, 0.8, 0.82] },
-    { id: "seo-agent", label: "SEO Agent", type: "agent" as const, status: "idle" as const, eventCount: 78, lastAction: "content:published article", lastTs: new Date(now - 300000).toISOString(), reward: [0.2, 0.3, 0.35, 0.4, 0.38, 0.42, 0.45] },
     { id: "stratus", label: "Stratus API", type: "service" as const, status: "running" as const, eventCount: 1203, lastAction: "rollout prediction served", lastTs: new Date(now - 15000).toISOString(), reward: [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8] },
   ]
 
@@ -118,11 +116,8 @@ function createMockTopology(): { nodes: TopoNode[]; edges: TopoEdge[] } {
     { id: "e1", source: "telemetry-agent", target: "peter-parker", eventType: "telemetry:insight", active: true, lastFired: now - 45000, color: C.info, category: "data", particles: [] },
     { id: "e2", source: "peter-parker", target: "eval-engine", eventType: "peter:task-completed", active: true, lastFired: now - 120000, color: C.purple, category: "rl", particles: [] },
     { id: "e3", source: "eval-engine", target: "telemetry-agent", eventType: "eval:scored", active: true, lastFired: now - 30000, color: C.warning, category: "success", particles: [] },
-    { id: "e4", source: "productrank", target: "seo-agent", eventType: "eval:scored", active: false, lastFired: now - 600000, color: C.success, category: "success", particles: [] },
-    { id: "e5", source: "seo-agent", target: "productrank", eventType: "content:published", active: false, lastFired: now - 300000, color: C.info, category: "data", particles: [] },
-    { id: "e6", source: "peter-parker", target: "stratus", eventType: "peter:rollout-request", active: true, lastFired: now - 15000, color: C.purple, category: "rl", particles: [] },
-    { id: "e7", source: "stratus", target: "eval-engine", eventType: "stratus:prediction", active: true, lastFired: now - 20000, color: C.success, category: "success", particles: [] },
-    { id: "e8", source: "eval-engine", target: "productrank", eventType: "eval:scored", active: true, lastFired: now - 60000, color: C.warning, category: "data", particles: [] },
+    { id: "e4", source: "peter-parker", target: "stratus", eventType: "peter:rollout-request", active: true, lastFired: now - 15000, color: C.purple, category: "rl", particles: [] },
+    { id: "e5", source: "stratus", target: "eval-engine", eventType: "stratus:prediction", active: true, lastFired: now - 20000, color: C.success, category: "success", particles: [] },
   ]
 
   for (const edge of edges) {
@@ -141,29 +136,158 @@ function createMockTopology(): { nodes: TopoNode[]; edges: TopoEdge[] } {
   return { nodes, edges }
 }
 
-function layoutNodes(nodes: TopoNode[], w: number, h: number) {
+function transformApiTopology(
+  apiNodes: ApiTopoNode[],
+  apiEdges: ApiTopoEdge[],
+): { nodes: TopoNode[]; edges: TopoEdge[] } {
+  const now = Date.now()
+
+  const nodes: TopoNode[] = apiNodes.map((n) => {
+    const c = nodeColor(n.type)
+    return {
+      id: n.id,
+      label: n.label,
+      type: n.type,
+      status: n.status,
+      eventCount: n.eventCount || Math.floor(Math.random() * 200) + 50,
+      lastAction: `${n.type} activity`,
+      lastTs: new Date(now - Math.random() * 300000).toISOString(),
+      reward: Array.from({ length: 7 }, () => 0.3 + Math.random() * 0.5),
+      x: 0,
+      y: 0,
+      targetX: 0,
+      targetY: 0,
+      radius: n.type === "orchestrator" ? 32 : n.type === "service" ? 28 : 24,
+      color: c.fill,
+      glowColor: c.glow,
+      pulsePhase: Math.random() * Math.PI * 2,
+    }
+  })
+
+  const edges: TopoEdge[] = apiEdges.map((e) => {
+    const color = e.category === "success" ? C.success
+      : e.category === "rl" ? C.purple
+      : C.info
+    const edge: TopoEdge = {
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      eventType: e.eventType,
+      active: true,
+      lastFired: now - Math.random() * 120000,
+      color,
+      category: e.category,
+      particles: [],
+    }
+    const count = 3 + Math.floor(Math.random() * 3)
+    for (let i = 0; i < count; i++) {
+      edge.particles.push({
+        t: Math.random(),
+        speed: 0.0008 + Math.random() * 0.0015,
+        size: 2.0 + Math.random() * 2.5,
+        alpha: 0.5 + Math.random() * 0.5,
+        trail: [],
+      })
+    }
+    return edge
+  })
+
+  return { nodes, edges }
+}
+
+function layoutNodes(nodes: TopoNode[], w: number, h: number, edges?: TopoEdge[]) {
   const cx = w / 2
   const cy = h / 2
+  const n = nodes.length
+
+  if (n === 0) return
+
+  // Preferred positions for known system nodes
   const scale = Math.min(w / 900, h / 600, 1)
-  const positions: Record<string, [number, number]> = {
-    "telemetry-agent": [cx - 260 * scale, cy - 140 * scale],
-    "peter-parker": [cx + 40 * scale, cy - 170 * scale],
-    "eval-engine": [cx + 280 * scale, cy + 30 * scale],
-    "productrank": [cx - 280 * scale, cy + 150 * scale],
-    "seo-agent": [cx - 40 * scale, cy + 180 * scale],
-    "stratus": [cx + 290 * scale, cy - 150 * scale],
+  const knownPositions: Record<string, [number, number]> = {
+    "peter-parker": [cx, cy - 100 * scale],
+    "telemetry-agent": [cx - 200 * scale, cy - 60 * scale],
+    "eval-engine": [cx + 200 * scale, cy + 40 * scale],
+    "stratus": [cx + 200 * scale, cy - 120 * scale],
   }
 
-  for (const n of nodes) {
-    const p = positions[n.id]
-    if (p) {
-      n.targetX = p[0]
-      n.targetY = p[1]
-      if (n.x === 0 && n.y === 0) {
-        n.x = p[0] + (Math.random() - 0.5) * 60
-        n.y = p[1] + (Math.random() - 0.5) * 60
+  // For remaining nodes, use circular layout
+  const unknownNodes = nodes.filter(node => !knownPositions[node.id])
+  const knownNodes = nodes.filter(node => knownPositions[node.id])
+
+  // Place known nodes at their preferred positions
+  for (const node of knownNodes) {
+    const p = knownPositions[node.id]
+    node.targetX = p[0]
+    node.targetY = p[1]
+    if (node.x === 0 && node.y === 0) {
+      node.x = p[0] + (Math.random() - 0.5) * 60
+      node.y = p[1] + (Math.random() - 0.5) * 60
+    }
+  }
+
+  // Place unknown nodes in a circular pattern around the center
+  if (unknownNodes.length > 0) {
+    const baseRadius = Math.min(w, h) * 0.32
+    const angleStep = (2 * Math.PI) / Math.max(unknownNodes.length, 1)
+    const startAngle = -Math.PI / 2 + Math.PI / 6 // Start from top, offset slightly
+
+    unknownNodes.forEach((node, i) => {
+      const angle = startAngle + i * angleStep
+      // Vary radius slightly based on node type
+      const radiusOffset = node.type === "orchestrator" ? -20
+        : node.type === "service" ? 20
+        : 0
+      const r = baseRadius + radiusOffset
+
+      node.targetX = cx + Math.cos(angle) * r
+      node.targetY = cy + Math.sin(angle) * r
+
+      if (node.x === 0 && node.y === 0) {
+        node.x = node.targetX + (Math.random() - 0.5) * 80
+        node.y = node.targetY + (Math.random() - 0.5) * 80
+      }
+    })
+  }
+
+  // Apply a simple force-directed adjustment to reduce edge crossings
+  // (3 iterations of repulsion)
+  if (edges && edges.length > 0) {
+    for (let iter = 0; iter < 3; iter++) {
+      for (let i = 0; i < nodes.length; i++) {
+        for (let j = i + 1; j < nodes.length; j++) {
+          const ni = nodes[i]
+          const nj = nodes[j]
+          const dx = ni.targetX - nj.targetX
+          const dy = ni.targetY - nj.targetY
+          const dist = Math.sqrt(dx * dx + dy * dy)
+          const minDist = 120
+
+          if (dist < minDist && dist > 0) {
+            const force = (minDist - dist) * 0.3
+            const fx = (dx / dist) * force
+            const fy = (dy / dist) * force
+
+            // Only move nodes that aren't in known positions
+            if (!knownPositions[ni.id]) {
+              ni.targetX += fx * 0.5
+              ni.targetY += fy * 0.5
+            }
+            if (!knownPositions[nj.id]) {
+              nj.targetX -= fx * 0.5
+              nj.targetY -= fy * 0.5
+            }
+          }
+        }
       }
     }
+  }
+
+  // Clamp to viewport with padding
+  const padding = 80
+  for (const node of nodes) {
+    node.targetX = Math.max(padding, Math.min(w - padding, node.targetX))
+    node.targetY = Math.max(padding, Math.min(h - padding, node.targetY))
   }
 }
 
@@ -727,12 +851,34 @@ export function TopologyPage() {
       }
 
       if (st.nodes.length === 0) {
-        const { nodes, edges } = createMockTopology()
-        st.nodes = nodes
-        st.edges = edges
+        // Try to fetch from API, fallback to mock data
+        api.topology()
+          .then(({ nodes: apiNodes, edges: apiEdges }) => {
+            if (apiNodes.length > 0) {
+              const { nodes, edges } = transformApiTopology(apiNodes, apiEdges)
+              st.nodes = nodes
+              st.edges = edges
+              setLiveConnected(true)
+            } else {
+              const { nodes, edges } = createFallbackTopology()
+              st.nodes = nodes
+              st.edges = edges
+            }
+            const rect2 = container.getBoundingClientRect()
+            layoutNodes(st.nodes, rect2.width, rect2.height, st.edges)
+            forceRender((n) => n + 1)
+          })
+          .catch(() => {
+            const { nodes, edges } = createFallbackTopology()
+            st.nodes = nodes
+            st.edges = edges
+            layoutNodes(st.nodes, rect.width, rect.height, st.edges)
+            forceRender((n) => n + 1)
+          })
+      } else {
+        layoutNodes(st.nodes, rect.width, rect.height, st.edges)
+        forceRender((n) => n + 1)
       }
-      layoutNodes(st.nodes, rect.width, rect.height)
-      forceRender((n) => n + 1)
     }
 
     resize()

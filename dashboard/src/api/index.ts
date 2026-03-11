@@ -207,6 +207,40 @@ export interface TelemetryDigest {
   suggestions?: { severity: string; message: string; fix?: string }[]
 }
 
+export interface TopoNode {
+  id: string
+  label: string
+  type: "agent" | "orchestrator" | "eval" | "service"
+  status: "running" | "idle" | "stopped"
+  eventCount?: number
+  produces?: string[]
+  consumes?: string[]
+}
+
+export interface TopoEdge {
+  id: string
+  source: string
+  target: string
+  eventType: string
+  category: "data" | "success" | "rl"
+}
+
+export interface TopologyData {
+  nodes: TopoNode[]
+  edges: TopoEdge[]
+}
+
+export interface AutoresearchStatus {
+  running: boolean
+  currentRound: number
+  totalRounds: number
+  baselineComposite: number | null
+  proposals: Array<{ rank: number; predicted: number; description: string }>
+  dimensions: Record<string, number>
+  history: Array<{ round: number; composite: number; delta: number; tests: string }>
+  lastUpdate: string | null
+}
+
 export const api = {
   status: () => apiFetch<WorkspaceStatus>("/api/context/status"),
 
@@ -297,4 +331,8 @@ export const api = {
       return null
     }
   },
+
+  topology: () => apiFetch<TopologyData>("/api/v1/topology"),
+
+  autoresearchStatus: () => apiFetch<AutoresearchStatus>("/api/v1/autoresearch/status"),
 }

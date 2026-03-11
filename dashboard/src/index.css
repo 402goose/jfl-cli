@@ -1,3 +1,4 @@
+@import url('https://fonts.googleapis.com/css2?family=Archivo+Black&family=Space+Grotesk:wght@400;500;600;700&family=Space+Mono:wght@400;700&display=swap');
 @import "tailwindcss";
 
 @theme inline {
@@ -39,6 +40,11 @@
   --sidebar: oklch(0.14 0 0);
   --sidebar-foreground: oklch(0.92 0 0);
   --sidebar-border: oklch(0.205 0 0);
+
+  /* Cyberpunk accent colors */
+  --accent-orange: #FF5722;
+  --accent-orange-bright: #FF7043;
+  --accent-orange-dim: #BF360C;
 }
 
 * { box-sizing: border-box; }
@@ -47,13 +53,17 @@ body {
   margin: 0;
   background: var(--background);
   color: var(--foreground);
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  font-family: 'Space Grotesk', system-ui, -apple-system, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
+h1, h2, h3, .heading {
+  font-family: 'Archivo Black', sans-serif;
+}
+
 .mono {
-  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, monospace;
+  font-family: 'Space Mono', ui-monospace, SFMono-Regular, monospace;
 }
 
 ::selection {

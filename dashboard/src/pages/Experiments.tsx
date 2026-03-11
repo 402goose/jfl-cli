@@ -1,4 +1,4 @@
-import { api, EvalAgent, TrajectoryPoint, PredictionRecord, PredictionAccuracyStats } from "@/api"
+import { api, EvalAgent, TrajectoryPoint, PredictionRecord, PredictionAccuracyStats, AutoresearchStatus } from "@/api"
 import { Sparkline } from "@/components"
 import { usePolling, cn, timeAgo } from "@/lib/hooks"
 import { useState } from "preact/hooks"
@@ -25,6 +25,222 @@ function buildRuns(points: TrajectoryPoint[]): ExperimentRun[] {
       index: i,
     }
   })
+}
+
+function AutoresearchPanel() {
+  const status = usePolling(() => api.autoresearchStatus(), 5000)
+  const data = status.data
+
+  if (status.loading && !data) {
+    return (
+      <div class="bg-card rounded-lg border border-border p-4 animate-fade-in">
+        <div class="text-sm text-muted-foreground">Loading autoresearch status...</div>
+      </div>
+    )
+  }
+
+  if (!data || (data.totalRounds === 0 && data.history.length === 0)) {
+    return (
+      <div class="bg-card rounded-lg border border-border p-6 animate-fade-in">
+        <div class="flex items-center gap-3 mb-2">
+          <div class="w-2 h-2 rounded-full bg-muted-foreground/30" />
+          <h2 class="text-sm font-medium">Autoresearch</h2>
+        </div>
+        <div class="text-xs text-muted-foreground">
+          No autoresearch runs detected. Start with <span class="mono">jfl autoresearch</span>
+        </div>
+      </div>
+    )
+  }
+
+  const progressPct = data.totalRounds > 0 ? (data.currentRound / data.totalRounds) * 100 : 0
+  const dimensionKeys = Object.keys(data.dimensions)
+  const historyScores = data.history.map(h => h.composite)
+
+  return (
+    <div class="bg-card rounded-lg border border-border overflow-hidden animate-fade-in">
+      <div class="px-4 py-3 border-b border-border flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <div class={cn(
+            "w-2 h-2 rounded-full",
+            data.running ? "bg-success animate-pulse-dot" : "bg-muted-foreground/50"
+          )} />
+          <div>
+            <h2 class="text-sm font-medium">Autoresearch</h2>
+            <div class="text-[10px] text-muted-foreground mt-0.5 mono">
+              Policy head ranking + multi-dimension eval
+            </div>
+          </div>
+        </div>
+        <div class="flex items-center gap-4">
+          <div class="text-right">
+            <div class="text-[10px] text-muted-foreground uppercase">Round</div>
+            <div class="text-sm font-semibold mono">
+              {data.currentRound}/{data.totalRounds}
+            </div>
+          </div>
+          {data.baselineComposite != null && (
+            <div class="text-right">
+              <div class="text-[10px] text-muted-foreground uppercase">Baseline</div>
+              <div class="text-sm font-semibold mono">{data.baselineComposite.toFixed(4)}</div>
+            </div>
+          )}
+          <span class={cn(
+            "text-[10px] mono px-1.5 py-0.5 rounded uppercase",
+            data.running ? "bg-success/15 text-success" : "bg-muted text-muted-foreground"
+          )}>
+            {data.running ? "running" : "idle"}
+          </span>
+        </div>
+      </div>
+
+      <div class="p-4">
+        {/* Progress bar */}
+        <div class="mb-4">
+          <div class="flex items-center justify-between text-[10px] text-muted-foreground mb-1">
+            <span>Progress</span>
+            <span class="mono">{progressPct.toFixed(0)}%</span>
+          </div>
+          <div class="h-1.5 bg-muted rounded-full overflow-hidden">
+            <div
+              class="h-full bg-info rounded-full transition-all duration-500"
+              style={{ width: `${progressPct}%` }}
+            />
+          </div>
+        </div>
+
+        {/* Policy head proposals */}
+        {data.proposals.length > 0 && (
+          <div class="mb-4">
+            <div class="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">
+              Policy Head Ranking
+            </div>
+            <div class="space-y-1.5">
+              {data.proposals.map((p, i) => (
+                <div
+                  key={i}
+                  class={cn(
+                    "flex items-center gap-2 text-xs p-2 rounded",
+                    i === 0 ? "bg-info/10 border border-info/20" : "bg-muted/30"
+                  )}
+                >
+                  <span class={cn(
+                    "w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-semibold",
+                    i === 0 ? "bg-info/20 text-info" : "bg-muted text-muted-foreground"
+                  )}>
+                    {p.rank}
+                  </span>
+                  <span class={cn(
+                    "mono text-[10px] shrink-0 w-16",
+                    p.predicted > 0 ? "text-success" : p.predicted < 0 ? "text-destructive" : "text-muted-foreground"
+                  )}>
+                    {p.predicted >= 0 ? "+" : ""}{p.predicted.toFixed(4)}
+                  </span>
+                  <span class="truncate text-muted-foreground" title={p.description}>
+                    {p.description}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Multi-dimension eval breakdown */}
+        {dimensionKeys.length > 0 && (
+          <div class="mb-4">
+            <div class="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">
+              Dimension Breakdown
+            </div>
+            <div class="grid grid-cols-5 gap-2">
+              {dimensionKeys.map((key) => {
+                const val = data.dimensions[key]
+                const pct = val * 100
+                return (
+                  <div key={key} class="text-center">
+                    <div class="text-[9px] text-muted-foreground uppercase mb-1">{key}</div>
+                    <div class="h-2 bg-muted rounded-full overflow-hidden mb-1">
+                      <div
+                        class={cn(
+                          "h-full rounded-full",
+                          pct >= 100 ? "bg-success" : pct >= 80 ? "bg-info" : pct >= 50 ? "bg-warning" : "bg-destructive"
+                        )}
+                        style={{ width: `${Math.min(pct, 100)}%` }}
+                      />
+                    </div>
+                    <div class="text-xs mono font-semibold">{val.toFixed(2)}</div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Training curve sparkline */}
+        {historyScores.length > 1 && (
+          <div class="mb-4">
+            <div class="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">
+              Training Curve
+            </div>
+            <div class="bg-muted/30 rounded-lg p-3">
+              <Sparkline
+                data={historyScores}
+                width={500}
+                height={48}
+                color="var(--info)"
+                className="w-full"
+              />
+              <div class="flex justify-between text-[9px] mono text-muted-foreground mt-2">
+                <span>Round 1</span>
+                <span>Round {data.history.length}</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Round history table */}
+        {data.history.length > 0 && (
+          <div>
+            <div class="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">
+              Round History
+            </div>
+            <div class="overflow-hidden rounded border border-border/50">
+              <table class="w-full text-xs">
+                <thead>
+                  <tr class="text-muted-foreground border-b border-border bg-muted/30">
+                    <th class="text-left py-1.5 px-2 font-medium">Round</th>
+                    <th class="text-right py-1.5 px-2 font-medium">Composite</th>
+                    <th class="text-right py-1.5 px-2 font-medium">Delta</th>
+                    <th class="text-right py-1.5 px-2 font-medium">Tests</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...data.history].reverse().slice(0, 10).map((h) => (
+                    <tr key={h.round} class="border-b border-border/30 hover:bg-muted/20">
+                      <td class="py-1 px-2 mono">{h.round}</td>
+                      <td class="py-1 px-2 mono text-right font-medium">{h.composite.toFixed(4)}</td>
+                      <td class={cn(
+                        "py-1 px-2 mono text-right",
+                        h.delta > 0 ? "text-success" : h.delta < 0 ? "text-destructive" : "text-muted-foreground"
+                      )}>
+                        {h.delta === 0 ? "=" : h.delta > 0 ? "+" : ""}{h.delta.toFixed(4)}
+                      </td>
+                      <td class="py-1 px-2 mono text-right text-muted-foreground">{h.tests}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {data.lastUpdate && (
+          <div class="mt-3 text-[9px] mono text-muted-foreground/60">
+            Last update: {timeAgo(data.lastUpdate)}
+          </div>
+        )}
+      </div>
+    </div>
+  )
 }
 
 export function ExperimentsPage() {
@@ -66,6 +282,8 @@ export function ExperimentsPage() {
           </div>
         )}
       </div>
+
+      <AutoresearchPanel />
 
       {activeAgent ? (
         <ExperimentDetail agentName={activeAgent} />

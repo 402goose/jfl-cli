@@ -1493,6 +1493,254 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus,
       return
     }
 
+    // Topology — returns nodes/edges for agent topology visualization
+    if (url.pathname === "/api/v1/topology" && req.method === "GET") {
+      try {
+        const configPath = path.join(projectRoot, ".jfl", "config.json")
+        let registeredServices: Array<{
+          name: string
+          type?: string
+          status?: string
+          path?: string
+          context_scope?: { produces?: string[]; consumes?: string[]; denied?: string[] }
+        }> = []
+
+        if (fs.existsSync(configPath)) {
+          try {
+            const config = JSON.parse(fs.readFileSync(configPath, "utf-8"))
+            registeredServices = config.registered_services || []
+          } catch {}
+        }
+
+        // System agents (always present in a JFL installation)
+        const systemAgents = [
+          { id: "peter-parker", label: "Peter Parker", type: "orchestrator" as const, status: "running" as const, produces: ["peter:task-completed", "peter:rollout-request", "peter:experiment-start"], consumes: ["telemetry:insight", "eval:scored"] },
+          { id: "telemetry-agent", label: "Telemetry Agent", type: "agent" as const, status: "running" as const, produces: ["telemetry:insight", "telemetry:anomaly"], consumes: ["hook:*", "eval:*"] },
+          { id: "eval-engine", label: "Eval Engine", type: "eval" as const, status: "running" as const, produces: ["eval:scored", "eval:baseline"], consumes: ["peter:task-completed"] },
+          { id: "stratus", label: "Stratus API", type: "service" as const, status: "running" as const, produces: ["stratus:prediction", "stratus:rollout-result"], consumes: ["peter:rollout-request"] },
+        ]
+
+        // Build nodes from registered services + system agents
+        interface TopoNode {
+          id: string
+          label: string
+          type: "agent" | "orchestrator" | "eval" | "service"
+          status: "running" | "idle" | "stopped"
+          eventCount?: number
+          produces?: string[]
+          consumes?: string[]
+        }
+
+        interface TopoEdge {
+          id: string
+          source: string
+          target: string
+          eventType: string
+          category: "data" | "success" | "rl"
+        }
+
+        const nodes: TopoNode[] = [
+          ...systemAgents.map(a => ({
+            id: a.id,
+            label: a.label,
+            type: a.type,
+            status: a.status,
+            eventCount: 0,
+            produces: a.produces,
+            consumes: a.consumes,
+          })),
+        ]
+
+        // Add registered services as nodes
+        for (const service of registeredServices) {
+          if (!nodes.find(n => n.id === service.name)) {
+            nodes.push({
+              id: service.name,
+              label: service.name.split("-").map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(" "),
+              type: service.type === "agent" ? "agent" : service.type === "eval" ? "eval" : "service",
+              status: service.status === "running" ? "running" : service.status === "idle" ? "idle" : "stopped",
+              eventCount: 0,
+              produces: service.context_scope?.produces,
+              consumes: service.context_scope?.consumes,
+            })
+          }
+        }
+
+        // Build edges from produces/consumes relationships
+        const edges: TopoEdge[] = []
+        let edgeId = 0
+
+        // Create edges between services based on scope patterns
+        for (const producer of nodes) {
+          if (!producer.produces) continue
+          for (const eventPattern of producer.produces) {
+            for (const consumer of nodes) {
+              if (producer.id === consumer.id || !consumer.consumes) continue
+              for (const consumePattern of consumer.consumes) {
+                // Check if patterns match (simple glob matching)
+                const patternMatches = (prod: string, cons: string): boolean => {
+                  if (cons.endsWith(":*")) {
+                    return prod.startsWith(cons.slice(0, -1))
+                  }
+                  if (cons === "*") return true
+                  return prod === cons || prod.startsWith(cons.split(":")[0] + ":")
+                }
+
+                if (patternMatches(eventPattern, consumePattern)) {
+                  const existing = edges.find(e => e.source === producer.id && e.target === consumer.id && e.eventType === eventPattern)
+                  if (!existing) {
+                    edges.push({
+                      id: `e${++edgeId}`,
+                      source: producer.id,
+                      target: consumer.id,
+                      eventType: eventPattern,
+                      category: eventPattern.includes("eval") || eventPattern.includes("scored") ? "success"
+                        : eventPattern.includes("peter") || eventPattern.includes("rollout") ? "rl"
+                        : "data",
+                    })
+                  }
+                }
+              }
+            }
+          }
+        }
+
+        // Add known system flow edges that might not be captured by scope
+        const systemEdges: Array<Omit<TopoEdge, "id">> = [
+          { source: "telemetry-agent", target: "peter-parker", eventType: "telemetry:insight", category: "data" },
+          { source: "peter-parker", target: "eval-engine", eventType: "peter:task-completed", category: "rl" },
+          { source: "eval-engine", target: "telemetry-agent", eventType: "eval:scored", category: "success" },
+          { source: "peter-parker", target: "stratus", eventType: "peter:rollout-request", category: "rl" },
+          { source: "stratus", target: "eval-engine", eventType: "stratus:prediction", category: "success" },
+        ]
+
+        for (const sysEdge of systemEdges) {
+          const exists = edges.find(e => e.source === sysEdge.source && e.target === sysEdge.target)
+          if (!exists && nodes.find(n => n.id === sysEdge.source) && nodes.find(n => n.id === sysEdge.target)) {
+            edges.push({ id: `e${++edgeId}`, ...sysEdge })
+          }
+        }
+
+        res.writeHead(200, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ nodes, edges }))
+      } catch (err: any) {
+        res.writeHead(500, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ error: err.message }))
+      }
+      return
+    }
+
+    // Autoresearch status — returns current autoresearch run state
+    if (url.pathname === "/api/v1/autoresearch/status" && req.method === "GET") {
+      try {
+        interface AutoresearchStatus {
+          running: boolean
+          currentRound: number
+          totalRounds: number
+          baselineComposite: number | null
+          proposals: Array<{ rank: number; predicted: number; description: string }>
+          dimensions: Record<string, number>
+          history: Array<{ round: number; composite: number; delta: number; tests: string }>
+          lastUpdate: string | null
+        }
+
+        const status: AutoresearchStatus = {
+          running: false,
+          currentRound: 0,
+          totalRounds: 0,
+          baselineComposite: null,
+          proposals: [],
+          dimensions: {},
+          history: [],
+          lastUpdate: null,
+        }
+
+        // Try to read from log files
+        const logPaths = [
+          path.join(projectRoot, ".jfl", "autoresearch-continuous.log"),
+          path.join(projectRoot, ".jfl", "autoresearch-overnight.log"),
+        ]
+
+        let logContent = ""
+        let logPath = ""
+        for (const p of logPaths) {
+          if (fs.existsSync(p)) {
+            const stat = fs.statSync(p)
+            // Use the most recently modified log
+            if (!logPath || stat.mtimeMs > fs.statSync(logPath).mtimeMs) {
+              logPath = p
+            }
+          }
+        }
+
+        if (logPath) {
+          logContent = fs.readFileSync(logPath, "utf-8")
+          status.lastUpdate = fs.statSync(logPath).mtime.toISOString()
+
+          // Parse total rounds from header
+          const roundsMatch = logContent.match(/Autoresearch Mode \((\d+) rounds\)/)
+          if (roundsMatch) {
+            status.totalRounds = parseInt(roundsMatch[1], 10)
+          }
+
+          // Parse baseline
+          const baselineMatch = logContent.match(/Baseline composite: ([\d.]+)/)
+          if (baselineMatch) {
+            status.baselineComposite = parseFloat(baselineMatch[1])
+          }
+
+          // Parse latest round number
+          const roundMatches = [...logContent.matchAll(/── Round (\d+)\/\d+ ──/g)]
+          if (roundMatches.length > 0) {
+            status.currentRound = parseInt(roundMatches[roundMatches.length - 1][1], 10)
+          }
+
+          // Parse policy head proposals (get the latest set)
+          const proposalBlocks = [...logContent.matchAll(/Policy head re-ranked 3 proposals.*?\n([\s\S]*?)(?=\n\s*Task:|$)/g)]
+          if (proposalBlocks.length > 0) {
+            const latestBlock = proposalBlocks[proposalBlocks.length - 1][1]
+            const proposalMatches = [...latestBlock.matchAll(/#(\d+) \[pred=([-\d.]+)\] ([^\n]+)/g)]
+            status.proposals = proposalMatches.map(m => ({
+              rank: parseInt(m[1], 10),
+              predicted: parseFloat(m[2]),
+              description: m[3].trim(),
+            }))
+          }
+
+          // Parse dimensions from latest eval
+          const dimMatches = [...logContent.matchAll(/Dimensions: (tests=[\d.]+ tsc=[\d.]+ lint=[\d.]+ telemetry=[\d.]+ newTests=[\d.]+)/g)]
+          if (dimMatches.length > 0) {
+            const latest = dimMatches[dimMatches.length - 1][1]
+            for (const [, key, val] of latest.matchAll(/(tests|tsc|lint|telemetry|newTests)=([\d.]+)/g)) {
+              status.dimensions[key] = parseFloat(val)
+            }
+          }
+
+          // Parse round results for history
+          const resultMatches = [...logContent.matchAll(/Round (\d+) result: ([\d.]+) \(([-=+][\d.]+)\)\s*\n\s*Tests: (\d+\/\d+)/g)]
+          status.history = resultMatches.map(m => ({
+            round: parseInt(m[1], 10),
+            composite: parseFloat(m[2]),
+            delta: m[3].startsWith("=") ? 0 : parseFloat(m[3]),
+            tests: m[4],
+          }))
+
+          // Check if running (log modified in last 5 minutes and no completion message)
+          const fiveMinAgo = Date.now() - 5 * 60 * 1000
+          const logMtime = fs.statSync(logPath).mtimeMs
+          const hasCompletionMsg = logContent.includes("All rounds complete") || logContent.includes("Autoresearch finished")
+          status.running = logMtime > fiveMinAgo && !hasCompletionMsg && status.currentRound > 0
+        }
+
+        res.writeHead(200, { "Content-Type": "application/json" })
+        res.end(JSON.stringify(status))
+      } catch (err: any) {
+        res.writeHead(500, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ error: err.message }))
+      }
+      return
+    }
+
     if (url.pathname === "/api/actions/spawn" && req.method === "POST") {
       let body = ""
       req.on("data", chunk => body += chunk)
