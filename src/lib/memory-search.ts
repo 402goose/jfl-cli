@@ -21,7 +21,7 @@ export interface SearchOptions {
   maxItems?: number
   type?: string
   since?: string
-  method?: 'tfidf' | 'embedding' | 'hybrid'
+  method?: 'tfidf' | 'embedding' | 'hybrid' | 'bm25'
   rerank?: boolean
 }
 
@@ -120,6 +120,89 @@ async function searchMemoriesTFIDF(
   // Sort by score descending
   scored.sort((a, b) => b.score - a.score)
 
+  return scored.slice(0, limit)
+}
+
+/**
+ * BM25 first-pass scoring over full document collection.
+ *
+ * Uses tuned k1/b parameters optimized for short, structured journal entries:
+ * - k1=1.2: Aggressive term frequency saturation — in short docs (100-500 tokens),
+ *   a term appearing 2-3 times is already highly relevant
+ * - b=0.65: Moderate length normalization — journal entries vary in length but
+ *   not dramatically, so we don't over-penalize longer entries
+ */
+async function searchMemoriesBM25(
+  query: string,
+  memories: Memory[],
+  limit: number,
+  k1: number = 1.2,
+  b: number = 0.65
+): Promise<SearchResult[]> {
+  const queryTokens = tokenize(query)
+  if (queryTokens.length === 0) return []
+
+  const docs = memories.map(m => {
+    const text = [m.title, m.content, m.summary]
+      .filter(Boolean)
+      .join(' ')
+    return tokenize(text)
+  })
+
+  const N = docs.length
+  if (N === 0) return []
+
+  const avgdl = docs.reduce((sum, d) => sum + d.length, 0) / N
+
+  const docFreq = new Map<string, number>()
+  for (const token of queryTokens) {
+    let count = 0
+    for (const doc of docs) {
+      if (doc.includes(token)) count++
+    }
+    docFreq.set(token, count)
+  }
+
+  const scored: SearchResult[] = []
+
+  for (let i = 0; i < memories.length; i++) {
+    const doc = docs[i]
+    const dl = doc.length
+    if (dl === 0) continue
+
+    const termCounts = new Map<string, number>()
+    for (const token of doc) {
+      termCounts.set(token, (termCounts.get(token) || 0) + 1)
+    }
+
+    let bm25Score = 0
+    for (const token of queryTokens) {
+      const tf = termCounts.get(token) || 0
+      if (tf === 0) continue
+
+      const df = docFreq.get(token) || 0
+      const idf = Math.log((N - df + 0.5) / (df + 0.5) + 1)
+      const tfNorm = (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * (dl / avgdl)))
+      bm25Score += idf * tfNorm
+    }
+
+    if (bm25Score > 0) {
+      const memory = memories[i]
+
+      const daysSinceCreated = daysBetween(memory.created_at, new Date().toISOString())
+      if (daysSinceCreated < 7) bm25Score *= 1.3
+      if (memory.type === 'decision') bm25Score *= 1.4
+      if (memory.type === 'feature') bm25Score *= 1.2
+
+      scored.push({
+        memory,
+        score: bm25Score,
+        relevance: bm25Score > 0.7 ? 'high' : bm25Score > 0.4 ? 'medium' : 'low'
+      })
+    }
+  }
+
+  scored.sort((a, b) => b.score - a.score)
   return scored.slice(0, limit)
 }
 
@@ -267,20 +350,20 @@ async function searchMemoriesHybrid(
   memories: Memory[],
   limit: number
 ): Promise<SearchResult[]> {
-  // Run both searches in parallel
-  const [tfIdfResults, embeddingResults] = await Promise.all([
-    searchMemoriesTFIDF(query, memories, limit * 2),
+  // Run BM25 (lexical) and embedding (semantic) in parallel
+  const [bm25Results, embeddingResults] = await Promise.all([
+    searchMemoriesBM25(query, memories, limit * 2),
     searchMemoriesEmbedding(query, memories, limit * 2).catch(() => [])
   ])
 
   // Normalize scores
-  const tfIdfNormalized = normalizeScores(tfIdfResults)
+  const bm25Normalized = normalizeScores(bm25Results)
   const embeddingNormalized = normalizeScores(embeddingResults)
 
-  // Merge with weights (TF-IDF: 0.4, Embedding: 0.6)
+  // Merge with weights (BM25: 0.4, Embedding: 0.6)
   const mergedScores = new Map<number, number>()
 
-  for (const result of tfIdfNormalized) {
+  for (const result of bm25Normalized) {
     const memId = result.memory.id
     mergedScores.set(memId, (mergedScores.get(memId) || 0) + result.score * 0.4)
   }
@@ -292,7 +375,7 @@ async function searchMemoriesHybrid(
 
   // Create final results
   const memoryMap = new Map<number, Memory>()
-  tfIdfResults.forEach(r => memoryMap.set(r.memory.id, r.memory))
+  bm25Results.forEach(r => memoryMap.set(r.memory.id, r.memory))
   embeddingResults.forEach(r => memoryMap.set(r.memory.id, r.memory))
 
   const finalResults: SearchResult[] = Array.from(mergedScores.entries())
@@ -316,14 +399,14 @@ async function searchMemoriesHybrid(
  *
  * @param results - Initial retrieval results (first-pass candidates)
  * @param query - Original search query
- * @param k1 - Term frequency saturation (default 1.5)
- * @param b - Length normalization factor (default 0.75)
+ * @param k1 - Term frequency saturation (default 1.2, tuned for short journal docs)
+ * @param b - Length normalization factor (default 0.65, tuned for moderate length variance)
  */
 function reRankWithBM25(
   results: SearchResult[],
   query: string,
-  k1: number = 1.5,
-  b: number = 0.75
+  k1: number = 1.2,
+  b: number = 0.65
 ): SearchResult[] {
   if (results.length === 0) return results
 
@@ -418,7 +501,9 @@ export async function searchMemories(
 
   // Search based on method
   let results: SearchResult[]
-  if (method === 'tfidf') {
+  if (method === 'bm25') {
+    results = await searchMemoriesBM25(query, memories, maxItems * 2)
+  } else if (method === 'tfidf') {
     results = await searchMemoriesTFIDF(query, memories, maxItems * 2)
   } else if (method === 'embedding') {
     results = await searchMemoriesEmbedding(query, memories, maxItems * 2)
