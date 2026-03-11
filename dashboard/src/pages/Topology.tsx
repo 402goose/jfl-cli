@@ -38,6 +38,8 @@ interface TopoNode {
   glowColor: string
   pulsePhase: number
   reward: number[]
+  produces?: string[]
+  consumes?: string[]
 }
 
 interface TopoEdge {
@@ -63,7 +65,8 @@ interface FlowParticle {
 interface DetailPanel {
   node: TopoNode
   edges: TopoEdge[]
-  recentEvents: { type: string; ts: string; data: string }[]
+  recentEvents: { type: string; ts: string; data: string; source?: string }[]
+  connectedServices: { id: string; label: string; direction: "in" | "out"; eventType: string }[]
 }
 
 function nodeColor(type: string): { fill: string; glow: string } {
@@ -161,6 +164,8 @@ function transformApiTopology(
       color: c.fill,
       glowColor: c.glow,
       pulsePhase: Math.random() * Math.PI * 2,
+      produces: n.produces,
+      consumes: n.consumes,
     }
   })
 
@@ -775,17 +780,58 @@ export function TopologyPage() {
     } else {
       st.selectedNode = node.id
       const connEdges = st.edges.filter((e) => e.source === node.id || e.target === node.id)
+
+      // Build connected services list
+      const connectedServices: DetailPanel["connectedServices"] = []
+      for (const edge of connEdges) {
+        const isOutgoing = edge.source === node.id
+        const otherId = isOutgoing ? edge.target : edge.source
+        const otherNode = st.nodes.find((n) => n.id === otherId)
+        if (otherNode) {
+          connectedServices.push({
+            id: otherId,
+            label: otherNode.label,
+            direction: isOutgoing ? "out" : "in",
+            eventType: edge.eventType,
+          })
+        }
+      }
+
+      // Filter live events involving this node
+      const nodeEvents = eventLog
+        .filter((evt) => {
+          const evtType = evt.type.toLowerCase()
+          const nodeId = node.id.toLowerCase()
+          // Match events that contain the node name or are from/to this node
+          return evtType.includes(nodeId.split("-")[0]) ||
+            connEdges.some((e) => evtType.startsWith(e.eventType.split(":")[0]))
+        })
+        .slice(0, 8)
+        .map((evt) => ({
+          type: evt.type,
+          ts: evt.ts,
+          data: "",
+          source: undefined,
+        }))
+
+      // Fallback to edge-based events if no live events
+      const recentEvents = nodeEvents.length > 0
+        ? nodeEvents
+        : connEdges.slice(0, 5).map((e) => ({
+            type: e.eventType,
+            ts: new Date(e.lastFired).toISOString(),
+            data: `${e.source} -> ${e.target}`,
+            source: e.source,
+          }))
+
       setSelectedDetail({
         node,
         edges: connEdges,
-        recentEvents: connEdges.slice(0, 5).map((e) => ({
-          type: e.eventType,
-          ts: new Date(e.lastFired).toISOString(),
-          data: `${e.source} -> ${e.target}`,
-        })),
+        recentEvents,
+        connectedServices,
       })
     }
-  }, [])
+  }, [eventLog])
 
   useEffect(() => {
     const glCanvas = glCanvasRef.current
@@ -1457,7 +1503,7 @@ export function TopologyPage() {
               </button>
             </div>
 
-            <div class="flex items-center gap-2">
+            <div class="flex items-center gap-2 flex-wrap">
               <span class="text-[9px] mono px-2 py-0.5 rounded-full uppercase tracking-wider" style={{
                 backgroundColor: statusColorHex(selectedDetail.node.status) + "15",
                 color: statusColorHex(selectedDetail.node.status),
@@ -1473,6 +1519,52 @@ export function TopologyPage() {
                 {selectedDetail.node.type}
               </span>
             </div>
+
+            {/* Produces/Consumes Scope Badges */}
+            {(selectedDetail.node.produces?.length || selectedDetail.node.consumes?.length) && (
+              <div class="mt-3 space-y-2">
+                {selectedDetail.node.produces && selectedDetail.node.produces.length > 0 && (
+                  <div>
+                    <span class="text-[8px] uppercase tracking-widest" style={{ color: C.textDim }}>produces</span>
+                    <div class="flex flex-wrap gap-1 mt-1">
+                      {selectedDetail.node.produces.map((scope) => (
+                        <span
+                          key={scope}
+                          class="text-[8px] mono px-1.5 py-0.5 rounded"
+                          style={{
+                            background: `${C.success}15`,
+                            color: C.success,
+                            border: `1px solid ${C.success}25`,
+                          }}
+                        >
+                          {scope}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {selectedDetail.node.consumes && selectedDetail.node.consumes.length > 0 && (
+                  <div>
+                    <span class="text-[8px] uppercase tracking-widest" style={{ color: C.textDim }}>consumes</span>
+                    <div class="flex flex-wrap gap-1 mt-1">
+                      {selectedDetail.node.consumes.map((scope) => (
+                        <span
+                          key={scope}
+                          class="text-[8px] mono px-1.5 py-0.5 rounded"
+                          style={{
+                            background: `${C.info}15`,
+                            color: C.info,
+                            border: `1px solid ${C.info}25`,
+                          }}
+                        >
+                          {scope}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
 
           <div class="p-4 space-y-5">
@@ -1523,34 +1615,50 @@ export function TopologyPage() {
               </div>
             </div>
 
+            {/* Connected Services - grouped by direction */}
             <div>
               <div class="text-[9px] uppercase tracking-widest font-medium mb-2" style={{ color: C.textDim }}>
-                Connections ({selectedDetail.edges.length})
+                Connected Services ({selectedDetail.connectedServices.length})
               </div>
-              <div class="space-y-1.5">
-                {selectedDetail.edges.map((edge) => {
-                  const isOutgoing = edge.source === selectedDetail.node.id
-                  const otherNode = stateRef.current.nodes.find(
-                    (n) => n.id === (isOutgoing ? edge.target : edge.source)
-                  )
-                  return (
-                    <div key={edge.id} class="flex items-center gap-2 text-xs">
-                      <svg width="12" height="8" viewBox="0 0 12 8" class="shrink-0">
-                        {isOutgoing ? (
-                          <path d="M0 4h8M6 1l3 3-3 3" fill="none" stroke={edge.color} stroke-width="1.5" />
-                        ) : (
-                          <path d="M12 4H4M6 1L3 4l3 3" fill="none" stroke={edge.color} stroke-width="1.5" />
-                        )}
+              <div class="space-y-3">
+                {/* Services that feed INTO this node */}
+                {selectedDetail.connectedServices.filter(s => s.direction === "in").length > 0 && (
+                  <div>
+                    <div class="text-[8px] uppercase tracking-wider mb-1.5 flex items-center gap-1.5" style={{ color: C.info }}>
+                      <svg width="10" height="6" viewBox="0 0 10 6">
+                        <path d="M10 3H2M4 0.5L1 3l3 2.5" fill="none" stroke={C.info} stroke-width="1.2" />
                       </svg>
-                      <span class="mono text-[9px]" style={{ color: edge.color }}>
-                        {edge.eventType}
-                      </span>
-                      <span class="text-[9px] ml-auto truncate" style={{ color: C.textDim }}>
-                        {isOutgoing ? "to" : "from"} {otherNode?.label || "?"}
-                      </span>
+                      feeds into
                     </div>
-                  )
-                })}
+                    <div class="space-y-1">
+                      {selectedDetail.connectedServices.filter(s => s.direction === "in").map((svc) => (
+                        <div key={svc.id} class="flex items-center gap-2 text-xs pl-3">
+                          <span style={{ color: C.text }}>{svc.label}</span>
+                          <span class="mono text-[8px] ml-auto" style={{ color: C.textDim }}>{svc.eventType}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {/* Services this node feeds OUT to */}
+                {selectedDetail.connectedServices.filter(s => s.direction === "out").length > 0 && (
+                  <div>
+                    <div class="text-[8px] uppercase tracking-wider mb-1.5 flex items-center gap-1.5" style={{ color: C.success }}>
+                      <svg width="10" height="6" viewBox="0 0 10 6">
+                        <path d="M0 3h8M6 0.5l3 2.5-3 2.5" fill="none" stroke={C.success} stroke-width="1.2" />
+                      </svg>
+                      feeds out to
+                    </div>
+                    <div class="space-y-1">
+                      {selectedDetail.connectedServices.filter(s => s.direction === "out").map((svc) => (
+                        <div key={svc.id} class="flex items-center gap-2 text-xs pl-3">
+                          <span style={{ color: C.text }}>{svc.label}</span>
+                          <span class="mono text-[8px] ml-auto" style={{ color: C.textDim }}>{svc.eventType}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 

@@ -1,5 +1,5 @@
 import { WorkspaceStatus, api, HubEvent, ContextItem, EvalAgent, SynopsisData } from "@/api"
-import { MetricCard, StatusDot, Sparkline } from "@/components"
+import { MetricCard, StatusDot, Sparkline, FlowLog, AlertsBubble } from "@/components"
 import { usePolling, timeAgo, cn } from "@/lib/hooks"
 import { useState } from "preact/hooks"
 
@@ -38,6 +38,8 @@ export function OverviewPage({ status }: OverviewProps) {
     .filter((e: HubEvent) => !e.type.startsWith("session:") && !e.type.startsWith("hook:"))
     .slice(0, 10)
 
+  const [flowLogCollapsed, setFlowLogCollapsed] = useState(false)
+
   return (
     <div class="space-y-6">
       <div class="flex items-center justify-between">
@@ -49,6 +51,9 @@ export function OverviewPage({ status }: OverviewProps) {
         </div>
         <QuickActions />
       </div>
+
+      {/* Alerts Bubble - significant cross-service events */}
+      <AlertsBubble maxAlerts={3} />
 
       <div class="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <MetricCard
@@ -225,6 +230,13 @@ export function OverviewPage({ status }: OverviewProps) {
           ))}
         </div>
       </div>
+
+      {/* Flow Log - live cross-service event feed */}
+      <FlowLog
+        events={eventList}
+        collapsed={flowLogCollapsed}
+        onToggleCollapse={setFlowLogCollapsed}
+      />
     </div>
   )
 }

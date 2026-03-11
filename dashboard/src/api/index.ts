@@ -210,11 +210,13 @@ export interface TelemetryDigest {
 export interface TopoNode {
   id: string
   label: string
-  type: "agent" | "orchestrator" | "eval" | "service"
+  type: "agent" | "orchestrator" | "eval" | "service" | "gtm" | "portfolio"
   status: "running" | "idle" | "stopped"
   eventCount?: number
   produces?: string[]
   consumes?: string[]
+  children?: string[] // For portfolio/GTM nodes
+  parent?: string // For services under a GTM
 }
 
 export interface TopoEdge {
@@ -223,11 +225,20 @@ export interface TopoEdge {
   target: string
   eventType: string
   category: "data" | "success" | "rl"
+  recentEvents?: number // Count of recent events on this edge
+}
+
+export interface TopologyHierarchy {
+  portfolio?: string
+  gtms: Array<{ name: string; port: number; services: string[] }>
 }
 
 export interface TopologyData {
   nodes: TopoNode[]
   edges: TopoEdge[]
+  hierarchy?: TopologyHierarchy
+  workspaceType?: string
+  workspaceName?: string
 }
 
 export interface AutoresearchStatus {

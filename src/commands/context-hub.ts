@@ -1504,11 +1504,48 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus,
           path?: string
           context_scope?: { produces?: string[]; consumes?: string[]; denied?: string[] }
         }> = []
+        let workspaceType = "standalone"
+        let workspaceName = "workspace"
 
         if (fs.existsSync(configPath)) {
           try {
             const config = JSON.parse(fs.readFileSync(configPath, "utf-8"))
             registeredServices = config.registered_services || []
+            workspaceType = config.type || "standalone"
+            workspaceName = config.name || "workspace"
+          } catch {}
+        }
+
+        // Read event counts from map-events.jsonl
+        const mapEventsPath = path.join(projectRoot, ".jfl", "map-events.jsonl")
+        const eventCounts: Record<string, number> = {}
+        const edgeEventCounts: Record<string, number> = {} // "source:target:eventType" -> count
+        const recentWindow = 24 * 60 * 60 * 1000 // 24 hours
+
+        if (fs.existsSync(mapEventsPath)) {
+          try {
+            const lines = fs.readFileSync(mapEventsPath, "utf-8").trim().split("\n")
+            const now = Date.now()
+            for (const line of lines.slice(-1000)) { // Last 1000 events
+              if (!line) continue
+              try {
+                const evt = JSON.parse(line)
+                const ts = new Date(evt.ts).getTime()
+                if (now - ts > recentWindow) continue
+
+                // Count events by source
+                if (evt.source) {
+                  const srcId = evt.source.toLowerCase().replace(/[^a-z0-9-]/g, "-")
+                  eventCounts[srcId] = (eventCounts[srcId] || 0) + 1
+                }
+
+                // Count events by type prefix (for edge matching)
+                if (evt.type) {
+                  const prefix = evt.type.split(":")[0]
+                  eventCounts[prefix] = (eventCounts[prefix] || 0) + 1
+                }
+              } catch {}
+            }
           } catch {}
         }
 
@@ -1524,11 +1561,13 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus,
         interface TopoNode {
           id: string
           label: string
-          type: "agent" | "orchestrator" | "eval" | "service"
+          type: "agent" | "orchestrator" | "eval" | "service" | "gtm" | "portfolio"
           status: "running" | "idle" | "stopped"
           eventCount?: number
           produces?: string[]
           consumes?: string[]
+          children?: string[] // For portfolio nodes
+          parent?: string // For GTM nodes under portfolio
         }
 
         interface TopoEdge {
@@ -1537,6 +1576,7 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus,
           target: string
           eventType: string
           category: "data" | "success" | "rl"
+          recentEvents?: number // Count of recent events on this edge
         }
 
         const nodes: TopoNode[] = [
@@ -1545,7 +1585,7 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus,
             label: a.label,
             type: a.type,
             status: a.status,
-            eventCount: 0,
+            eventCount: eventCounts[a.id] || eventCounts[a.id.split("-")[0]] || 0,
             produces: a.produces,
             consumes: a.consumes,
           })),
@@ -1554,15 +1594,80 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus,
         // Add registered services as nodes
         for (const service of registeredServices) {
           if (!nodes.find(n => n.id === service.name)) {
+            const nodeType = service.type === "agent" ? "agent"
+              : service.type === "eval" ? "eval"
+              : service.type === "gtm" ? "gtm"
+              : "service"
+
             nodes.push({
               id: service.name,
               label: service.name.split("-").map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(" "),
-              type: service.type === "agent" ? "agent" : service.type === "eval" ? "eval" : "service",
+              type: nodeType as TopoNode["type"],
               status: service.status === "running" ? "running" : service.status === "idle" ? "idle" : "stopped",
-              eventCount: 0,
+              eventCount: eventCounts[service.name] || 0,
               produces: service.context_scope?.produces,
               consumes: service.context_scope?.consumes,
             })
+          }
+        }
+
+        // For portfolio mode, fetch child GTM services and their registered services
+        const childHubs = getChildHubs(projectRoot)
+        const hierarchy: { portfolio?: string; gtms: Array<{ name: string; port: number; services: string[] }> } = {
+          gtms: [],
+        }
+
+        if (workspaceType === "portfolio" && childHubs.length > 0) {
+          hierarchy.portfolio = workspaceName
+
+          for (const child of childHubs) {
+            const gtmServices: string[] = []
+
+            // Try to read child's config for its registered services
+            const childConfigPath = path.join(child.path, ".jfl", "config.json")
+            if (fs.existsSync(childConfigPath)) {
+              try {
+                const childConfig = JSON.parse(fs.readFileSync(childConfigPath, "utf-8"))
+                const childServices = childConfig.registered_services || []
+
+                for (const svc of childServices) {
+                  const svcId = `${child.name}/${svc.name}`
+                  gtmServices.push(svc.name)
+
+                  // Add child services as nodes (if not already present)
+                  if (!nodes.find(n => n.id === svcId)) {
+                    nodes.push({
+                      id: svcId,
+                      label: `${svc.name}`,
+                      type: svc.type === "agent" ? "agent" : "service",
+                      status: "idle", // We don't know remote status
+                      eventCount: 0,
+                      produces: svc.context_scope?.produces,
+                      consumes: svc.context_scope?.consumes,
+                      parent: child.name,
+                    })
+                  }
+                }
+              } catch {}
+            }
+
+            hierarchy.gtms.push({
+              name: child.name,
+              port: child.port,
+              services: gtmServices,
+            })
+
+            // Add GTM node if not present
+            if (!nodes.find(n => n.id === child.name)) {
+              nodes.push({
+                id: child.name,
+                label: child.name.split("-").map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(" "),
+                type: "gtm",
+                status: "running",
+                eventCount: 0,
+                children: gtmServices,
+              })
+            }
           }
         }
 
@@ -1589,6 +1694,8 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus,
                 if (patternMatches(eventPattern, consumePattern)) {
                   const existing = edges.find(e => e.source === producer.id && e.target === consumer.id && e.eventType === eventPattern)
                   if (!existing) {
+                    const edgeKey = `${producer.id}:${consumer.id}:${eventPattern}`
+                    const prefix = eventPattern.split(":")[0]
                     edges.push({
                       id: `e${++edgeId}`,
                       source: producer.id,
@@ -1597,6 +1704,7 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus,
                       category: eventPattern.includes("eval") || eventPattern.includes("scored") ? "success"
                         : eventPattern.includes("peter") || eventPattern.includes("rollout") ? "rl"
                         : "data",
+                      recentEvents: edgeEventCounts[edgeKey] || eventCounts[prefix] || 0,
                     })
                   }
                 }
@@ -1617,12 +1725,23 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus,
         for (const sysEdge of systemEdges) {
           const exists = edges.find(e => e.source === sysEdge.source && e.target === sysEdge.target)
           if (!exists && nodes.find(n => n.id === sysEdge.source) && nodes.find(n => n.id === sysEdge.target)) {
-            edges.push({ id: `e${++edgeId}`, ...sysEdge })
+            const prefix = sysEdge.eventType.split(":")[0]
+            edges.push({
+              id: `e${++edgeId}`,
+              ...sysEdge,
+              recentEvents: eventCounts[prefix] || 0,
+            })
           }
         }
 
         res.writeHead(200, { "Content-Type": "application/json" })
-        res.end(JSON.stringify({ nodes, edges }))
+        res.end(JSON.stringify({
+          nodes,
+          edges,
+          hierarchy: workspaceType === "portfolio" ? hierarchy : undefined,
+          workspaceType,
+          workspaceName,
+        }))
       } catch (err: any) {
         res.writeHead(500, { "Content-Type": "application/json" })
         res.end(JSON.stringify({ error: err.message }))
