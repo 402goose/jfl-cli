@@ -85,7 +85,7 @@ program.hook('postAction', (_thisCommand, actionCommand) => {
 })
 
 const HELP_GROUPS: Record<string, string[]> = {
-  "Getting Started": ["init", "status", "hud", "doctor"],
+  "Getting Started": ["init", "status", "hud", "ide", "doctor"],
   "Daily Use": ["synopsis", "ask", "improve", "events", "voice"],
   "Management": ["services", "portfolio", "flows", "hooks", "scope", "memory", "eval", "viz", "telemetry", "context-hub", "skills", "ci"],
   "Platform": ["login", "deploy", "wallet", "preferences"],
@@ -232,6 +232,18 @@ program
   .command("status")
   .description("Show project status")
   .action(statusCommand)
+
+// IDE workspace command — uses dynamic imports to avoid linter stripping
+const ide = program.command("ide").description("Terminal workspace — tmux-based IDE with agents and observability")
+ide.command("launch", { isDefault: true }).description("Launch workspace (default)").option("--json", "Output as JSON").action(async (options) => { const m = await import("./commands/ide.js"); await m.ideLaunchCommand(options) })
+ide.command("add").description("Add a pane to the workspace").argument("[name]", "Pane name (agent, built-in type, or service)").option("--row <n>", "Row index (0-based)").option("--position <n>", "Position within row (0-based)").option("--title <title>", "Custom pane title").option("--cmd <command>", "Custom pane command").action(async (name, options) => { const m = await import("./commands/ide.js"); await m.ideAddCommand(name, options) })
+ide.command("remove").description("Remove a pane from the workspace").argument("<name>", "Pane name or title to remove").action(async (name) => { const m = await import("./commands/ide.js"); await m.ideRemoveCommand(name) })
+ide.command("available").description("List available pane types, agents, and services").action(async () => { const m = await import("./commands/ide.js"); await m.ideAvailableCommand() })
+ide.command("status").description("Show current workspace layout and session state").option("--json", "Output as JSON").action(async (options) => { const m = await import("./commands/ide.js"); await m.ideStatusCommand(options) })
+ide.command("stop").description("Stop the running workspace session").action(async () => { const m = await import("./commands/ide.js"); await m.ideStopCommand() })
+ide.command("restart").description("Restart the workspace session").action(async () => { const m = await import("./commands/ide.js"); await m.ideRestartCommand() })
+ide.command("reset").description("Reset workspace to welcome state").action(async () => { const m = await import("./commands/ide.js"); await m.ideResetCommand() })
+ide.command("config").description("View or set IDE configuration").argument("[key]", "Config key (e.g., primary)").argument("[value]", "Config value (e.g., pi, claude, auto)").action(async (key, value) => { const m = await import("./commands/ide.js"); await m.ideConfigCommand(key, value) })
 
 program
   .command("context-hub")
