@@ -52,4 +52,5 @@ export interface IdeLayout {
 export interface IdeConfig {
   primary?: "claude" | "pi" | "auto"
   piAsked?: boolean
+  claudeCommand?: string
 }

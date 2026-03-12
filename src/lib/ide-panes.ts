@@ -248,6 +248,7 @@ export function getIdeConfig(root: string): IdeConfig {
     return {
       primary: config.ide?.primary,
       piAsked: config.ide?.piAsked,
+      claudeCommand: config.ide?.claudeCommand,
     }
   } catch {
     return {}
@@ -275,14 +276,15 @@ export function resolveAgentCommand(_root: string, agentName: string): string {
 }
 
 export function resolveServiceCommand(serviceName: string): string {
-  return `watch -n 30 "jfl services status ${serviceName} 2>/dev/null || echo 'Service ${serviceName} not found'"`
+  return `watch -n 30 jfl services status ${serviceName}`
 }
 
 export function resolvePrimaryPaneCommand(ideConfig: IdeConfig): { title: string; command?: string; type: IdePaneType } {
   if (ideConfig.primary === "pi") {
-    return { title: "Pi Assistant", type: "pi", command: "jfl pi 2>/dev/null || claude" }
+    return { title: "Pi Assistant", type: "pi", command: "jfl pi 2>/dev/null || jfl" }
   }
-  return { title: "Claude", type: "claude", command: "claude" }
+  const cmd = ideConfig.claudeCommand || "jfl"
+  return { title: "JFL", type: "claude", command: cmd }
 }
 
 export function createDefaultLayout(root: string, ideConfig: IdeConfig): IdeLayout {
