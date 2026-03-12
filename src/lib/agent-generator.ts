@@ -6,9 +6,18 @@
  * @purpose Generate service agent definitions for GTM integration
  */
 
-import { writeFileSync, mkdirSync, existsSync, readFileSync } from "fs"
+import { writeFileSync, mkdirSync, existsSync, readFileSync, readdirSync, unlinkSync } from "fs"
 import { join } from "path"
 import type { ServiceMetadata } from "./service-detector.js"
+
+const ACRONYMS = new Set(["api", "ui", "cli", "db", "ml", "ai", "ci", "cd", "io", "id", "url", "uri", "sdk", "rl", "mcp", "gtm", "crm", "cms", "cdn", "dns", "tcp", "udp", "ssh", "tls", "ssl", "jwt", "aws", "gcp"])
+
+function titleCase(str: string): string {
+  return str
+    .split("-")
+    .map(w => ACRONYMS.has(w.toLowerCase()) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ")
+}
 
 export interface AgentDefinition {
   name: string
@@ -246,10 +255,7 @@ export function writeAgentDefinition(
 
   const agentFile = join(agentsDir, `${agentDef.name}.md`)
 
-  const label = agentDef.name
-    .split("-")
-    .map((w: string) => w.length <= 3 && w === w.toUpperCase() ? w : w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ")
+  const label = titleCase(agentDef.name)
 
   const content = `---
 name: ${agentDef.name}
@@ -386,4 +392,61 @@ cat .jfl/journal/*.jsonl | tail -5
   writeFileSync(agentFile, content)
 
   return agentFile
+}
+
+/**
+ * Migrate old-style agent files (service-*.md, peer-service-*.md) to clean names.
+ * Renames files and updates frontmatter in place.
+ */
+export function migrateAgentFiles(agentsDir: string): { renamed: Array<{ from: string; to: string }> } {
+  const result: { renamed: Array<{ from: string; to: string }> } = { renamed: [] }
+
+  if (!existsSync(agentsDir)) return result
+
+  const files = readdirSync(agentsDir).filter((f: string) => f.endsWith(".md"))
+
+  for (const file of files) {
+    let newName: string | null = null
+
+    if (file.startsWith("service-")) {
+      newName = file.replace(/^service-/, "")
+    } else if (file.startsWith("peer-service-")) {
+      newName = file.replace(/^peer-service-/, "")
+    }
+
+    if (!newName || newName === file) continue
+
+    const oldPath = join(agentsDir, file)
+    const newPath = join(agentsDir, newName)
+
+    if (existsSync(newPath)) continue
+
+    let content = readFileSync(oldPath, "utf-8")
+
+    const oldId = file.replace(/\.md$/, "")
+    const newId = newName.replace(/\.md$/, "")
+    const label = titleCase(newId)
+
+    content = content.replace(`name: ${oldId}`, `name: ${newId}`)
+
+    if (!content.includes("label:")) {
+      content = content.replace(`name: ${newId}`, `name: ${newId}\nlabel: ${label}`)
+    }
+
+    if (!content.includes("type: service") && !content.includes("type: peer-service")) {
+      const type = oldId.startsWith("peer-service-") ? "peer-service" : "service"
+      content = content.replace(`name: ${newId}`, `name: ${newId}\ntype: ${type}`)
+    }
+
+    content = content.replace(new RegExp(`@${oldId}\\b`, "g"), `@${newId}`)
+    content = content.replace(new RegExp(`# Service Agent: ${oldId}`, "g"), `# ${label}`)
+    content = content.replace(new RegExp(`# Peer Service: ${oldId}`, "g"), `# ${label}`)
+
+    writeFileSync(newPath, content)
+    unlinkSync(oldPath)
+
+    result.renamed.push({ from: file, to: newName })
+  }
+
+  return result
 }

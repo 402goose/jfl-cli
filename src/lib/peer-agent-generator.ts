@@ -7,9 +7,17 @@
  * @purpose Generate peer service agent references for cross-service collaboration
  */
 
-import { writeFileSync, mkdirSync, existsSync, readdirSync, unlinkSync } from "fs"
+import { writeFileSync, mkdirSync, existsSync, readdirSync, unlinkSync, readFileSync } from "fs"
 import { join } from "path"
-import { readFileSync } from "fs"
+
+const ACRONYMS = new Set(["api", "ui", "cli", "db", "ml", "ai", "ci", "cd", "io", "id", "url", "uri", "sdk", "rl", "mcp", "gtm", "crm", "cms", "cdn", "dns", "tcp", "udp", "ssh", "tls", "ssl", "jwt", "aws", "gcp"])
+
+function titleCase(str: string): string {
+  return str
+    .split("-")
+    .map(w => ACRONYMS.has(w.toLowerCase()) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ")
+}
 
 export interface PeerAgentDefinition {
   name: string // service name (e.g. "stratus-api")
@@ -136,10 +144,7 @@ export function writePeerAgentDefinition(
 
   const agentFile = join(agentsDir, `${agentDef.name}.md`)
 
-  const label = agentDef.serviceName
-    .split("-")
-    .map((w: string) => w.length <= 3 && w === w.toUpperCase() ? w : w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ")
+  const label = titleCase(agentDef.serviceName)
 
   const whenToUse = generateWhenToUse(agentDef.serviceType, agentDef.serviceName)
 

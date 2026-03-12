@@ -95,13 +95,12 @@ function buildDisplayName(id: string, type: AgentInfo["type"]): string {
   return titled
 }
 
+const ACRONYMS = new Set(["api", "ui", "cli", "db", "ml", "ai", "ci", "cd", "io", "id", "url", "uri", "sdk", "rl", "mcp", "gtm", "crm", "cms", "cdn", "dns", "tcp", "udp", "ssh", "tls", "ssl", "jwt", "aws", "gcp"])
+
 function kebabToTitle(str: string): string {
   return str
     .split("-")
-    .map(word => {
-      if (word.length <= 3 && word === word.toUpperCase()) return word
-      return word.charAt(0).toUpperCase() + word.slice(1)
-    })
+    .map(word => ACRONYMS.has(word.toLowerCase()) ? word.toUpperCase() : word.charAt(0).toUpperCase() + word.slice(1))
     .join(" ")
 }
 
