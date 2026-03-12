@@ -122,7 +122,7 @@ flows:
         title: "PP auto-fix dispatched: PR #{{data.pr_number}}"
         summary: "Peter Parker spawned to address {{data.counts.red}} review blockers on {{data.branch}}. Max 3 iterations."
 
-  # Training tuple enrichment with AI quality score
+  # Training tuple enrichment with AI quality score (from eval)
   - name: log-quality-training-tuple
     description: "Log enriched training tuple with AI quality dimensions"
     enabled: true
@@ -133,6 +133,40 @@ flows:
         entry_type: "discovery"
         title: "Quality tuple: {{data.agent}} quality={{data.quality_score}}"
         summary: "Enriched tuple — State: baseline={{data.baseline}}, Action: PR #{{data.pr_number}}, Reward: delta={{data.delta}} quality={{data.quality_score}}. Dims: correctness={{data.dim_correctness}} coverage={{data.dim_coverage}} architecture={{data.dim_architecture}} value={{data.dim_value}}"
+
+  # Review quality signal — the highest-value training data we have
+  - name: log-review-quality-signal
+    description: "Log review:scored as RL training signal — quality dimensions from dual-model adversarial review"
+    enabled: true
+    trigger:
+      pattern: "review:scored"
+    actions:
+      - type: log
+        message: "Review quality signal: PR #{{data.pr_number}} quality={{data.quality_score}} agreement={{data.model_agreement}} findings={{data.findings_count}} blockers={{data.has_blockers}}"
+      - type: journal
+        entry_type: "discovery"
+        title: "Review quality: PR #{{data.pr_number}} score={{data.quality_score}}"
+        summary: "Dual-model review scored. quality={{data.quality_score}} agreement={{data.model_agreement}}. Dims: correctness={{data.dimensions.correctness}} coverage={{data.dimensions.coverage}} architecture={{data.dimensions.architecture}} value={{data.dimensions.value}}. Severity: critical={{data.severity_counts.critical}} high={{data.severity_counts.high}} medium={{data.severity_counts.medium}} low={{data.severity_counts.low}}"
+
+  - name: block-merge-on-review-blockers
+    description: "Request changes when review:scored has blockers"
+    enabled: true
+    trigger:
+      pattern: "review:scored"
+      condition: 'data.has_blockers == true'
+    actions:
+      - type: log
+        message: "Review blockers on PR #{{data.pr_number}}: quality={{data.quality_score}} critical={{data.severity_counts.critical}} high={{data.severity_counts.high}}"
+      - type: command
+        command: |
+          if [ -n "{{data.pr_number}}" ]; then
+            gh pr review {{data.pr_number}} --request-changes \
+              --body "JFL review:scored — quality={{data.quality_score}}, {{data.severity_counts.critical}} critical + {{data.severity_counts.high}} high findings. Address before merge. Run: {{data.run_url}}"
+          fi
+      - type: journal
+        entry_type: "fix"
+        title: "Review blockers: PR #{{data.pr_number}} quality={{data.quality_score}}"
+        summary: "Review:scored found blockers. quality={{data.quality_score}} agreement={{data.model_agreement}}. Critical={{data.severity_counts.critical}} High={{data.severity_counts.high}} Medium={{data.severity_counts.medium}} Low={{data.severity_counts.low}}"
 
   # Autonomous trigger: telemetry insight -> Peter Parker
   - name: insight-triggers-pp

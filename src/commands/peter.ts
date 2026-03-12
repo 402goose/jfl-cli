@@ -17,7 +17,7 @@ import { writePeterParkerConfig, readCurrentProfile } from "../lib/peter-parker-
 import { PeterParkerBridge } from "../lib/peter-parker-bridge.js"
 import { getProjectHubUrl } from "../utils/context-hub-port.js"
 import { TrajectoryLoader } from "../lib/trajectory-loader.js"
-import { readEvals, appendEval } from "../lib/eval-store.js"
+import { readEvals } from "../lib/eval-store.js"
 import type { EvalEntry } from "../types/eval.js"
 import { TrainingBuffer } from "../lib/training-buffer.js"
 import { PolicyHeadInference } from "../lib/policy-head.js"
@@ -503,37 +503,6 @@ function writeJournalEntry(projectRoot: string, entry: Record<string, unknown>):
   fs.appendFileSync(journalFile, JSON.stringify(entry) + "\n")
 }
 
-/**
- * Infer scope labels from changed file paths.
- * Maps file paths to semantic scope identifiers for cross-repo impact detection.
- * e.g., src/commands/eval.ts → cli:commands/eval
- */
-function inferScopes(changedFiles: string[]): string[] {
-  const scopes = new Set<string>()
-  for (const file of changedFiles) {
-    if (file.startsWith("src/commands/")) {
-      const cmd = file.replace("src/commands/", "").replace(/\.ts$/, "").replace(/__tests__\/.*/, "")
-      if (cmd) scopes.add(`cli:commands/${cmd}`)
-    } else if (file.startsWith("src/lib/")) {
-      const lib = file.replace("src/lib/", "").replace(/\.ts$/, "")
-      scopes.add(`cli:lib/${lib}`)
-    } else if (file.startsWith("src/types/")) {
-      scopes.add("cli:types")
-    } else if (file.startsWith("dashboard/")) {
-      scopes.add("cli:dashboard")
-    } else if (file.startsWith(".github/")) {
-      scopes.add("cli:ci")
-    } else if (file === "README.md" || file.startsWith("docs/")) {
-      scopes.add("cli:docs")
-    } else if (file === "package.json" || file === "tsconfig.json") {
-      scopes.add("cli:config")
-    } else if (file.startsWith(".jfl/")) {
-      scopes.add("cli:jfl-config")
-    }
-  }
-  return [...scopes]
-}
-
 function buildEvalSummary(evals: EvalEntry[], limit: number = 10): string {
   if (evals.length === 0) return "No eval entries found."
 
@@ -611,16 +580,20 @@ async function runExperiment(projectRoot: string): Promise<void> {
 
   let proposal: ExperimentProposal | null = null
 
-  // Let StratusClient resolve the key (reads .env first, then shell env)
-  const { StratusClient } = await import("../lib/stratus-client.js")
-  const stratusProbe = new StratusClient({ model: "stratus-x1ac-base-claude-sonnet-4-6", timeout: 60000 })
-  const stratusKey = (stratusProbe as any).apiKey
+  const stratusKey = process.env.STRATUS_API_KEY
+  const stratusUrl = process.env.STRATUS_API_URL || "https://api.stratus.run"
 
   if (stratusKey) {
     console.log(chalk.gray("  Using Stratus to rank experiment proposals...\n"))
 
     try {
-      const stratus = stratusProbe
+      const { StratusClient } = await import("../lib/stratus-client.js")
+      const stratus = new StratusClient({
+        baseUrl: stratusUrl,
+        apiKey: stratusKey,
+        model: "stratus-x1ac-base-claude-sonnet-4-6",
+        timeout: 60000,
+      })
 
       const evalSummary = buildEvalSummary(evals, 15)
       const trajectoryContext = loader.renderForContext(
@@ -775,35 +748,11 @@ async function runAutoresearch(projectRoot: string, rounds: number): Promise<voi
 
   const baseBranch = "main"
   const latestEval = evals.sort((a, b) => b.ts.localeCompare(a.ts))[0]
+  const baselinePassRate = latestEval?.composite ?? 0
   const baselineTotal = (latestEval?.metrics?.tests_total as number) ?? 0
+  const baselineScore = baselinePassRate + (baselineTotal > 0 ? baselineTotal * 0.001 : 0)
 
-  // Run fresh baseline eval with current multi-dim formula
-  console.log(chalk.gray("  Running baseline eval..."))
-  const baselineTest = spawnSync("npx", ["jest", "--json", "--silent"], {
-    cwd: projectRoot, encoding: "utf-8", stdio: "pipe", timeout: 120000,
-  })
-  let baselinePassing = 0, baselineTotalFresh = 1
-  try {
-    const baseJson = JSON.parse(baselineTest.stdout || "{}")
-    baselinePassing = baseJson.numPassedTests || 0
-    baselineTotalFresh = baseJson.numTotalTests || 1
-  } catch {}
-  const baselinePassRate = baselineTotalFresh > 0 ? baselinePassing / baselineTotalFresh : 0
-  const baselineTscResult = spawnSync("npx", ["tsc", "--noEmit"], {
-    cwd: projectRoot, encoding: "utf-8", stdio: "pipe", timeout: 60000,
-  })
-  const baselineTscErrors = (baselineTscResult.stdout || "").split("\n").filter(l => l.includes("error TS")).length
-  const baselineTscScore = baselineTscErrors === 0 ? 1.0 : Math.max(0, 1.0 - (baselineTscErrors * 0.05))
-  const baselineComposite = (
-    baselinePassRate * 0.4 +
-    baselineTscScore * 0.2 +
-    1.0 * 0.15 +  // lint (assume clean)
-    1.0 * 0.15 +  // telemetry
-    0.0 * 0.1     // no new tests for baseline
-  )
-  const baselineScore = baselineComposite + (baselineTotalFresh > 0 ? baselineTotalFresh * 0.001 : 0)
-
-  console.log(chalk.gray(`  Baseline composite: ${baselineScore.toFixed(4)} (${baselinePassing}/${baselineTotalFresh} tests, tsc=${baselineTscScore.toFixed(2)})`))
+  console.log(chalk.gray(`  Baseline composite: ${baselineScore.toFixed(4)} (${baselineTotal} tests)`))
 
   interface ExperimentResult {
     round: number
@@ -829,13 +778,16 @@ async function runAutoresearch(projectRoot: string, rounds: number): Promise<voi
 
     let proposal: ExperimentProposal | null = null
 
-    // Let StratusClient resolve key from .env first, then shell env
-    const { StratusClient: StratusClientBatch } = await import("../lib/stratus-client.js")
-    const stratusBatch = new StratusClientBatch({ model: "stratus-x1ac-base-claude-sonnet-4-6", timeout: 60000 })
-    const stratusKeyBatch = (stratusBatch as any).apiKey
-    if (stratusKeyBatch) {
+    const stratusKey = process.env.STRATUS_API_KEY
+    if (stratusKey) {
       try {
-        const stratus = stratusBatch
+        const { StratusClient } = await import("../lib/stratus-client.js")
+        const stratus = new StratusClient({
+          baseUrl: process.env.STRATUS_API_URL || "https://api.stratus.run",
+          apiKey: stratusKey,
+          model: "stratus-x1ac-base-claude-sonnet-4-6",
+          timeout: 60000,
+        })
 
         const evalSummary = buildEvalSummary(evals.concat(
           results.map(r => ({
@@ -849,80 +801,8 @@ async function runAutoresearch(projectRoot: string, rounds: number): Promise<voi
         const policyHead = new PolicyHeadInference(projectRoot)
         const useMultiProposal = policyHead.isLoaded
 
-        // Load journal context for informed experiment selection
-        let journalContext = ""
-        const journalDir2 = path.join(projectRoot, ".jfl", "journal")
-        if (fs.existsSync(journalDir2)) {
-          const journalFiles = fs.readdirSync(journalDir2).filter(f => f.endsWith(".jsonl"))
-          const recentEntries: string[] = []
-          for (const file of journalFiles.slice(-3)) {
-            const lines = fs.readFileSync(path.join(journalDir2, file), "utf-8").split("\n").filter(Boolean)
-            for (const line of lines.slice(-10)) {
-              try {
-                const entry = JSON.parse(line)
-                if (entry.title) recentEntries.push(`[${entry.type || "note"}] ${entry.title}: ${entry.summary || ""}`.slice(0, 200))
-              } catch {}
-            }
-          }
-          if (recentEntries.length > 0) journalContext = `\n\nRecent journal (what happened, what worked):\n${recentEntries.slice(-15).join("\n")}`
-        }
-
-        // Load knowledge/research context
-        let knowledgeContext = ""
-        const researchDir = path.join(projectRoot, "knowledge", "research")
-        if (fs.existsSync(researchDir)) {
-          const researchFiles = fs.readdirSync(researchDir).filter(f => f.endsWith(".md"))
-          const summaries: string[] = []
-          for (const file of researchFiles.slice(0, 5)) {
-            const content = fs.readFileSync(path.join(researchDir, file), "utf-8")
-            const firstLines = content.split("\n").slice(0, 5).join(" ").slice(0, 150)
-            summaries.push(`- ${file}: ${firstLines}`)
-          }
-          if (summaries.length > 0) knowledgeContext = `\n\nResearch context:\n${summaries.join("\n")}`
-        }
-
-        // Load training buffer insights
-        let trainingContext = ""
-        const tbCtx = new TrainingBuffer(projectRoot)
-        const tuples = tbCtx.read().slice(-10)
-        if (tuples.length > 0) {
-          const insights = tuples.map(t =>
-            `- ${t.action.type}/${t.action.scope}: delta=${t.reward.composite_delta > 0 ? "+" : ""}${t.reward.composite_delta.toFixed(4)} "${t.action.description.slice(0, 80)}"`
-          )
-          trainingContext = `\n\nPast experiments (what worked/failed):\n${insights.join("\n")}`
-        }
-
-        const contextBlock = `${journalContext}${knowledgeContext}${trainingContext}`
-
-        const systemContext = `You are an autoresearch agent improving a TypeScript CLI codebase.
-
-IMPORTANT: The baseline has ALL ${baselineTotal} tests passing (pass_rate=1.0). DO NOT try to "fix failing tests" — there are none on the baseline. Any test failures you see in eval history were CAUSED by previous experiment attempts, not pre-existing issues.
-
-Scoring dimensions (weighted composite):
-- test_pass_rate (40%): Must stay at 1.0 — DO NOT break existing tests
-- tsc_errors (20%): TypeScript compilation must stay clean
-- lint_score (15%): ESLint errors if configured
-- telemetry_health (15%): Runtime error rate
-- new_tests_added (10%): BONUS for adding new test coverage
-
-HIGH-VALUE experiment types (prefer these):
-- Add new test files covering untested modules
-- Refactor bloated files (reduce complexity without changing behavior)
-- Fix TypeScript strict mode issues
-- Add missing error handling
-- Improve code documentation
-- Remove dead code or unused imports
-- Optimize hot paths identified by telemetry
-
-LOW-VALUE experiments (avoid these):
-- "Fix the failing test" — there is no failing test on baseline
-- Rewriting working code without measurable improvement
-- Changes that risk breaking existing tests`
-
         const prompt = useMultiProposal
-          ? `${systemContext}
-
-Autoresearch round ${round}/${rounds}. Suggest 3 specific improvements ranked by expected impact.
+          ? `Autoresearch round ${round}/${rounds}. Suggest 3 specific improvements ranked by expected impact.
 
 Eval history:
 ${evalSummary}
@@ -932,12 +812,9 @@ ${pastTitles.map(t => `- ${t}`).join("\n") || "Nothing yet"}
 
 Previous rounds this session:
 ${results.map(r => `- Round ${r.round}: "${r.task}" → delta=${r.delta > 0 ? "+" : ""}${r.delta.toFixed(4)}`).join("\n") || "None yet"}
-${contextBlock}
 
 Respond with ONLY a JSON array of 3 objects: [{"task": "...", "predicted_delta": 0.0-1.0, "reasoning": "...", "risk": "..."}, ...]`
-          : `${systemContext}
-
-Autoresearch round ${round}/${rounds}. Suggest ONE specific improvement.
+          : `Autoresearch round ${round}/${rounds}. Suggest ONE specific improvement.
 
 Eval history:
 ${evalSummary}
@@ -947,7 +824,6 @@ ${pastTitles.map(t => `- ${t}`).join("\n") || "Nothing yet"}
 
 Previous rounds this session:
 ${results.map(r => `- Round ${r.round}: "${r.task}" → delta=${r.delta > 0 ? "+" : ""}${r.delta.toFixed(4)}`).join("\n") || "None yet"}
-${contextBlock}
 
 Suggest the SINGLE highest-value change. JSON format:
 {"task": "...", "predicted_delta": 0.0-1.0, "reasoning": "...", "risk": "..."}`
@@ -1023,51 +899,36 @@ Suggest the SINGLE highest-value change. JSON format:
       continue
     }
 
-    // Spawn Claude Code directly — no ralph-tui middleman
     await new Promise<void>((resolve) => {
-      const taskPrompt = `You are an autonomous coding agent working on the jfl-cli project.
+      const ralphDir = path.join(projectRoot, ".ralph-tui")
+      if (!fs.existsSync(ralphDir)) fs.mkdirSync(ralphDir, { recursive: true })
 
-YOUR TASK: ${proposal!.task}
-
-RULES:
-- Make the actual code changes. Edit source files in src/.
-- Do NOT modify test files unless the task specifically asks you to add tests.
-- Do NOT modify .ralph-tui/ or .jfl/ files.
-- Run "npx jest --silent" before finishing to verify all tests still pass.
-- If your changes break tests, revert them and try a different approach.
-- Keep changes minimal and focused on the task.
-
-EVAL DIMENSIONS (how your work will be scored):
-- test_pass_rate (40%): All 274 tests must pass
-- tsc_errors (20%): No TypeScript compilation errors  
-- lint_score (15%): Clean ESLint output
-- telemetry_health (15%): No crashes in telemetry state
-- new_tests_added (10%): Bonus for adding new passing tests
-
-The baseline is CLEAN: 274/274 tests, 0 tsc errors, clean lint.
-Your goal is to IMPROVE the codebase, not fix anything broken.`
+      const prdPath = path.join(ralphDir, "autoresearch-task.json")
+      const prd = {
+        name: "Autoresearch Task",
+        branchName: `ralph/autoresearch-${Date.now()}`,
+        description: proposal!.task,
+        userStories: [{
+          id: "US-001",
+          title: proposal!.task.slice(0, 80),
+          description: proposal!.task,
+          acceptanceCriteria: ["Task completed"],
+          priority: 1, passes: false, notes: "", dependsOn: [],
+        }],
+        metadata: { updatedAt: new Date().toISOString() },
+      }
+      fs.writeFileSync(prdPath, JSON.stringify(prd, null, 2))
 
       const env = { ...process.env }
       delete env.CLAUDECODE
       delete env.CLAUDE_CODE
-      env.JFL_AUTORESEARCH = "1"
 
-      const child = spawn("claude", [
-        "--dangerously-skip-permissions",
-        "-p", taskPrompt,
-        "--output-format", "text",
-      ], {
+      const child = spawn("ralph-tui", ["run", "--listen", "--prd", prdPath, "--headless"], {
         cwd: projectRoot, stdio: "inherit", env,
       })
 
-      child.on("error", (err) => {
-        console.log(chalk.yellow(`  Claude agent error: ${err.message}`))
-        resolve()
-      })
-      child.on("exit", (code) => {
-        console.log(chalk.gray(`  Claude agent exited (code ${code})`))
-        resolve()
-      })
+      child.on("error", () => { try { fs.unlinkSync(prdPath) } catch {} resolve() })
+      child.on("exit", () => { try { fs.unlinkSync(prdPath) } catch {} resolve() })
     })
 
     const diffCheck = gitExec(["diff", "--quiet", "HEAD"], projectRoot)
@@ -1086,9 +947,7 @@ Your goal is to IMPROVE the codebase, not fix anything broken.`
     gitExec(["add", "-A"], projectRoot)
     gitExec(["commit", "-m", `autoresearch: round ${round} - ${proposal.task}`], projectRoot)
 
-    console.log(chalk.gray("  Running multi-dimension eval..."))
-
-    // Dimension 1: Tests
+    console.log(chalk.gray("  Running local eval..."))
     const testResult = spawnSync("npx", ["jest", "--json", "--silent"], {
       cwd: projectRoot, encoding: "utf-8", stdio: "pipe", timeout: 120000,
     })
@@ -1102,66 +961,8 @@ Your goal is to IMPROVE the codebase, not fix anything broken.`
 
     const passRate = total > 0 ? passing / total : 0
     const testsAdded = total - baselineTotal
-
-    // Dimension 2: TypeScript compilation (0 errors = 1.0)
-    const tscResult = spawnSync("npx", ["tsc", "--noEmit"], {
-      cwd: projectRoot, encoding: "utf-8", stdio: "pipe", timeout: 60000,
-    })
-    const tscErrors = (tscResult.stdout || "").split("\n").filter(l => l.includes("error TS")).length
-    const tscScore = tscErrors === 0 ? 1.0 : Math.max(0, 1.0 - (tscErrors * 0.05))
-
-    // Dimension 3: Lint (eslint if available)
-    let lintScore = 1.0
-    const eslintConfig = fs.existsSync(path.join(projectRoot, ".eslintrc.json")) ||
-      fs.existsSync(path.join(projectRoot, "eslint.config.js")) ||
-      fs.existsSync(path.join(projectRoot, "eslint.config.mjs"))
-    if (eslintConfig) {
-      const lintResult = spawnSync("npx", ["eslint", "src/", "--format", "json", "--quiet"], {
-        cwd: projectRoot, encoding: "utf-8", stdio: "pipe", timeout: 60000,
-      })
-      try {
-        const lintJson = JSON.parse(lintResult.stdout || "[]")
-        const lintErrors = lintJson.reduce((sum: number, f: any) => sum + (f.errorCount || 0), 0)
-        lintScore = lintErrors === 0 ? 1.0 : Math.max(0, 1.0 - (lintErrors * 0.02))
-      } catch {}
-    }
-
-    // Dimension 4: Code size / bloat detection
-    const srcFiles = spawnSync("find", ["src", "-name", "*.ts", "-not", "-path", "*__tests__*", "-not", "-path", "*node_modules*"], {
-      cwd: projectRoot, encoding: "utf-8", stdio: "pipe",
-    })
-    const srcFileCount = (srcFiles.stdout || "").trim().split("\n").filter(Boolean).length
-    const totalLines = spawnSync("sh", ["-c", "find src -name '*.ts' -not -path '*__tests__*' -not -path '*node_modules*' | xargs wc -l 2>/dev/null | tail -1"], {
-      cwd: projectRoot, encoding: "utf-8", stdio: "pipe",
-    })
-    const lineCount = parseInt((totalLines.stdout || "0").trim().split(/\s+/)[0]) || 0
-
-    // Dimension 5: Telemetry health (error rate from recent telemetry)
-    let telemetryScore = 1.0
-    const telemetryState = path.join(projectRoot, ".jfl", "telemetry-agent-state.json")
-    if (fs.existsSync(telemetryState)) {
-      try {
-        const tState = JSON.parse(fs.readFileSync(telemetryState, "utf-8"))
-        const errorRate = tState.baseline_crash_rate || 0
-        telemetryScore = Math.max(0, 1.0 - errorRate)
-      } catch {}
-    }
-
-    // Composite: weighted multi-dimension score
-    const weights = { tests: 0.4, tsc: 0.2, lint: 0.15, telemetry: 0.15, newTests: 0.1 }
-    const newTestBonus = testsAdded > 0 ? Math.min(1.0, testsAdded * 0.1) : 0
-    const compositeScore = (
-      passRate * weights.tests +
-      tscScore * weights.tsc +
-      lintScore * weights.lint +
-      telemetryScore * weights.telemetry +
-      newTestBonus * weights.newTests
-    )
-    const score = compositeScore + (total > 0 ? total * 0.001 : 0)
+    const score = passRate + (testsAdded > 0 ? testsAdded * 0.001 : 0)
     const delta = score - baselineScore
-
-    console.log(chalk.gray(`  Dimensions: tests=${passRate.toFixed(2)} tsc=${tscScore.toFixed(2)} lint=${lintScore.toFixed(2)} telemetry=${telemetryScore.toFixed(2)} newTests=${newTestBonus.toFixed(2)}`))
-    console.log(chalk.gray(`  Source: ${srcFileCount} files, ${lineCount} lines`))
 
     const result: ExperimentResult = {
       round,
@@ -1198,31 +999,6 @@ Your goal is to IMPROVE the codebase, not fix anything broken.`
       agent_id: "peter-parker",
     })
 
-    // Persist eval entry (dual-writes to GTM parent automatically)
-    appendEval({
-      v: 1,
-      ts: new Date().toISOString(),
-      agent: "autoresearch",
-      run_id: `autoresearch-r${round}-${Date.now()}`,
-      dataset: "local-eval",
-      metrics: {
-        test_pass_rate: passRate,
-        tests_passed: passing,
-        tests_total: total,
-      },
-      composite: score,
-      delta: { composite: delta },
-      model_version: "pp-autoresearch",
-      notes: `branch:${branchName} improved:${delta > 0 || testsAdded > 0}`,
-    }, projectRoot)
-
-    // Detect scope from changed files
-    const changedFilesResult = spawnSync("git", ["diff", "--name-only", "HEAD~1"], {
-      cwd: projectRoot, encoding: "utf-8", stdio: "pipe",
-    })
-    const changedFiles = (changedFilesResult.stdout || "").trim().split("\n").filter(Boolean)
-    const scopes = inferScopes(changedFiles)
-
     const tb = new TrainingBuffer(projectRoot)
     tb.append({
       agent: "peter-parker",
@@ -1238,7 +1014,7 @@ Your goal is to IMPROVE the codebase, not fix anything broken.`
       action: {
         type: "experiment",
         description: proposal.task,
-        files_affected: changedFiles,
+        files_affected: [],
         scope: "medium",
         branch: branchName,
       },
@@ -1254,8 +1030,6 @@ Your goal is to IMPROVE the codebase, not fix anything broken.`
         branch: branchName,
         autoresearch_round: round,
         source: "autoresearch",
-        scopes,
-        changed_files: changedFiles,
       },
     })
 

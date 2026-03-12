@@ -1,0 +1,176 @@
+name: PR Sentinel
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  issues:
+    types: [opened, labeled]
+  issue_comment:
+    types: [created]
+  pull_request_review_comment:
+    types: [created]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: pr-sentinel-${{ github.event.pull_request.number || github.event.issue.number || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  sentinel:
+    name: PR Sentinel
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    if: |
+      (github.event_name == 'pull_request') ||
+      (github.event_name == 'issues') ||
+      (github.event_name == 'issue_comment' && (
+        contains(github.event.comment.body, '@pr-sentinel') ||
+        contains(github.event.comment.body, '/bot')
+      )) ||
+      (github.event_name == 'pull_request_review_comment')
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: hathbanger/pr-sentinel@main
+        id: review
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          openai_api_key: ${{ secrets.OPENAI_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Write review signals to JFL
+        if: github.event_name == 'pull_request'
+        env:
+          REVIEW_JSON: ${{ steps.review.outputs.review_json }}
+          FINDINGS_COUNT: ${{ steps.review.outputs.findings_count }}
+          REVIEW_ACTION: ${{ steps.review.outputs.action }}
+          QUALITY_SCORE: ${{ steps.review.outputs.quality_score }}
+          MODEL_AGREEMENT: ${{ steps.review.outputs.model_agreement }}
+          DIM_CORRECTNESS: ${{ steps.review.outputs.dim_correctness }}
+          DIM_COVERAGE: ${{ steps.review.outputs.dim_coverage }}
+          DIM_ARCHITECTURE: ${{ steps.review.outputs.dim_architecture }}
+          DIM_VALUE: ${{ steps.review.outputs.dim_value }}
+          FINDINGS_CRITICAL: ${{ steps.review.outputs.findings_critical }}
+          FINDINGS_HIGH: ${{ steps.review.outputs.findings_high }}
+          FINDINGS_MEDIUM: ${{ steps.review.outputs.findings_medium }}
+          FINDINGS_LOW: ${{ steps.review.outputs.findings_low }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BRANCH: ${{ github.head_ref }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout "$PR_BRANCH"
+
+          mkdir -p .jfl
+
+          node -e "
+            const fs = require('fs');
+            const ts = new Date().toISOString();
+            const env = process.env;
+            const action = env.REVIEW_ACTION || 'unknown';
+            const prNum = parseInt(env.PR_NUMBER) || 0;
+            const qualityScore = parseFloat(env.QUALITY_SCORE) || 0.5;
+            const modelAgreement = parseFloat(env.MODEL_AGREEMENT) || 1.0;
+
+            const counts = {
+              critical: parseInt(env.FINDINGS_CRITICAL) || 0,
+              high: parseInt(env.FINDINGS_HIGH) || 0,
+              medium: parseInt(env.FINDINGS_MEDIUM) || 0,
+              low: parseInt(env.FINDINGS_LOW) || 0,
+            };
+
+            const dimensions = {
+              correctness: parseFloat(env.DIM_CORRECTNESS) || 0.5,
+              coverage: parseFloat(env.DIM_COVERAGE) || 0.5,
+              architecture: parseFloat(env.DIM_ARCHITECTURE) || 0.5,
+              value: parseFloat(env.DIM_VALUE) || 0.5,
+            };
+
+            let findingSummaries = [];
+            try {
+              const review = JSON.parse(env.REVIEW_JSON || '{}');
+              findingSummaries = (review.findings || []).map(f => ({
+                severity: f.severity,
+                type: f.type,
+                file: f.file,
+                title: f.title,
+                source: f.source,
+              }));
+            } catch(e) {}
+
+            // 1. review:scored event for hub file watcher
+            const event = {
+              ts,
+              type: 'review:scored',
+              source: 'pr-sentinel',
+              data: {
+                pr_number: prNum,
+                branch: env.PR_BRANCH || '',
+                action,
+                quality_score: qualityScore,
+                model_agreement: modelAgreement,
+                dimensions,
+                findings_count: parseInt(env.FINDINGS_COUNT) || 0,
+                has_blockers: action === 'request_changes' || action === 'needs_human_review',
+                severity_counts: counts,
+                findings: findingSummaries,
+                run_url: env.RUN_URL || '',
+              }
+            };
+            fs.appendFileSync('.jfl/service-events.jsonl', JSON.stringify(event) + '\n');
+
+            // 2. Training tuple for policy head (keyed by PR for join with eval tuple)
+            const tuple = {
+              id: 'tb_review_' + env.RUN_ID,
+              v: 1,
+              ts,
+              agent: 'pr-sentinel',
+              state: { pr_number: prNum, branch: env.PR_BRANCH || '' },
+              action: {
+                type: 'experiment',
+                description: env.PR_TITLE || '',
+                scope: 'medium',
+                branch: env.PR_BRANCH || '',
+              },
+              reward: {
+                quality_score: qualityScore,
+                model_agreement: modelAgreement,
+                dim_correctness: dimensions.correctness,
+                dim_coverage: dimensions.coverage,
+                dim_architecture: dimensions.architecture,
+                dim_value: dimensions.value,
+                findings_count: parseInt(env.FINDINGS_COUNT) || 0,
+                has_blockers: action === 'request_changes' || action === 'needs_human_review',
+              },
+              metadata: {
+                pr_number: prNum,
+                branch: env.PR_BRANCH || '',
+                review_run_id: env.RUN_ID || '',
+                source: 'pr-sentinel',
+              }
+            };
+            fs.appendFileSync('.jfl/training-buffer.jsonl', JSON.stringify(tuple) + '\n');
+
+            console.log('Wrote review:scored (quality=' + qualityScore.toFixed(4) +
+              ', agreement=' + modelAgreement.toFixed(4) +
+              ', findings=' + (parseInt(env.FINDINGS_COUNT) || 0) + ')');
+          " || echo "Warning: could not write review signals"
+
+          git add .jfl/service-events.jsonl .jfl/training-buffer.jsonl 2>/dev/null
+          if git diff --cached --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "review: PR #${PR_NUMBER} scored (quality=${QUALITY_SCORE}, agreement=${MODEL_AGREEMENT}, findings=${FINDINGS_COUNT})"
+            git push origin "$PR_BRANCH"
+          fi
