@@ -234,16 +234,17 @@ program
   .action(statusCommand)
 
 // IDE workspace command — uses dynamic imports to avoid linter stripping
-const ide = program.command("ide").description("Terminal workspace — tmux-based IDE with agents and observability")
+const ide = program.command("ide").description("Terminal workspace — cmux/tmux with live sidebar data and notifications")
 ide.command("launch", { isDefault: true }).description("Launch workspace (default)").option("--json", "Output as JSON").action(async (options) => { const m = await import("./commands/ide.js"); await m.ideLaunchCommand(options) })
-ide.command("add").description("Add a pane to the workspace").argument("[name]", "Pane name (agent, built-in type, or service)").option("--row <n>", "Row index (0-based)").option("--position <n>", "Position within row (0-based)").option("--title <title>", "Custom pane title").option("--cmd <command>", "Custom pane command").action(async (name, options) => { const m = await import("./commands/ide.js"); await m.ideAddCommand(name, options) })
-ide.command("remove").description("Remove a pane from the workspace").argument("<name>", "Pane name or title to remove").action(async (name) => { const m = await import("./commands/ide.js"); await m.ideRemoveCommand(name) })
-ide.command("available").description("List available pane types, agents, and services").action(async () => { const m = await import("./commands/ide.js"); await m.ideAvailableCommand() })
+ide.command("add").description("Add a surface to the workspace").argument("[name]", "Surface name (agent, built-in type, or service)").option("--row <n>", "Row index (0-based)").option("--position <n>", "Position within row (0-based)").option("--title <title>", "Custom surface title").option("--cmd <command>", "Custom surface command").action(async (name, options) => { const m = await import("./commands/ide.js"); await m.ideAddCommand(name, options) })
+ide.command("remove").description("Remove a surface from the workspace").argument("<name>", "Surface name or title to remove").action(async (name) => { const m = await import("./commands/ide.js"); await m.ideRemoveCommand(name) })
+ide.command("available").description("List available surface types, agents, and services").action(async () => { const m = await import("./commands/ide.js"); await m.ideAvailableCommand() })
 ide.command("status").description("Show current workspace layout and session state").option("--json", "Output as JSON").action(async (options) => { const m = await import("./commands/ide.js"); await m.ideStatusCommand(options) })
+ide.command("surfaces").description("List active surfaces with live sidebar data").option("--json", "Output as JSON").action(async (options) => { const m = await import("./commands/ide.js"); await m.ideSurfacesCommand(options) })
 ide.command("stop").description("Stop the running workspace session").action(async () => { const m = await import("./commands/ide.js"); await m.ideStopCommand() })
 ide.command("restart").description("Restart the workspace session").action(async () => { const m = await import("./commands/ide.js"); await m.ideRestartCommand() })
 ide.command("reset").description("Reset workspace to welcome state").action(async () => { const m = await import("./commands/ide.js"); await m.ideResetCommand() })
-ide.command("config").description("View or set IDE configuration").argument("[key]", "Config key (e.g., primary)").argument("[value]", "Config value (e.g., pi, claude, auto)").action(async (key, value) => { const m = await import("./commands/ide.js"); await m.ideConfigCommand(key, value) })
+ide.command("config").description("View or set IDE configuration").argument("[key]", "Config key (e.g., primary, backend)").argument("[value]", "Config value").action(async (key, value) => { const m = await import("./commands/ide.js"); await m.ideConfigCommand(key, value) })
 
 program
   .command("context-hub")

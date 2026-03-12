@@ -28,6 +28,9 @@ export type IdePaneType =
   | "topology"
   | "alerts"
   | "service"
+  | "flows"
+  | "telemetry"
+  | "portfolio"
   | "custom"
 
 export interface IdeRow {
@@ -52,4 +55,5 @@ export interface IdeLayout {
 export interface IdeConfig {
   primary?: "claude" | "pi" | "auto"
   piAsked?: boolean
+  backend?: "cmux" | "tmux" | "auto"
 }

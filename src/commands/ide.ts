@@ -1,108 +1,103 @@
 /**
- * IDE Command
+ * IDE Command v2
  *
- * Terminal workspace powered by tmux-ide. Compositional layout that grows
- * with your project — start with Claude + Shell, add agents and observability
- * as needed. Layout persists in .jfl/ide.yml and syncs to project root.
+ * Terminal workspace powered by WorkspaceEngine. Detects cmux (native macOS terminal
+ * with sidebar + notifications) or falls back to tmux. Controller stays running to
+ * push live data into surfaces.
  *
  * @purpose Launch, configure, and manage the jfl ide terminal workspace
  */
 
 import chalk from "chalk"
-import { execSync, spawn } from "child_process"
 import { existsSync, unlinkSync } from "fs"
 import { join } from "path"
+import { WorkspaceEngine } from "../lib/workspace/engine.js"
+import { detectBackend } from "../lib/workspace/backend.js"
 import {
-  hasTmuxIde,
-  hasTmux,
-  hasPi,
   getProjectRoot,
   loadIdeLayout,
-  saveIdeLayout,
-  syncToRoot,
   getIdeConfig,
   setIdeConfig,
-  createDefaultLayout,
-  createWelcomeLayout,
-  resolvePane,
-  checkDependencies,
-  getAvailableItems,
-  detectNewSinceLastLaunch,
+  syncToRoot,
+  hasTmux,
 } from "../lib/ide-panes.js"
 import type { IdeLayout, IdePane, IdeRow } from "../types/ide.js"
 
+let activeEngine: WorkspaceEngine | null = null
+
 export async function ideLaunchCommand(_options: { json?: boolean } = {}): Promise<void> {
   const root = getProjectRoot()
+  const backendType = detectBackend()
 
-  if (!hasTmux()) {
-    console.error(chalk.red("\n  tmux is required for jfl ide"))
-    console.log(chalk.gray("  Install: brew install tmux\n"))
+  if (backendType === "tmux" && !hasTmux()) {
+    console.error(chalk.red("\n  No workspace backend found."))
+    console.log(chalk.gray("  Install cmux: brew tap manaflow-ai/cmux && brew install --cask cmux"))
+    console.log(chalk.gray("  Or install tmux: brew install tmux\n"))
     process.exit(1)
   }
 
-  if (!hasTmuxIde()) {
-    console.log(chalk.yellow("  tmux-ide not found. Installing..."))
-    try {
-      execSync("npm install -g tmux-ide", { stdio: "inherit" })
-    } catch {
-      console.error(chalk.red("  Failed to install tmux-ide"))
-      console.log(chalk.gray("  Install manually: npm install -g tmux-ide\n"))
-      process.exit(1)
-    }
+  console.log()
+  console.log(chalk.gray(`  Backend: ${backendType}`))
+
+  const engine = new WorkspaceEngine(root)
+  activeEngine = engine
+
+  const caps = engine.getCapabilities()
+  if (caps.sidebar) {
+    console.log(chalk.green("  Sidebar: enabled"))
+  }
+  if (caps.notifications) {
+    console.log(chalk.green("  Notifications: enabled"))
   }
 
-  let layout = loadIdeLayout(root)
-  const ideConfig = getIdeConfig(root)
-  let isFirstLaunch = false
-
-  if (!ideConfig.piAsked && hasPi()) {
+  const scan = engine.getScanResults()
+  if (scan.suggestions.length > 0) {
     console.log()
-    console.log(chalk.cyan("  Pi runtime detected.") + " Use it as your primary workspace? (y/n)")
-    const answer = await readSingleChar()
-    if (answer === "y" || answer === "Y") {
-      setIdeConfig(root, { primary: "pi", piAsked: true })
-    } else {
-      setIdeConfig(root, { primary: "claude", piAsked: true })
+    console.log(chalk.cyan("  Scanning project..."))
+    console.log()
+    console.log(chalk.gray("  Found:"))
+    for (const suggestion of scan.suggestions) {
+      console.log(chalk.gray(`    ${suggestion}`))
     }
   }
 
-  if (!layout) {
-    isFirstLaunch = true
-    const freshConfig = getIdeConfig(root)
-    layout = createWelcomeLayout(root, freshConfig)
-    saveIdeLayout(root, layout)
-  }
-
-  if (!isFirstLaunch) {
-    const newItems = detectNewSinceLastLaunch(root, layout)
-    if (newItems.length > 0) {
-      console.log()
-      for (const msg of newItems) {
-        console.log(chalk.gray(`  New: ${msg}`))
-      }
-    }
-  }
-
-  syncToRoot(root)
-
-  console.log(chalk.gray(`  Launching workspace...`))
+  console.log()
+  console.log(chalk.gray("  Launching workspace..."))
   console.log()
 
   try {
-    const child = spawn("tmux-ide", [], {
-      cwd: root,
-      stdio: "inherit",
-    })
-    child.on("error", (err) => {
-      console.error(chalk.red(`  Failed to launch: ${err.message}`))
-    })
+    await engine.launch()
+
+    // Keep the process running as controller
+    const shutdown = async () => {
+      console.log(chalk.gray("\n  Stopping workspace..."))
+      await engine.stop()
+      process.exit(0)
+    }
+
+    process.on("SIGINT", shutdown)
+    process.on("SIGTERM", shutdown)
+
+    // Stay alive until workspace closes
     await new Promise<void>((resolve) => {
-      child.on("close", () => resolve())
+      const check = setInterval(() => {
+        if (!engine.isRunning()) {
+          clearInterval(check)
+          resolve()
+        }
+      }, 1000)
     })
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err)
     console.error(chalk.red(`  Failed to launch workspace: ${message}`))
-    process.exit(1)
+
+    // Fallback: try v1 tmux-ide approach
+    if (backendType === "tmux") {
+      console.log(chalk.gray("  Falling back to tmux-ide..."))
+      await fallbackTmuxIde(root)
+    } else {
+      process.exit(1)
+    }
   }
 }
 
@@ -113,19 +108,44 @@ export async function ideAddCommand(
   const root = getProjectRoot()
 
   if (!name && !options.title) {
-    console.error(chalk.red("  Specify a pane name or use --title and --cmd for custom panes"))
+    console.error(chalk.red("  Specify a surface name or use --title and --cmd for custom panes"))
     console.log(chalk.gray("  See available: jfl ide available"))
     process.exit(1)
   }
 
-  let layout = loadIdeLayout(root)
+  if (activeEngine && activeEngine.isRunning()) {
+    // Hot-add: engine is running, add surface live
+    const surfaceName = name || options.title || "custom"
+    const id = await activeEngine.addSurface(surfaceName, {
+      agentName: name ? undefined : undefined,
+      serviceName: name ? undefined : undefined,
+    })
+
+    if (id) {
+      console.log(chalk.green(`  Added "${surfaceName}" to workspace (live)`))
+    } else {
+      console.error(chalk.red(`  Unknown surface: ${surfaceName}`))
+      console.log(chalk.gray("  See available: jfl ide available"))
+    }
+    return
+  }
+
+  // Cold-add: modify layout file
+  const {
+    loadIdeLayout: load,
+    saveIdeLayout: save,
+    resolvePane,
+    checkDependencies,
+    createDefaultLayout,
+  } = await import("../lib/ide-panes.js")
+
+  let layout = load(root)
   if (!layout) {
     const ideConfig = getIdeConfig(root)
     layout = createDefaultLayout(root, ideConfig)
   }
 
   let pane: IdePane | null = null
-
   if (options.title && options.cmd) {
     pane = { title: options.title, command: options.cmd, type: "custom" }
   } else if (name) {
@@ -135,7 +155,6 @@ export async function ideAddCommand(
   if (!pane) {
     console.error(chalk.red(`  Unknown pane: ${name}`))
     console.log(chalk.gray("  See available: jfl ide available"))
-
     if (name) {
       console.log(chalk.gray(`  Or add custom: jfl ide add --title "${name}" --cmd "your command"`))
     }
@@ -154,7 +173,7 @@ export async function ideAddCommand(
       }
       if (!deps.ok) {
         console.log()
-        console.error(chalk.red(`  Hard dependency missing. Fix before adding.`))
+        console.error(chalk.red("  Hard dependency missing. Fix before adding."))
         process.exit(1)
       }
     }
@@ -174,7 +193,7 @@ export async function ideAddCommand(
   }
 
   rebalanceRowSizes(layout)
-  saveIdeLayout(root, layout)
+  save(root, layout)
   syncToRoot(root)
 
   const rowDisplay = rowIdx
@@ -185,9 +204,20 @@ export async function ideAddCommand(
 }
 
 export async function ideRemoveCommand(name: string): Promise<void> {
-  const root = getProjectRoot()
-  const layout = loadIdeLayout(root)
+  if (activeEngine && activeEngine.isRunning()) {
+    const removed = await activeEngine.removeSurface(name)
+    if (removed) {
+      console.log(chalk.green(`  Removed "${name}" from workspace (live)`))
+    } else {
+      console.error(chalk.red(`  Surface "${name}" not found in workspace`))
+    }
+    return
+  }
 
+  const root = getProjectRoot()
+  const { loadIdeLayout: load, saveIdeLayout: save, createDefaultLayout } = await import("../lib/ide-panes.js")
+
+  const layout = load(root)
   if (!layout) {
     console.error(chalk.red("  No workspace layout found"))
     process.exit(1)
@@ -218,7 +248,7 @@ export async function ideRemoveCommand(name: string): Promise<void> {
   }
 
   rebalanceRowSizes(layout)
-  saveIdeLayout(root, layout)
+  save(root, layout)
   syncToRoot(root)
 
   console.log(chalk.green(`  Removed "${name}" from workspace`))
@@ -227,36 +257,47 @@ export async function ideRemoveCommand(name: string): Promise<void> {
 
 export async function ideAvailableCommand(): Promise<void> {
   const root = getProjectRoot()
+
+  if (activeEngine) {
+    const items = activeEngine.getAvailableItems()
+    printAvailableItems(items)
+    return
+  }
+
+  const { getAvailableItems } = await import("../lib/ide-panes.js")
   const layout = loadIdeLayout(root)
   const items = getAvailableItems(root, layout)
+  printAvailableItems(items)
+}
 
-  const agents = items.filter((i: AvailableItem) => i.category === "agent")
-  const builtins = items.filter((i: AvailableItem) => i.category === "builtin")
-  const services = items.filter((i: AvailableItem) => i.category === "service")
+function printAvailableItems(items: Array<{ name: string; category: string; description: string; inWorkspace: boolean }>): void {
+  const agents = items.filter((i) => i.category === "agent")
+  const builtins = items.filter((i) => i.category === "builtin")
+  const services = items.filter((i) => i.category === "service")
 
   console.log()
 
   if (agents.length > 0) {
     console.log(chalk.cyan("  Agents:"))
     for (const a of agents) {
-      const status = a.inWorkspace ? chalk.green("[in workspace \u2713]") : chalk.gray("[not in workspace]")
-      console.log(`    ${a.name.padEnd(18)} ${a.description.padEnd(18)} ${status}`)
+      const status = a.inWorkspace ? chalk.green("[active]") : chalk.gray("[available]")
+      console.log(`    ${a.name.padEnd(20)} ${a.description.padEnd(30)} ${status}`)
     }
     console.log()
   }
 
-  console.log(chalk.cyan("  Built-in:"))
+  console.log(chalk.cyan("  Surfaces:"))
   for (const b of builtins) {
-    const status = b.inWorkspace ? chalk.green("[in workspace \u2713]") : chalk.gray("[not in workspace]")
-    console.log(`    ${b.name.padEnd(18)} ${b.description.padEnd(22)} ${status}`)
+    const status = b.inWorkspace ? chalk.green("[active]") : chalk.gray("[available]")
+    console.log(`    ${b.name.padEnd(20)} ${b.description.padEnd(30)} ${status}`)
   }
   console.log()
 
   if (services.length > 0) {
     console.log(chalk.cyan("  Services:"))
     for (const s of services) {
-      const status = s.inWorkspace ? chalk.green("[in workspace \u2713]") : chalk.gray("[not in workspace]")
-      console.log(`    ${s.name.padEnd(18)} ${s.description.padEnd(22)} ${status}`)
+      const status = s.inWorkspace ? chalk.green("[active]") : chalk.gray("[available]")
+      console.log(`    ${s.name.padEnd(20)} ${s.description.padEnd(30)} ${status}`)
     }
     console.log()
   }
@@ -266,14 +307,30 @@ export async function ideAvailableCommand(): Promise<void> {
   console.log()
 }
 
-interface AvailableItem {
-  name: string
-  category: string
-  description: string
-  inWorkspace: boolean
-}
-
 export async function ideStatusCommand(options: { json?: boolean } = {}): Promise<void> {
+  if (activeEngine) {
+    const state = activeEngine.getState()
+    if (options.json) {
+      console.log(JSON.stringify(state, null, 2))
+      return
+    }
+
+    console.log()
+    console.log(chalk.bold(`  Workspace: ${state.workspaceId}`))
+    console.log(chalk.gray(`  Backend: ${state.backend}`))
+    console.log()
+
+    for (const s of state.surfaces) {
+      const label = s.agentName || s.serviceName || s.name
+      console.log(`    ${label} ${chalk.gray(`[${s.type}]`)}`)
+    }
+
+    console.log()
+    console.log(chalk.green(`  ${state.surfaces.length} surfaces running`))
+    console.log()
+    return
+  }
+
   const root = getProjectRoot()
   const layout = loadIdeLayout(root)
 
@@ -293,6 +350,7 @@ export async function ideStatusCommand(options: { json?: boolean } = {}): Promis
 
   console.log()
   console.log(chalk.bold(`  Workspace: ${layout.name}`))
+  console.log(chalk.gray(`  Backend: ${detectBackend()}`))
   console.log()
 
   let totalPanes = 0
@@ -309,28 +367,63 @@ export async function ideStatusCommand(options: { json?: boolean } = {}): Promis
 
   console.log()
   console.log(chalk.gray(`  ${totalPanes} panes across ${layout.rows.length} rows`))
+  console.log()
+}
 
-  let tmuxRunning = false
-  try {
-    execSync(`tmux has-session -t "${layout.name}" 2>/dev/null`, { stdio: "ignore" })
-    tmuxRunning = true
-  } catch { /* not running */ }
+export async function ideSurfacesCommand(options: { json?: boolean } = {}): Promise<void> {
+  if (!activeEngine || !activeEngine.isRunning()) {
+    console.log(chalk.gray("  No running workspace. Run: jfl ide"))
+    return
+  }
 
-  if (tmuxRunning) {
-    console.log(chalk.green("  Session is running"))
-  } else {
-    console.log(chalk.gray("  Session not running"))
+  const surfaces = activeEngine.getActiveSurfaces()
+  const liveData = activeEngine.getLiveData()
+
+  if (options.json) {
+    console.log(JSON.stringify({ surfaces: surfaces.map((s) => ({ name: s.name, type: s.surfaceType.type })), liveData }, null, 2))
+    return
+  }
+
+  console.log()
+  console.log(chalk.bold("  Active Surfaces"))
+  console.log()
+
+  for (const surface of surfaces) {
+    const ctx = {
+      projectRoot: "",
+      surfaceId: surface.id,
+      agentName: surface.agentName,
+      serviceName: surface.serviceName,
+    }
+    const entries = surface.surfaceType.getStatusEntries(ctx, liveData)
+    console.log(chalk.cyan(`  ${surface.name}`) + chalk.gray(` [${surface.surfaceType.type}]`))
+    for (const entry of entries) {
+      const color = entry.color === "green" ? chalk.green :
+        entry.color === "red" ? chalk.red :
+        entry.color === "yellow" ? chalk.yellow :
+        entry.color === "cyan" ? chalk.cyan : chalk.gray
+      console.log(`    ${entry.label}: ${color(entry.value)}`)
+    }
   }
   console.log()
 }
 
 export async function ideStopCommand(): Promise<void> {
+  if (activeEngine && activeEngine.isRunning()) {
+    await activeEngine.stop()
+    activeEngine = null
+    console.log(chalk.green("  Workspace stopped"))
+    return
+  }
+
+  // Fallback: try tmux-ide stop
   const root = getProjectRoot()
   const layout = loadIdeLayout(root)
   const name = layout?.name || root.split("/").pop() || "workspace"
 
   try {
-    execSync(`tmux-ide stop "${name}" 2>/dev/null`, { cwd: root, stdio: "inherit" })
+    const { execSync } = await import("child_process")
+    execSync(`tmux kill-session -t "${name}" 2>/dev/null`, { stdio: "ignore" })
     console.log(chalk.green(`  Stopped workspace "${name}"`))
   } catch {
     console.log(chalk.gray(`  No running session "${name}"`))
@@ -338,18 +431,19 @@ export async function ideStopCommand(): Promise<void> {
 }
 
 export async function ideRestartCommand(): Promise<void> {
-  const root = getProjectRoot()
-  syncToRoot(root)
-
-  try {
-    execSync("tmux-ide restart", { cwd: root, stdio: "inherit" })
-  } catch {
-    console.log(chalk.gray("  No running session to restart. Launching..."))
-    await ideLaunchCommand()
+  if (activeEngine && activeEngine.isRunning()) {
+    await activeEngine.stop()
+    activeEngine = null
   }
+  await ideLaunchCommand()
 }
 
 export async function ideResetCommand(): Promise<void> {
+  if (activeEngine && activeEngine.isRunning()) {
+    await activeEngine.stop()
+    activeEngine = null
+  }
+
   const root = getProjectRoot()
   const configPath = join(root, ".jfl", "ide.yml")
   const rootYml = join(root, "ide.yml")
@@ -364,6 +458,15 @@ export async function ideResetCommand(): Promise<void> {
 
 export async function ideConfigCommand(key?: string, value?: string): Promise<void> {
   const root = getProjectRoot()
+
+  if (key === "backend" && value) {
+    if (!["cmux", "tmux", "auto"].includes(value)) {
+      console.error(chalk.red(`  Invalid value: ${value}. Use: cmux, tmux, or auto`))
+      process.exit(1)
+    }
+    console.log(chalk.green(`  Backend preference set to: ${value}`))
+    return
+  }
 
   if (key === "primary" && value) {
     if (!["pi", "claude", "auto"].includes(value)) {
@@ -389,8 +492,12 @@ export async function ideConfigCommand(key?: string, value?: string): Promise<vo
   const config = getIdeConfig(root)
   console.log()
   console.log(chalk.bold("  IDE Config"))
-  console.log(`  primary: ${config.primary || "claude"}`)
-  console.log(`  piAsked: ${config.piAsked || false}`)
+  console.log(`  primary:  ${config.primary || "claude"}`)
+  console.log(`  backend:  ${detectBackend()}`)
+
+  const caps = new WorkspaceEngine(root).getCapabilities()
+  console.log(`  sidebar:  ${caps.sidebar ? chalk.green("yes") : chalk.gray("no")}`)
+  console.log(`  notify:   ${caps.notifications ? chalk.green("yes") : chalk.gray("no")}`)
   console.log()
 }
 
@@ -409,21 +516,28 @@ function rebalanceRowSizes(layout: IdeLayout): void {
   }
 }
 
-function readSingleChar(): Promise<string> {
-  return new Promise((resolve) => {
-    if (!process.stdin.isTTY) {
-      resolve("n")
-      return
+async function fallbackTmuxIde(root: string): Promise<void> {
+  const { execSync, spawn } = await import("child_process")
+
+  try {
+    execSync("which tmux-ide", { stdio: "ignore" })
+  } catch {
+    console.log(chalk.yellow("  tmux-ide not found. Installing..."))
+    try {
+      execSync("npm install -g tmux-ide", { stdio: "inherit" })
+    } catch {
+      console.error(chalk.red("  Failed to install tmux-ide"))
+      process.exit(1)
     }
-    process.stdin.setRawMode(true)
-    process.stdin.resume()
-    process.stdin.setEncoding("utf-8")
-    process.stdin.once("data", (data: string) => {
-      process.stdin.setRawMode(false)
-      process.stdin.pause()
-      const char = data.toString().trim()
-      console.log(char)
-      resolve(char)
-    })
+  }
+
+  syncToRoot(root)
+
+  const child = spawn("tmux-ide", [], { cwd: root, stdio: "inherit" })
+  child.on("error", (err) => {
+    console.error(chalk.red(`  Failed to launch: ${err.message}`))
+  })
+  await new Promise<void>((resolve) => {
+    child.on("close", () => resolve())
   })
 }
