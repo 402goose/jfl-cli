@@ -2610,6 +2610,76 @@ export async function contextHubCommand(
       const server = createServer(projectRoot, port, eventBus, flowEngine)
       let isListening = false
 
+      // Cross-service scope impact detection (GTM/portfolio level)
+      // When eval:scored fires with improved=true, detect which other services
+      // are affected and emit scope:impact events for each
+      const configPath = path.join(projectRoot, ".jfl", "config.json")
+      const hubConfig = fs.existsSync(configPath) ? JSON.parse(fs.readFileSync(configPath, "utf-8")) : {}
+      if (hubConfig.type === "gtm" || hubConfig.type === "portfolio") {
+        eventBus.subscribe({
+          clientId: "scope-detector",
+          patterns: ["eval:scored"],
+          transport: "poll" as const,
+          callback: (event: any) => {
+            if (event.data?.improved !== "true" && event.data?.improved !== true) return
+            const serviceName = event.data?.service || event.source || "unknown"
+            const registeredServices = hubConfig.registered_services || []
+            
+            // Find source service's produces
+            const sourceReg = registeredServices.find((s: any) => s.name === serviceName)
+            if (!sourceReg?.path) return
+            
+            try {
+              const svcConfigPath = path.join(sourceReg.path, ".jfl", "config.json")
+              if (!fs.existsSync(svcConfigPath)) return
+              const svcConfig = JSON.parse(fs.readFileSync(svcConfigPath, "utf-8"))
+              const produces = svcConfig.context_scope?.produces || []
+              if (produces.length === 0) return
+              
+              // Check each other service for consuming matches
+              for (const otherSvc of registeredServices) {
+                if (otherSvc.name === serviceName || !otherSvc.path) continue
+                const otherConfigPath = path.join(otherSvc.path, ".jfl", "config.json")
+                if (!fs.existsSync(otherConfigPath)) continue
+                const otherConfig = JSON.parse(fs.readFileSync(otherConfigPath, "utf-8"))
+                const consumes = otherConfig.context_scope?.consumes || []
+                
+                // Match produces against consumes
+                const matched: string[] = []
+                for (const p of produces) {
+                  for (const c of consumes) {
+                    if (c === "*" || p === c || (c.endsWith(":*") && p.startsWith(c.slice(0, -1))) || (c.endsWith("*") && p.startsWith(c.slice(0, -1)))) {
+                      matched.push(`${p} → ${c}`)
+                    }
+                  }
+                }
+                
+                if (matched.length > 0) {
+                  const ts = new Date().toISOString()
+                  console.log(`[${ts}] scope:impact — ${serviceName} → ${otherSvc.name} (${matched.length} patterns)`)
+                  eventBus.emit({
+                    type: "scope:impact" as any,
+                    source: "scope-detector",
+                    data: {
+                      source_service: serviceName,
+                      affected_service: otherSvc.name,
+                      affected_service_path: otherSvc.path,
+                      scope_patterns: matched,
+                      source_pr: event.data?.pr_number || "",
+                      change_description: event.data?.branch || "eval improvement",
+                      source_delta: event.data?.delta || "0",
+                    },
+                  })
+                }
+              }
+            } catch (err: any) {
+              console.error(`[scope-detector] Error checking impact for ${serviceName}:`, err.message)
+            }
+          },
+        })
+        console.log(`[scope-detector] Cross-service impact detection enabled for ${hubConfig.type} hub`)
+      }
+
       // When spawned as daemon, ignore SIGTERM during startup grace period.
       // The parent process (hook runner) may exit and send SIGTERM to the
       // process group before we're fully detached. After grace period,
