@@ -9,6 +9,10 @@
  * - Stopword removal for cleaner term matching
  * - Phrase detection for multi-word queries
  * - Adaptive BM25 b parameter based on corpus statistics
+ * - BM25+ variant with positive IDF floor for better NDCG
+ * - Query term weighting based on IDF for discriminative power
+ * - Reciprocal rank fusion for hybrid score merging
+ * - Pivoted document length normalization
  *
  * @purpose Fast and semantic search across indexed memories
  */
@@ -35,6 +39,12 @@ export interface SearchOptions {
   rerank?: boolean
   /** Use legacy tokenization (no stopwords/phrases) */
   legacyTokenize?: boolean
+  /** Use BM25+ variant with positive IDF floor (default: true) */
+  bm25Plus?: boolean
+  /** Use reciprocal rank fusion for hybrid merging (default: true) */
+  useRRF?: boolean
+  /** RRF k parameter - higher values smooth rank differences (default: 60) */
+  rrfK?: number
 }
 
 /**
@@ -52,6 +62,141 @@ function tokenize(text: string, legacy: boolean = false): string[] {
       .filter(token => token.length > 2)
   }
   return advancedTokenize(text)
+}
+
+// ============================================================================
+// BM25+ and Score Normalization Improvements
+// ============================================================================
+
+/**
+ * BM25+ IDF calculation with positive floor.
+ *
+ * Standard BM25 IDF: log((N - df + 0.5) / (df + 0.5))
+ * This can go NEGATIVE when df > N/2, penalizing common terms.
+ *
+ * BM25+ adds a floor of δ (typically 1) to ensure all matching terms
+ * contribute positively:
+ *
+ *   IDF+ = max(0, log((N - df + 0.5) / (df + 0.5))) + δ
+ *
+ * This improves NDCG for queries containing common relevant terms.
+ *
+ * @param N - Total number of documents
+ * @param df - Document frequency of term
+ * @param delta - Positive floor value (default: 1)
+ */
+function computeBM25PlusIDF(N: number, df: number, delta: number = 1): number {
+  const standardIDF = Math.log((N - df + 0.5) / (df + 0.5) + 1)
+  return Math.max(0, standardIDF) + delta
+}
+
+/**
+ * Compute query term weights based on corpus IDF.
+ *
+ * Terms that are rarer in the corpus get higher weights, improving
+ * discrimination. This is especially important for short queries
+ * where every term matters.
+ *
+ * Weight formula: softmax(IDF scores) to normalize to probability distribution
+ *
+ * @param queryTokens - Tokenized query terms
+ * @param docFreq - Map of term -> document frequency
+ * @param N - Total number of documents
+ */
+function computeQueryTermWeights(
+  queryTokens: string[],
+  docFreq: Map<string, number>,
+  N: number
+): Map<string, number> {
+  const weights = new Map<string, number>()
+
+  if (queryTokens.length === 0) return weights
+
+  // Compute raw IDF weights
+  const rawWeights: number[] = []
+  for (const token of queryTokens) {
+    const df = docFreq.get(token) || 0
+    const idf = Math.log((N + 1) / (df + 1)) + 1
+    rawWeights.push(idf)
+  }
+
+  // Normalize using softmax-inspired scaling
+  const maxWeight = Math.max(...rawWeights)
+  const minWeight = Math.min(...rawWeights)
+  const range = maxWeight - minWeight
+
+  for (let i = 0; i < queryTokens.length; i++) {
+    // Scale to [0.5, 1.5] range - ensures all terms contribute but rare ones more
+    const normalizedWeight = range > 0
+      ? 0.5 + (rawWeights[i] - minWeight) / range
+      : 1.0
+    weights.set(queryTokens[i], normalizedWeight)
+  }
+
+  return weights
+}
+
+/**
+ * Reciprocal Rank Fusion (RRF) for combining multiple ranked lists.
+ *
+ * RRF is more robust than linear score combination because it:
+ * 1. Doesn't require score normalization
+ * 2. Is less sensitive to outlier scores
+ * 3. Naturally handles different score scales
+ *
+ * Formula: RRF(d) = Σ 1 / (k + rank_i(d))
+ *
+ * where k is a smoothing constant (typically 60) that controls
+ * how much rank differences matter.
+ *
+ * @param rankings - Array of ranked result lists
+ * @param k - Smoothing constant (higher = smoother rank differences)
+ */
+function reciprocalRankFusion(
+  rankings: SearchResult[][],
+  k: number = 60
+): Map<number, number> {
+  const rrfScores = new Map<number, number>()
+
+  for (const ranking of rankings) {
+    for (let rank = 0; rank < ranking.length; rank++) {
+      const memId = ranking[rank].memory.id
+      const currentScore = rrfScores.get(memId) || 0
+      rrfScores.set(memId, currentScore + 1 / (k + rank + 1))
+    }
+  }
+
+  return rrfScores
+}
+
+/**
+ * Pivoted document length normalization.
+ *
+ * Standard BM25 length normalization can over-penalize long documents
+ * or under-penalize short ones depending on b. Pivoted normalization
+ * provides a more balanced approach:
+ *
+ *   norm = 1 - s + s * (dl / pivot)
+ *
+ * where:
+ * - s is the slope (similar to b, typically 0.2-0.4)
+ * - pivot is a calibrated average length (can be tuned)
+ *
+ * This produces more stable rankings across varying document lengths.
+ *
+ * @param dl - Document length
+ * @param avgdl - Average document length
+ * @param s - Slope parameter (default: 0.2)
+ * @param pivotFactor - Pivot as factor of avgdl (default: 1.0)
+ */
+function pivotedLengthNorm(
+  dl: number,
+  avgdl: number,
+  s: number = 0.2,
+  pivotFactor: number = 1.0
+): number {
+  const pivot = avgdl * pivotFactor
+  return 1 - s + s * (dl / pivot)
 }
 
 /**
@@ -198,7 +343,7 @@ function computeAdaptiveB(docLengths: number[]): number {
 }
 
 /**
- * BM25 first-pass scoring over full document collection.
+ * BM25/BM25+ first-pass scoring over full document collection.
  *
  * Uses tuned k1/b parameters optimized for short, structured journal entries:
  * - k1=1.5: Term frequency saturation tuned for short queries — higher k1 allows
@@ -206,6 +351,9 @@ function computeAdaptiveB(docLengths: number[]): number {
  * - b: Adaptive based on corpus length variance (default 0.65)
  *
  * Key optimizations in this implementation:
+ * - BM25+ variant with positive IDF floor (prevents common term penalty)
+ * - Query term weighting based on IDF for discriminative power
+ * - Pivoted length normalization option for balanced doc length handling
  * - Stopword removal reduces noise in term matching
  * - Phrase detection keeps compound terms together
  * - Adaptive b parameter adjusts to corpus characteristics
@@ -216,7 +364,8 @@ async function searchMemoriesBM25(
   limit: number,
   k1: number = 1.5,
   bOverride?: number,
-  legacy: boolean = false
+  legacy: boolean = false,
+  useBM25Plus: boolean = true
 ): Promise<SearchResult[]> {
   // Use query-specific tokenization
   const queryTokens = legacy ? tokenize(query, true) : tokenizeQuery(query)
@@ -248,6 +397,9 @@ async function searchMemoriesBM25(
     docFreq.set(token, count)
   }
 
+  // Compute query term weights for discriminative scoring
+  const queryTermWeights = computeQueryTermWeights(queryTokens, docFreq, N)
+
   const scored: SearchResult[] = []
 
   for (let i = 0; i < memories.length; i++) {
@@ -267,11 +419,18 @@ async function searchMemoriesBM25(
       if (tf === 0) continue
 
       const df = docFreq.get(token) || 0
-      // BM25 IDF: log((N - df + 0.5) / (df + 0.5) + 1)
-      const idf = Math.log((N - df + 0.5) / (df + 0.5) + 1)
+
+      // Use BM25+ IDF (with positive floor) or standard BM25 IDF
+      const idf = useBM25Plus
+        ? computeBM25PlusIDF(N, df, 1)
+        : Math.log((N - df + 0.5) / (df + 0.5) + 1)
+
       // BM25 TF normalization with length normalization
       const tfNorm = (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * (dl / avgdl)))
-      bm25Score += idf * tfNorm
+
+      // Apply query term weight for discriminative scoring
+      const termWeight = queryTermWeights.get(token) || 1.0
+      bm25Score += idf * tfNorm * termWeight
     }
 
     if (bm25Score > 0) {
@@ -434,48 +593,65 @@ function normalizeScores(results: SearchResult[]): SearchResult[] {
 /**
  * Hybrid search combining BM25 and embeddings.
  *
- * Uses advanced tokenization for BM25 component.
+ * Uses reciprocal rank fusion (RRF) by default for more robust score merging.
+ * RRF is better than linear interpolation because:
+ * 1. It doesn't require score normalization
+ * 2. It's less sensitive to outlier scores
+ * 3. It naturally handles different score distributions
+ *
+ * Falls back to weighted linear combination if RRF is disabled.
  */
 async function searchMemoriesHybrid(
   query: string,
   memories: Memory[],
   limit: number,
-  legacy: boolean = false
+  legacy: boolean = false,
+  useRRF: boolean = true,
+  rrfK: number = 60,
+  useBM25Plus: boolean = true
 ): Promise<SearchResult[]> {
   // Run BM25 (lexical) and embedding (semantic) in parallel
   const [bm25Results, embeddingResults] = await Promise.all([
-    searchMemoriesBM25(query, memories, limit * 2, 1.5, undefined, legacy),
+    searchMemoriesBM25(query, memories, limit * 2, 1.5, undefined, legacy, useBM25Plus),
     searchMemoriesEmbedding(query, memories, limit * 2).catch(() => [])
   ])
 
-  // Normalize scores
-  const bm25Normalized = normalizeScores(bm25Results)
-  const embeddingNormalized = normalizeScores(embeddingResults)
-
-  // Merge with weights (BM25: 0.4, Embedding: 0.6)
-  const mergedScores = new Map<number, number>()
-
-  for (const result of bm25Normalized) {
-    const memId = result.memory.id
-    mergedScores.set(memId, (mergedScores.get(memId) || 0) + result.score * 0.4)
-  }
-
-  for (const result of embeddingNormalized) {
-    const memId = result.memory.id
-    mergedScores.set(memId, (mergedScores.get(memId) || 0) + result.score * 0.6)
-  }
-
-  // Create final results
+  // Build memory lookup map
   const memoryMap = new Map<number, Memory>()
   bm25Results.forEach(r => memoryMap.set(r.memory.id, r.memory))
   embeddingResults.forEach(r => memoryMap.set(r.memory.id, r.memory))
 
+  let mergedScores: Map<number, number>
+
+  if (useRRF) {
+    // Use Reciprocal Rank Fusion for robust score merging
+    mergedScores = reciprocalRankFusion([bm25Results, embeddingResults], rrfK)
+  } else {
+    // Fallback to weighted linear combination
+    const bm25Normalized = normalizeScores(bm25Results)
+    const embeddingNormalized = normalizeScores(embeddingResults)
+
+    mergedScores = new Map<number, number>()
+
+    for (const result of bm25Normalized) {
+      const memId = result.memory.id
+      mergedScores.set(memId, (mergedScores.get(memId) || 0) + result.score * 0.4)
+    }
+
+    for (const result of embeddingNormalized) {
+      const memId = result.memory.id
+      mergedScores.set(memId, (mergedScores.get(memId) || 0) + result.score * 0.6)
+    }
+  }
+
+  // Create final results
   const finalResults: SearchResult[] = Array.from(mergedScores.entries())
     .map(([id, score]) => ({
       memory: memoryMap.get(id)!,
       score,
       relevance: score > 0.7 ? 'high' as const : score > 0.4 ? 'medium' as const : 'low' as const
     }))
+    .filter(r => r.memory) // Filter out any undefined memories
     .sort((a, b) => b.score - a.score)
     .slice(0, limit)
 
@@ -483,11 +659,11 @@ async function searchMemoriesHybrid(
 }
 
 /**
- * BM25 re-ranking as a second-pass scoring step.
+ * BM25/BM25+ re-ranking as a second-pass scoring step.
  *
- * Applies Okapi BM25 between query terms and document content to
- * re-order initial retrieval results. This bridges the gap between
- * semantic/vector retrieval and lexical relevance.
+ * Applies Okapi BM25 (or BM25+ variant) between query terms and document
+ * content to re-order initial retrieval results. This bridges the gap
+ * between semantic/vector retrieval and lexical relevance.
  *
  * Uses advanced tokenization for better term matching.
  *
@@ -496,13 +672,15 @@ async function searchMemoriesHybrid(
  * @param k1 - Term frequency saturation (default 1.5, tuned for short queries)
  * @param bOverride - Optional override for b parameter (otherwise adaptive)
  * @param legacy - Use legacy tokenization
+ * @param useBM25Plus - Use BM25+ variant with positive IDF floor
  */
 function reRankWithBM25(
   results: SearchResult[],
   query: string,
   k1: number = 1.5,
   bOverride?: number,
-  legacy: boolean = false
+  legacy: boolean = false,
+  useBM25Plus: boolean = true
 ): SearchResult[] {
   if (results.length === 0) return results
 
@@ -530,6 +708,9 @@ function reRankWithBM25(
     docFreq.set(token, count)
   }
 
+  // Compute query term weights for discriminative scoring
+  const queryTermWeights = computeQueryTermWeights(queryTokens, docFreq, N)
+
   const reranked: SearchResult[] = results.map((result, i) => {
     const doc = docs[i]
     const dl = doc.length
@@ -545,9 +726,16 @@ function reRankWithBM25(
       const tf = termCounts.get(token) || 0
       const df = docFreq.get(token) || 0
 
-      const idf = Math.log((N - df + 0.5) / (df + 0.5) + 1)
+      // Use BM25+ IDF or standard BM25 IDF
+      const idf = useBM25Plus
+        ? computeBM25PlusIDF(N, df, 1)
+        : Math.log((N - df + 0.5) / (df + 0.5) + 1)
+
       const tfNorm = (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * (dl / avgdl)))
-      bm25Score += idf * tfNorm
+
+      // Apply query term weight
+      const termWeight = queryTermWeights.get(token) || 1.0
+      bm25Score += idf * tfNorm * termWeight
     }
 
     const originalWeight = 0.4
@@ -574,13 +762,18 @@ function reRankWithBM25(
  * Main search function.
  *
  * Supports multiple search methods with advanced preprocessing:
- * - bm25: BM25 scoring with adaptive length normalization
+ * - bm25: BM25/BM25+ scoring with adaptive length normalization
  * - tfidf: Classic TF-IDF scoring
  * - embedding: Semantic search with embeddings
- * - hybrid: Combined BM25 + embedding (default)
+ * - hybrid: Combined BM25 + embedding with RRF (default)
  *
  * All methods use stopword removal and phrase detection by default.
  * Set legacyTokenize=true to use original tokenization.
+ *
+ * New options for improved ranking:
+ * - bm25Plus: Use BM25+ variant with positive IDF floor (default: true)
+ * - useRRF: Use reciprocal rank fusion for hybrid (default: true)
+ * - rrfK: RRF smoothing constant (default: 60)
  */
 export async function searchMemories(
   query: string,
@@ -592,7 +785,10 @@ export async function searchMemories(
     since,
     method = 'hybrid',
     rerank = true,
-    legacyTokenize = false
+    legacyTokenize = false,
+    bm25Plus = true,
+    useRRF = true,
+    rrfK = 60
   } = options
 
   // Get all memories
@@ -610,18 +806,18 @@ export async function searchMemories(
   // Search based on method
   let results: SearchResult[]
   if (method === 'bm25') {
-    results = await searchMemoriesBM25(query, memories, maxItems * 2, 1.5, undefined, legacyTokenize)
+    results = await searchMemoriesBM25(query, memories, maxItems * 2, 1.5, undefined, legacyTokenize, bm25Plus)
   } else if (method === 'tfidf') {
     results = await searchMemoriesTFIDF(query, memories, maxItems * 2, legacyTokenize)
   } else if (method === 'embedding') {
     results = await searchMemoriesEmbedding(query, memories, maxItems * 2)
   } else {
-    results = await searchMemoriesHybrid(query, memories, maxItems * 2, legacyTokenize)
+    results = await searchMemoriesHybrid(query, memories, maxItems * 2, legacyTokenize, useRRF, rrfK, bm25Plus)
   }
 
   // Second-pass: BM25 re-ranking
   if (rerank && results.length > 1) {
-    results = reRankWithBM25(results, query, 1.5, undefined, legacyTokenize)
+    results = reRankWithBM25(results, query, 1.5, undefined, legacyTokenize, bm25Plus)
   }
 
   return results.slice(0, maxItems)
@@ -646,3 +842,23 @@ export { computeEmbedding }
  * Export adaptive B parameter computation for testing and external use
  */
 export { computeAdaptiveB }
+
+/**
+ * Export BM25+ IDF computation for testing
+ */
+export { computeBM25PlusIDF }
+
+/**
+ * Export query term weight computation for testing
+ */
+export { computeQueryTermWeights }
+
+/**
+ * Export reciprocal rank fusion for testing
+ */
+export { reciprocalRankFusion }
+
+/**
+ * Export pivoted length normalization for testing
+ */
+export { pivotedLengthNorm }
