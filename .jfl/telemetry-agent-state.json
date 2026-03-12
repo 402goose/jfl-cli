@@ -1,13 +1,13 @@
 {
-  "last_run": "2026-03-12T01:08:41.303Z",
+  "last_run": "2026-03-12T01:23:49.613Z",
   "last_insights": [
     "perf:High MCP latency detected",
     "usage:Tool usage breakdown available"
   ],
-  "baseline_cost": 14.755738062432531,
+  "baseline_cost": 12.697925140107504,
   "baseline_errors": 0,
   "baseline_crash_rate": 0,
-  "run_count": 21,
+  "run_count": 23,
   "health_trajectory": [],
   "last_stratus_run": "",
   "stratus_failures": 0
