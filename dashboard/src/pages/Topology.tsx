@@ -293,38 +293,41 @@ function layoutNodes(nodes: TopoNode[], w: number, h: number, edges?: TopoEdge[]
   const orphanServices = serviceNodes.filter(svc => !svc.parentGtm || !clusters.has(svc.parentGtm))
 
   // Define GTM cluster positions in a triangle layout
-  // Left, top-right, bottom-right
+  // Use ~70% of canvas for the triangle spread
   const gtmCount = gtmNodes.length
   const clusterPositions: ClusterLayout[] = []
 
+  // Larger orbit radius for child services (180-200px base)
+  const baseOrbitRadius = 190
+
   if (gtmCount === 1) {
-    clusterPositions.push({ gtmX: cx - 200 * scale, gtmY: cy, orbitRadius: 100 * scale })
+    clusterPositions.push({ gtmX: cx - 250 * scale, gtmY: cy, orbitRadius: baseOrbitRadius * scale })
   } else if (gtmCount === 2) {
-    clusterPositions.push({ gtmX: cx - 220 * scale, gtmY: cy, orbitRadius: 100 * scale })
-    clusterPositions.push({ gtmX: cx + 220 * scale, gtmY: cy, orbitRadius: 100 * scale })
+    clusterPositions.push({ gtmX: cx - 280 * scale, gtmY: cy, orbitRadius: baseOrbitRadius * scale })
+    clusterPositions.push({ gtmX: cx + 280 * scale, gtmY: cy, orbitRadius: baseOrbitRadius * scale })
   } else if (gtmCount >= 3) {
-    // Triangle: left, top-right, bottom-right
-    const spreadX = 280 * scale
-    const spreadY = 180 * scale
-    clusterPositions.push({ gtmX: cx - spreadX, gtmY: cy, orbitRadius: 95 * scale })              // LEFT
-    clusterPositions.push({ gtmX: cx + spreadX * 0.6, gtmY: cy - spreadY, orbitRadius: 80 * scale })  // TOP-RIGHT
-    clusterPositions.push({ gtmX: cx + spreadX * 0.6, gtmY: cy + spreadY, orbitRadius: 95 * scale })  // BOTTOM-RIGHT
+    // Triangle: use 70% of canvas dimensions for spread
+    const spreadX = w * 0.32
+    const spreadY = h * 0.28
+    clusterPositions.push({ gtmX: cx - spreadX, gtmY: cy, orbitRadius: baseOrbitRadius * scale })                    // LEFT
+    clusterPositions.push({ gtmX: cx + spreadX * 0.7, gtmY: cy - spreadY, orbitRadius: (baseOrbitRadius - 10) * scale })  // TOP-RIGHT
+    clusterPositions.push({ gtmX: cx + spreadX * 0.7, gtmY: cy + spreadY, orbitRadius: baseOrbitRadius * scale })         // BOTTOM-RIGHT
 
     // Additional GTMs spread in remaining positions
     for (let i = 3; i < gtmCount; i++) {
       const angle = Math.PI * 2 * (i - 3) / Math.max(gtmCount - 3, 1) + Math.PI / 4
-      const r = 320 * scale
+      const r = Math.min(w, h) * 0.38
       clusterPositions.push({
         gtmX: cx + Math.cos(angle) * r,
         gtmY: cy + Math.sin(angle) * r,
-        orbitRadius: 85 * scale,
+        orbitRadius: (baseOrbitRadius - 20) * scale,
       })
     }
   }
 
   // Place GTM nodes and their child services
   gtmNodes.forEach((gtm, i) => {
-    const pos = clusterPositions[i] || { gtmX: cx, gtmY: cy, orbitRadius: 100 * scale }
+    const pos = clusterPositions[i] || { gtmX: cx, gtmY: cy, orbitRadius: baseOrbitRadius * scale }
 
     // Position the GTM node
     gtm.targetX = pos.gtmX
@@ -344,7 +347,7 @@ function layoutNodes(nodes: TopoNode[], w: number, h: number, edges?: TopoEdge[]
       children.forEach((child, ci) => {
         const angle = startAngle + ci * angleStep
         // Slightly vary orbit radius for visual interest
-        const orbitR = pos.orbitRadius + (ci % 2 === 0 ? 10 : -5)
+        const orbitR = pos.orbitRadius + (ci % 2 === 0 ? 15 : -10)
 
         child.targetX = pos.gtmX + Math.cos(angle) * orbitR
         child.targetY = pos.gtmY + Math.sin(angle) * orbitR
@@ -357,15 +360,15 @@ function layoutNodes(nodes: TopoNode[], w: number, h: number, edges?: TopoEdge[]
     }
   })
 
-  // Position system agents in center diamond formation
+  // Position system agents in tight center diamond formation (radius ~80)
   const systemCount = systemAgents.length
   if (systemCount > 0) {
-    const diamondRadius = 55 * scale
+    const diamondRadius = 42 * scale  // Tighter diamond for 4 system agents
     const systemPositions = [
-      { x: cx, y: cy - diamondRadius * 0.7 },           // top
-      { x: cx + diamondRadius * 0.9, y: cy },           // right
-      { x: cx, y: cy + diamondRadius * 0.7 },           // bottom
-      { x: cx - diamondRadius * 0.9, y: cy },           // left
+      { x: cx, y: cy - diamondRadius },           // top
+      { x: cx + diamondRadius, y: cy },           // right
+      { x: cx, y: cy + diamondRadius },           // bottom
+      { x: cx - diamondRadius, y: cy },           // left
     ]
 
     // Map known system agents to specific positions
@@ -384,15 +387,15 @@ function layoutNodes(nodes: TopoNode[], w: number, h: number, edges?: TopoEdge[]
       agent.targetY = pos.y
 
       if (agent.x === 0 && agent.y === 0) {
-        agent.x = pos.x + (Math.random() - 0.5) * 25
-        agent.y = pos.y + (Math.random() - 0.5) * 25
+        agent.x = pos.x + (Math.random() - 0.5) * 20
+        agent.y = pos.y + (Math.random() - 0.5) * 20
       }
     })
   }
 
   // Position orphan services in outer ring
   if (orphanServices.length > 0) {
-    const outerRadius = Math.min(w, h) * 0.42
+    const outerRadius = Math.min(w, h) * 0.44
     const angleStep = (Math.PI * 2) / orphanServices.length
     const startAngle = Math.PI / 6
 
@@ -408,8 +411,8 @@ function layoutNodes(nodes: TopoNode[], w: number, h: number, edges?: TopoEdge[]
     })
   }
 
-  // Apply gentle repulsion to prevent overlaps within clusters
-  for (let iter = 0; iter < 4; iter++) {
+  // Apply stronger repulsion to prevent overlaps between clusters
+  for (let iter = 0; iter < 6; iter++) {
     for (let i = 0; i < nodes.length; i++) {
       for (let j = i + 1; j < nodes.length; j++) {
         const ni = nodes[i]
@@ -422,10 +425,11 @@ function layoutNodes(nodes: TopoNode[], w: number, h: number, edges?: TopoEdge[]
         const dx = ni.targetX - nj.targetX
         const dy = ni.targetY - nj.targetY
         const dist = Math.sqrt(dx * dx + dy * dy)
-        const minDist = (ni.radius + nj.radius) * 2.5
+        // Stronger minimum distance to prevent label overlaps
+        const minDist = (ni.radius + nj.radius) * 3.2
 
         if (dist < minDist && dist > 0) {
-          const force = (minDist - dist) * 0.15
+          const force = (minDist - dist) * 0.2
           const fx = (dx / dist) * force
           const fy = (dy / dist) * force
 
@@ -447,7 +451,7 @@ function layoutNodes(nodes: TopoNode[], w: number, h: number, edges?: TopoEdge[]
   }
 
   // Clamp to viewport with padding
-  const padding = 70
+  const padding = 60
   for (const node of nodes) {
     node.targetX = Math.max(padding, Math.min(w - padding, node.targetX))
     node.targetY = Math.max(padding, Math.min(h - padding, node.targetY))

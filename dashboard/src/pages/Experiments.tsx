@@ -1,7 +1,7 @@
 import { api, EvalAgent, TrajectoryPoint, PredictionRecord, PredictionAccuracyStats, AutoresearchStatus } from "@/api"
 import { Sparkline } from "@/components"
 import { usePolling, cn, timeAgo } from "@/lib/hooks"
-import { useState } from "preact/hooks"
+import { useState, useRef, useEffect } from "preact/hooks"
 
 interface ExperimentRun {
   ts: string
@@ -25,6 +25,195 @@ function buildRuns(points: TrajectoryPoint[]): ExperimentRun[] {
       index: i,
     }
   })
+}
+
+function ScoreProgressChart({ data }: { data: AutoresearchStatus }) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const history = data.history || []
+
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas || history.length < 2) return
+
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return
+
+    const dpr = window.devicePixelRatio || 1
+    const rect = canvas.getBoundingClientRect()
+    canvas.width = rect.width * dpr
+    canvas.height = rect.height * dpr
+    ctx.scale(dpr, dpr)
+
+    const w = rect.width
+    const h = rect.height
+    const padding = { top: 24, right: 16, bottom: 32, left: 50 }
+    const chartW = w - padding.left - padding.right
+    const chartH = h - padding.top - padding.bottom
+
+    // Clear
+    ctx.fillStyle = "#191919"
+    ctx.fillRect(0, 0, w, h)
+
+    // Extract data
+    const scores = history.map(h => h.composite)
+    const deltas = history.map(h => h.delta)
+    const tests = history.map(h => h.tests)
+
+    const minScore = Math.min(...scores) * 0.98
+    const maxScore = Math.max(...scores) * 1.02
+    const scoreRange = maxScore - minScore || 0.01
+
+    const maxDelta = Math.max(...deltas.map(Math.abs), 0.001)
+    const baseline = data.baselineComposite ?? scores[0]
+
+    // Helper to map values to canvas coordinates
+    const xPos = (i: number) => padding.left + (i / (history.length - 1)) * chartW
+    const yScore = (v: number) => padding.top + (1 - (v - minScore) / scoreRange) * chartH
+    const yDelta = (d: number) => padding.top + chartH / 2 - (d / maxDelta) * (chartH / 2 - 10)
+
+    // Grid lines
+    ctx.strokeStyle = "#2a2a2a"
+    ctx.lineWidth = 1
+    for (let i = 0; i <= 4; i++) {
+      const y = padding.top + (i / 4) * chartH
+      ctx.beginPath()
+      ctx.moveTo(padding.left, y)
+      ctx.lineTo(w - padding.right, y)
+      ctx.stroke()
+    }
+
+    // Baseline reference (dashed)
+    ctx.strokeStyle = "#5a5a5a"
+    ctx.setLineDash([4, 4])
+    ctx.lineWidth = 1
+    const baselineY = yScore(baseline)
+    ctx.beginPath()
+    ctx.moveTo(padding.left, baselineY)
+    ctx.lineTo(w - padding.right, baselineY)
+    ctx.stroke()
+    ctx.setLineDash([])
+
+    // Draw delta bars first (behind the line)
+    const barWidth = Math.max(4, Math.min(12, chartW / history.length - 2))
+    history.forEach((h, i) => {
+      if (i === 0) return
+      const x = xPos(i)
+      const barH = Math.abs(h.delta) / maxDelta * (chartH / 4)
+      const color = h.delta > 0 ? "#FF5722" : h.delta < 0 ? "#f87171" : "#5a5a5a"
+
+      ctx.fillStyle = color + "60"
+      if (h.delta >= 0) {
+        ctx.fillRect(x - barWidth / 2, padding.top + chartH - barH, barWidth, barH)
+      } else {
+        ctx.fillRect(x - barWidth / 2, padding.top + chartH, barWidth, barH)
+      }
+    })
+
+    // Draw score line (cyan)
+    ctx.strokeStyle = "#06b6d4"
+    ctx.lineWidth = 2
+    ctx.lineCap = "round"
+    ctx.lineJoin = "round"
+    ctx.beginPath()
+    scores.forEach((s, i) => {
+      const x = xPos(i)
+      const y = yScore(s)
+      if (i === 0) ctx.moveTo(x, y)
+      else ctx.lineTo(x, y)
+    })
+    ctx.stroke()
+
+    // Draw score dots with highlights for positive deltas
+    scores.forEach((s, i) => {
+      const x = xPos(i)
+      const y = yScore(s)
+      const delta = deltas[i]
+
+      ctx.beginPath()
+      ctx.arc(x, y, delta > 0 ? 5 : 3, 0, Math.PI * 2)
+      ctx.fillStyle = delta > 0 ? "#FF5722" : "#06b6d4"
+      ctx.fill()
+
+      // Glow for positive deltas (merged rounds)
+      if (delta > 0) {
+        ctx.beginPath()
+        ctx.arc(x, y, 8, 0, Math.PI * 2)
+        ctx.fillStyle = "#FF572240"
+        ctx.fill()
+      }
+    })
+
+    // Test count sparkline (subtle, secondary axis)
+    if (tests.length > 1) {
+      const maxTests = Math.max(...tests)
+      const minTests = Math.min(...tests)
+      const testsRange = maxTests - minTests || 1
+
+      ctx.strokeStyle = "#8b8b8b40"
+      ctx.lineWidth = 1
+      ctx.beginPath()
+      tests.forEach((t, i) => {
+        const x = xPos(i)
+        const y = padding.top + chartH - ((t - minTests) / testsRange) * (chartH * 0.3)
+        if (i === 0) ctx.moveTo(x, y)
+        else ctx.lineTo(x, y)
+      })
+      ctx.stroke()
+    }
+
+    // Labels - Y axis (scores)
+    ctx.fillStyle = "#8b8b8b"
+    ctx.font = "10px 'Space Mono', monospace"
+    ctx.textAlign = "right"
+    ctx.textBaseline = "middle"
+    for (let i = 0; i <= 4; i++) {
+      const val = minScore + (1 - i / 4) * scoreRange
+      const y = padding.top + (i / 4) * chartH
+      ctx.fillText(val.toFixed(3), padding.left - 6, y)
+    }
+
+    // Labels - X axis (round numbers)
+    ctx.textAlign = "center"
+    ctx.textBaseline = "top"
+    const skipX = Math.ceil(history.length / 8)
+    history.forEach((h, i) => {
+      if (i % skipX === 0 || i === history.length - 1) {
+        const x = xPos(i)
+        ctx.fillText(`R${h.round}`, x, h - padding.bottom + 16)
+      }
+    })
+
+    // Title
+    ctx.fillStyle = "#f5f5f5"
+    ctx.font = "11px 'Space Mono', monospace"
+    ctx.textAlign = "left"
+    ctx.fillText("Score Over Rounds", padding.left, 10)
+
+    // Legend
+    ctx.fillStyle = "#06b6d4"
+    ctx.fillRect(w - 140, 8, 10, 3)
+    ctx.fillStyle = "#8b8b8b"
+    ctx.font = "9px 'Space Mono', monospace"
+    ctx.textAlign = "left"
+    ctx.fillText("composite", w - 126, 12)
+
+    ctx.fillStyle = "#FF5722"
+    ctx.fillRect(w - 70, 6, 8, 8)
+    ctx.fillStyle = "#8b8b8b"
+    ctx.fillText("+delta", w - 58, 12)
+  }, [history, data.baselineComposite])
+
+  if (history.length < 2) return null
+
+  return (
+    <div class="bg-card rounded-lg border border-border p-4 animate-fade-in">
+      <canvas
+        ref={canvasRef}
+        class="w-full"
+        style={{ height: "200px" }}
+      />
+    </div>
+  )
 }
 
 function AutoresearchPanel() {
@@ -175,25 +364,13 @@ function AutoresearchPanel() {
           </div>
         )}
 
-        {/* Training curve sparkline */}
-        {historyScores.length > 1 && (
+        {/* Score progression chart */}
+        {data.history.length > 1 && (
           <div class="mb-4">
             <div class="text-[10px] text-muted-foreground uppercase tracking-wider mb-2">
-              Training Curve
+              Score Progression
             </div>
-            <div class="bg-muted/30 rounded-lg p-3">
-              <Sparkline
-                data={historyScores}
-                width={500}
-                height={48}
-                color="var(--info)"
-                className="w-full"
-              />
-              <div class="flex justify-between text-[9px] mono text-muted-foreground mt-2">
-                <span>Round 1</span>
-                <span>Round {data.history.length}</span>
-              </div>
-            </div>
+            <ScoreProgressChart data={data} />
           </div>
         )}
 
