@@ -1,3 +1,8 @@
+---
+name: startup
+description: The startup journey from idea to scale — stage assessment, MVP scoping, launch playbooks, informed by Paul Graham + Garry Tan
+---
+
 # Startup Skill
 
 The startup journey from idea to scale, informed by Paul Graham + Garry Tan wisdom.

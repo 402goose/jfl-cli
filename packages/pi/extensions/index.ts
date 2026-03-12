@@ -306,6 +306,14 @@ export default async function jflExtension(pi: any): Promise<void> {
     setupBookmarks(ctx)
 
     ctx.log(`JFL: ${projectName} — session ready`)
+
+    if (config.pi?.auto_start !== false && pi.sendUserMessage) {
+      setTimeout(() => {
+        pi.sendUserMessage(
+          `JFL session started in "${projectName}". Use the jfl_context tool to read recent project context, then show a brief status update with current focus and any blocking issues.`
+        )
+      }, 500)
+    }
   })
 
   pi.on("session_shutdown", async (_event: unknown, piCtx: any) => {

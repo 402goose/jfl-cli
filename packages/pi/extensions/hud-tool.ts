@@ -35,8 +35,20 @@ function getProjectPhase(root: string): string {
   if (!existsSync(roadmapPath)) return "unknown"
 
   const content = readFileSync(roadmapPath, "utf-8")
-  const phaseMatch = content.match(/## (?:Phase|Current Phase)[:\s]*([^\n]+)/i)
-  return phaseMatch ? phaseMatch[1].trim() : "unknown"
+  const sameLineMatch = content.match(/## (?:Phase|Current Phase)[:\t ]*([^\n]+)/i)
+  if (sameLineMatch && sameLineMatch[1].trim() && !sameLineMatch[1].trim().startsWith("```")) {
+    return sameLineMatch[1].trim()
+  }
+
+  const sectionMatch = content.match(/## (?:Phase|Current Phase)[^\n]*\n+([^\n]+)/i)
+  if (sectionMatch) {
+    let line = sectionMatch[1].trim()
+    if (line.startsWith("```")) return "unknown"
+    line = line.replace(/^[`*_[\]]+|[`*_[\]]+$/g, "")
+    return line || "unknown"
+  }
+
+  return "unknown"
 }
 
 function buildHudLines(root: string): string[] {

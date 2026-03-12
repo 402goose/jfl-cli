@@ -1,3 +1,8 @@
+---
+name: debug
+description: Reverse engineering and dynamic analysis using industry-standard tools — CTF, security research, malware analysis, binary behavior
+---
+
 # Debug Skill
 
 Reverse engineering and dynamic analysis using industry-standard tools. For CTF, security research, malware analysis, and understanding binary behavior.
