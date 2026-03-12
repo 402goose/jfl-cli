@@ -1253,35 +1253,32 @@ export function TopologyPage() {
         setupFBOs(w, h)
       }
 
-      if (st.nodes.length === 0) {
-        // Try to fetch from API, fallback to mock data
-        api.topology()
-          .then(({ nodes: apiNodes, edges: apiEdges }) => {
-            if (apiNodes.length > 0) {
-              const { nodes, edges } = transformApiTopology(apiNodes, apiEdges)
-              st.nodes = nodes
-              st.edges = edges
-              setLiveConnected(true)
-            } else {
-              const { nodes, edges } = createFallbackTopology()
-              st.nodes = nodes
-              st.edges = edges
-            }
-            const rect2 = container.getBoundingClientRect()
-            layoutNodes(st.nodes, rect2.width, rect2.height, st.edges)
-            forceRender((n) => n + 1)
-          })
-          .catch(() => {
+      // Always try to fetch from API, fallback to mock data
+      api.topology()
+        .then(({ nodes: apiNodes, edges: apiEdges }) => {
+          if (apiNodes.length > 0) {
+            const { nodes, edges } = transformApiTopology(apiNodes, apiEdges)
+            st.nodes = nodes
+            st.edges = edges
+            setLiveConnected(true)
+          } else {
             const { nodes, edges } = createFallbackTopology()
             st.nodes = nodes
             st.edges = edges
-            layoutNodes(st.nodes, rect.width, rect.height, st.edges)
-            forceRender((n) => n + 1)
-          })
-      } else {
-        layoutNodes(st.nodes, rect.width, rect.height, st.edges)
-        forceRender((n) => n + 1)
-      }
+          }
+          const rect2 = container.getBoundingClientRect()
+          layoutNodes(st.nodes, rect2.width, rect2.height, st.edges, expandedGtms)
+          forceRender((n) => n + 1)
+        })
+        .catch(() => {
+          if (st.nodes.length === 0) {
+            const { nodes, edges } = createFallbackTopology()
+            st.nodes = nodes
+            st.edges = edges
+          }
+          layoutNodes(st.nodes, rect.width, rect.height, st.edges, expandedGtms)
+          forceRender((n) => n + 1)
+        })
     }
 
     resize()
