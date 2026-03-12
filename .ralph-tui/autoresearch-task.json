@@ -1,0 +1,22 @@
+{
+  "name": "Autoresearch Task",
+  "branchName": "ralph/autoresearch-1773350031455",
+  "description": "Add integration-level tests for CLI entry points and command handlers that are currently untested. Write tests that invoke the main CLI functions with mock inputs/arguments and verify expected outputs or side effects. Target at least 15 new test cases across 3-5 different command modules.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add integration-level tests for CLI entry points and command handlers that are c",
+      "description": "Add integration-level tests for CLI entry points and command handlers that are currently untested. Write tests that invoke the main CLI functions with mock inputs/arguments and verify expected outputs or side effects. Target at least 15 new test cases across 3-5 different command modules.",
+      "acceptanceCriteria": [
+        "Task completed"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    }
+  ],
+  "metadata": {
+    "updatedAt": "2026-03-12T21:13:51.455Z"
+  }
+}
