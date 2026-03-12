@@ -1,0 +1,29 @@
+# Test Coverage Agent
+# Optimizes test pass count - focused on improving test coverage and reliability
+
+[agent]
+name = "test-coverage"
+scope = "tests"
+metric = "test_pass_count"     # Number of passing tests
+direction = "maximize"
+time_budget_seconds = 300
+
+[eval]
+# Eval script is READ-ONLY during a session
+script = "eval/test-coverage.ts"
+data = "eval/fixtures/test-queries.jsonl"
+
+[constraints]
+files_in_scope = ["src/**/__tests__/**", "src/**/*.test.ts", "src/**/*.spec.ts"]
+files_readonly = ["eval/**", "src/core/**"]
+max_file_changes = 5
+
+[policy]
+embedding_model = "stratus-x1ac-base-claude-sonnet-4-6"
+exploration_rate = 0.2
+decay_per_round = 0.01
+min_exploration = 0.05
+
+[context_scope]
+produces = ["tests:coverage-improved", "tests:suite-expanded"]
+consumes = ["code:refactored", "code:new-module"]

@@ -1,0 +1,29 @@
+# Search Quality Agent
+# Optimizes search relevance using NDCG@10
+
+[agent]
+name = "search-quality"
+scope = "search"
+metric = "ndcg@10"             # Normalized Discounted Cumulative Gain at 10
+direction = "maximize"
+time_budget_seconds = 300
+
+[eval]
+# Eval script is READ-ONLY during a session
+script = "eval/search-quality.ts"
+data = "eval/fixtures/search-queries.jsonl"
+
+[constraints]
+files_in_scope = ["src/search/**", "src/lib/bm25.ts", "src/lib/memory-search.ts"]
+files_readonly = ["eval/**", "src/core/**"]
+max_file_changes = 5
+
+[policy]
+embedding_model = "stratus-x1ac-base-claude-sonnet-4-6"
+exploration_rate = 0.2
+decay_per_round = 0.01
+min_exploration = 0.05
+
+[context_scope]
+produces = ["search:quality-improved", "search:ndcg-update"]
+consumes = ["data:index-updated", "embedding:model-updated"]
