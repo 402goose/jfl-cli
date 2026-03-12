@@ -34,14 +34,23 @@ interface TopoNode {
   targetX: number
   targetY: number
   radius: number
+  baseRadius: number
   color: string
   glowColor: string
   pulsePhase: number
   reward: number[]
   produces?: string[]
   consumes?: string[]
-  parentGtm?: string  // For services: which GTM cluster they belong to
-  isGtm?: boolean     // True for GTM nodes themselves
+  parentGtm?: string
+  isGtm?: boolean
+  childCount?: number
+  aggregateReward?: number[]
+}
+
+interface ZoomPanState {
+  scale: number
+  offsetX: number
+  offsetY: number
 }
 
 interface TopoEdge {
@@ -90,6 +99,9 @@ function truncateLabel(label: string, maxLen: number = 18): string {
 // System agents that should be in the center cluster
 const SYSTEM_AGENTS = new Set(["peter-parker", "telemetry-agent", "eval-engine", "stratus"])
 
+const COLLAPSED_GTM_RADIUS = 55
+const EXPANDED_GTM_RADIUS = 38
+
 function edgeCategoryColor(cat: string): string {
   switch (cat) {
     case "success": return C.success
@@ -118,10 +130,12 @@ function createFallbackTopology(): { nodes: TopoNode[]; edges: TopoEdge[] } {
 
   const nodes: TopoNode[] = defs.map((d) => {
     const c = nodeColor(d.type)
+    const baseRadius = d.type === "orchestrator" ? 32 : d.type === "service" ? 28 : 24
     return {
       ...d,
       x: 0, y: 0, targetX: 0, targetY: 0,
-      radius: d.type === "orchestrator" ? 32 : d.type === "service" ? 28 : 24,
+      radius: baseRadius,
+      baseRadius,
       color: c.fill, glowColor: c.glow,
       pulsePhase: Math.random() * Math.PI * 2,
     }
@@ -187,18 +201,16 @@ function transformApiTopology(
       }
     }
 
-    // Determine node type and radius
-    // GTM nodes: larger (38), System agents: medium (28), Services: smaller (22)
     const effectiveType = isGtm ? "gtm" : n.type
-    let radius: number
+    let baseRadius: number
     if (isGtm) {
-      radius = 38
+      baseRadius = EXPANDED_GTM_RADIUS
     } else if (SYSTEM_AGENTS.has(n.id)) {
-      radius = 28
+      baseRadius = 28
     } else if (n.type === "orchestrator") {
-      radius = 26
+      baseRadius = 26
     } else {
-      radius = 22
+      baseRadius = 22
     }
 
     const c = nodeColor(effectiveType)
@@ -215,7 +227,8 @@ function transformApiTopology(
       y: 0,
       targetX: 0,
       targetY: 0,
-      radius,
+      radius: baseRadius,
+      baseRadius,
       color: c.fill,
       glowColor: c.glow,
       pulsePhase: Math.random() * Math.PI * 2,
@@ -223,6 +236,8 @@ function transformApiTopology(
       consumes: n.consumes,
       parentGtm,
       isGtm,
+      childCount: 0,
+      aggregateReward: Array.from({ length: 7 }, () => 0.3 + Math.random() * 0.5),
     }
   })
 
@@ -264,7 +279,13 @@ interface ClusterLayout {
   orbitRadius: number
 }
 
-function layoutNodes(nodes: TopoNode[], w: number, h: number, edges?: TopoEdge[]) {
+function layoutNodes(
+  nodes: TopoNode[],
+  w: number,
+  h: number,
+  edges?: TopoEdge[],
+  expandedGtms?: Set<string>,
+) {
   const cx = w / 2
   const cy = h / 2
   const n = nodes.length
@@ -272,13 +293,12 @@ function layoutNodes(nodes: TopoNode[], w: number, h: number, edges?: TopoEdge[]
   if (n === 0) return
 
   const scale = Math.min(w / 1200, h / 800, 1)
+  const expanded = expandedGtms || new Set<string>()
 
-  // Identify GTM nodes and system agents
   const gtmNodes = nodes.filter(node => node.isGtm)
   const systemAgents = nodes.filter(node => SYSTEM_AGENTS.has(node.id))
   const serviceNodes = nodes.filter(node => !node.isGtm && !SYSTEM_AGENTS.has(node.id))
 
-  // Build cluster map: gtmId -> services
   const clusters: Map<string, TopoNode[]> = new Map()
   for (const gtm of gtmNodes) {
     clusters.set(gtm.id, [])
@@ -289,103 +309,136 @@ function layoutNodes(nodes: TopoNode[], w: number, h: number, edges?: TopoEdge[]
     }
   }
 
-  // Orphan services (no parent GTM found) - will go in outer ring
-  const orphanServices = serviceNodes.filter(svc => !svc.parentGtm || !clusters.has(svc.parentGtm))
-
-  // Define GTM cluster positions in a triangle layout
-  // Use ~70% of canvas for the triangle spread
-  const gtmCount = gtmNodes.length
-  const clusterPositions: ClusterLayout[] = []
-
-  // Larger orbit radius for child services (180-200px base)
-  const baseOrbitRadius = 190
-
-  if (gtmCount === 1) {
-    clusterPositions.push({ gtmX: cx - 250 * scale, gtmY: cy, orbitRadius: baseOrbitRadius * scale })
-  } else if (gtmCount === 2) {
-    clusterPositions.push({ gtmX: cx - 280 * scale, gtmY: cy, orbitRadius: baseOrbitRadius * scale })
-    clusterPositions.push({ gtmX: cx + 280 * scale, gtmY: cy, orbitRadius: baseOrbitRadius * scale })
-  } else if (gtmCount >= 3) {
-    // Triangle: use 70% of canvas dimensions for spread
-    const spreadX = w * 0.32
-    const spreadY = h * 0.28
-    clusterPositions.push({ gtmX: cx - spreadX, gtmY: cy, orbitRadius: baseOrbitRadius * scale })                    // LEFT
-    clusterPositions.push({ gtmX: cx + spreadX * 0.7, gtmY: cy - spreadY, orbitRadius: (baseOrbitRadius - 10) * scale })  // TOP-RIGHT
-    clusterPositions.push({ gtmX: cx + spreadX * 0.7, gtmY: cy + spreadY, orbitRadius: baseOrbitRadius * scale })         // BOTTOM-RIGHT
-
-    // Additional GTMs spread in remaining positions
-    for (let i = 3; i < gtmCount; i++) {
-      const angle = Math.PI * 2 * (i - 3) / Math.max(gtmCount - 3, 1) + Math.PI / 4
-      const r = Math.min(w, h) * 0.38
-      clusterPositions.push({
-        gtmX: cx + Math.cos(angle) * r,
-        gtmY: cy + Math.sin(angle) * r,
-        orbitRadius: (baseOrbitRadius - 20) * scale,
+  for (const gtm of gtmNodes) {
+    const children = clusters.get(gtm.id) || []
+    gtm.childCount = children.length
+    if (children.length > 0) {
+      gtm.aggregateReward = children[0].reward.map((_, i) => {
+        const sum = children.reduce((acc, c) => acc + (c.reward[i] || 0), 0)
+        return sum / children.length
       })
     }
+    const isExpanded = expanded.has(gtm.id)
+    gtm.radius = isExpanded ? gtm.baseRadius : COLLAPSED_GTM_RADIUS
   }
 
-  // Place GTM nodes and their child services
-  gtmNodes.forEach((gtm, i) => {
-    const pos = clusterPositions[i] || { gtmX: cx, gtmY: cy, orbitRadius: baseOrbitRadius * scale }
+  const orphanServices = serviceNodes.filter(svc => !svc.parentGtm || !clusters.has(svc.parentGtm))
 
-    // Position the GTM node
-    gtm.targetX = pos.gtmX
-    gtm.targetY = pos.gtmY
-    if (gtm.x === 0 && gtm.y === 0) {
-      gtm.x = pos.gtmX + (Math.random() - 0.5) * 40
-      gtm.y = pos.gtmY + (Math.random() - 0.5) * 40
+  const expandedGtmList = gtmNodes.filter(g => expanded.has(g.id))
+  const collapsedGtmList = gtmNodes.filter(g => !expanded.has(g.id))
+
+  const baseOrbitRadius = 160
+
+  if (expandedGtmList.length === 1) {
+    const expandedGtm = expandedGtmList[0]
+    expandedGtm.targetX = cx
+    expandedGtm.targetY = cy
+    if (expandedGtm.x === 0 && expandedGtm.y === 0) {
+      expandedGtm.x = cx + (Math.random() - 0.5) * 40
+      expandedGtm.y = cy + (Math.random() - 0.5) * 40
     }
 
-    // Position child services in orbit around GTM
-    const children = clusters.get(gtm.id) || []
+    const children = clusters.get(expandedGtm.id) || []
     const childCount = children.length
     if (childCount > 0) {
       const angleStep = (Math.PI * 2) / childCount
-      const startAngle = -Math.PI / 2  // Start from top
-
+      const startAngle = -Math.PI / 2
       children.forEach((child, ci) => {
         const angle = startAngle + ci * angleStep
-        // Slightly vary orbit radius for visual interest
-        const orbitR = pos.orbitRadius + (ci % 2 === 0 ? 15 : -10)
-
-        child.targetX = pos.gtmX + Math.cos(angle) * orbitR
-        child.targetY = pos.gtmY + Math.sin(angle) * orbitR
-
+        const orbitR = baseOrbitRadius * scale + (ci % 2 === 0 ? 15 : -10)
+        child.targetX = cx + Math.cos(angle) * orbitR
+        child.targetY = cy + Math.sin(angle) * orbitR
         if (child.x === 0 && child.y === 0) {
           child.x = child.targetX + (Math.random() - 0.5) * 30
           child.y = child.targetY + (Math.random() - 0.5) * 30
         }
       })
     }
-  })
 
-  // Position system agents in tight center diamond formation (radius ~80)
+    const edgeSpread = Math.min(w, h) * 0.42
+    collapsedGtmList.forEach((gtm, i) => {
+      const angle = (Math.PI * 2 * i) / Math.max(collapsedGtmList.length, 1) - Math.PI / 2
+      gtm.targetX = cx + Math.cos(angle) * edgeSpread
+      gtm.targetY = cy + Math.sin(angle) * edgeSpread
+      if (gtm.x === 0 && gtm.y === 0) {
+        gtm.x = gtm.targetX + (Math.random() - 0.5) * 40
+        gtm.y = gtm.targetY + (Math.random() - 0.5) * 40
+      }
+      const children = clusters.get(gtm.id) || []
+      for (const child of children) {
+        child.targetX = gtm.targetX
+        child.targetY = gtm.targetY
+        if (child.x === 0 && child.y === 0) {
+          child.x = child.targetX
+          child.y = child.targetY
+        }
+      }
+    })
+  } else {
+    const gtmSpacing = 180 * scale
+    const totalWidth = (gtmNodes.length - 1) * gtmSpacing
+    const startX = cx - totalWidth / 2
+
+    gtmNodes.forEach((gtm, i) => {
+      const isExp = expanded.has(gtm.id)
+      gtm.targetX = startX + i * gtmSpacing
+      gtm.targetY = cy
+      if (gtm.x === 0 && gtm.y === 0) {
+        gtm.x = gtm.targetX + (Math.random() - 0.5) * 40
+        gtm.y = gtm.targetY + (Math.random() - 0.5) * 40
+      }
+
+      const children = clusters.get(gtm.id) || []
+      if (isExp && children.length > 0) {
+        const childCount = children.length
+        const angleStep = (Math.PI * 2) / childCount
+        const startAngle = -Math.PI / 2
+        children.forEach((child, ci) => {
+          const angle = startAngle + ci * angleStep
+          const orbitR = baseOrbitRadius * scale + (ci % 2 === 0 ? 15 : -10)
+          child.targetX = gtm.targetX + Math.cos(angle) * orbitR
+          child.targetY = gtm.targetY + Math.sin(angle) * orbitR
+          if (child.x === 0 && child.y === 0) {
+            child.x = child.targetX + (Math.random() - 0.5) * 30
+            child.y = child.targetY + (Math.random() - 0.5) * 30
+          }
+        })
+      } else {
+        for (const child of children) {
+          child.targetX = gtm.targetX
+          child.targetY = gtm.targetY
+          if (child.x === 0 && child.y === 0) {
+            child.x = child.targetX
+            child.y = child.targetY
+          }
+        }
+      }
+    })
+  }
+
   const systemCount = systemAgents.length
   if (systemCount > 0) {
-    const diamondRadius = 42 * scale  // Tighter diamond for 4 system agents
+    const systemY = 80
+    const diamondRadius = 42 * scale
     const systemPositions = [
-      { x: cx, y: cy - diamondRadius },           // top
-      { x: cx + diamondRadius, y: cy },           // right
-      { x: cx, y: cy + diamondRadius },           // bottom
-      { x: cx - diamondRadius, y: cy },           // left
+      { x: cx, y: systemY },
+      { x: cx + diamondRadius, y: systemY + diamondRadius * 0.7 },
+      { x: cx, y: systemY + diamondRadius * 1.4 },
+      { x: cx - diamondRadius, y: systemY + diamondRadius * 0.7 },
     ]
 
-    // Map known system agents to specific positions
     const agentPositionMap: Record<string, number> = {
-      "peter-parker": 0,       // top
-      "stratus": 1,            // right
-      "eval-engine": 2,        // bottom
-      "telemetry-agent": 3,    // left
+      "peter-parker": 0,
+      "stratus": 1,
+      "eval-engine": 2,
+      "telemetry-agent": 3,
     }
 
     systemAgents.forEach((agent, i) => {
       const posIdx = agentPositionMap[agent.id] ?? (i % 4)
       const pos = systemPositions[posIdx]
-
       agent.targetX = pos.x
       agent.targetY = pos.y
-
       if (agent.x === 0 && agent.y === 0) {
         agent.x = pos.x + (Math.random() - 0.5) * 20
         agent.y = pos.y + (Math.random() - 0.5) * 20
@@ -393,17 +446,14 @@ function layoutNodes(nodes: TopoNode[], w: number, h: number, edges?: TopoEdge[]
     })
   }
 
-  // Position orphan services in outer ring
   if (orphanServices.length > 0) {
     const outerRadius = Math.min(w, h) * 0.44
     const angleStep = (Math.PI * 2) / orphanServices.length
     const startAngle = Math.PI / 6
-
     orphanServices.forEach((svc, i) => {
       const angle = startAngle + i * angleStep
       svc.targetX = cx + Math.cos(angle) * outerRadius
       svc.targetY = cy + Math.sin(angle) * outerRadius
-
       if (svc.x === 0 && svc.y === 0) {
         svc.x = svc.targetX + (Math.random() - 0.5) * 50
         svc.y = svc.targetY + (Math.random() - 0.5) * 50
@@ -411,29 +461,30 @@ function layoutNodes(nodes: TopoNode[], w: number, h: number, edges?: TopoEdge[]
     })
   }
 
-  // Apply stronger repulsion to prevent overlaps between clusters
-  for (let iter = 0; iter < 6; iter++) {
-    for (let i = 0; i < nodes.length; i++) {
-      for (let j = i + 1; j < nodes.length; j++) {
-        const ni = nodes[i]
-        const nj = nodes[j]
+  const visibleNodes = nodes.filter(node => {
+    if (node.isGtm || SYSTEM_AGENTS.has(node.id) || !node.parentGtm) return true
+    return expanded.has(node.parentGtm)
+  })
 
-        // Skip repulsion between GTMs and their own children
-        if (ni.isGtm && nj.parentGtm === ni.id) continue
-        if (nj.isGtm && ni.parentGtm === nj.id) continue
+  for (let iter = 0; iter < 6; iter++) {
+    for (let i = 0; i < visibleNodes.length; i++) {
+      for (let j = i + 1; j < visibleNodes.length; j++) {
+        const ni = visibleNodes[i]
+        const nj = visibleNodes[j]
+
+        if (ni.isGtm && nj.parentGtm === ni.id && expanded.has(ni.id)) continue
+        if (nj.isGtm && ni.parentGtm === nj.id && expanded.has(nj.id)) continue
 
         const dx = ni.targetX - nj.targetX
         const dy = ni.targetY - nj.targetY
         const dist = Math.sqrt(dx * dx + dy * dy)
-        // Stronger minimum distance to prevent label overlaps
-        const minDist = (ni.radius + nj.radius) * 3.2
+        const minDist = (ni.radius + nj.radius) * 2.5
 
         if (dist < minDist && dist > 0) {
           const force = (minDist - dist) * 0.2
           const fx = (dx / dist) * force
           const fy = (dy / dist) * force
 
-          // Don't move GTMs or system agents much
           const niLocked = ni.isGtm || SYSTEM_AGENTS.has(ni.id)
           const njLocked = nj.isGtm || SYSTEM_AGENTS.has(nj.id)
 
@@ -450,7 +501,6 @@ function layoutNodes(nodes: TopoNode[], w: number, h: number, edges?: TopoEdge[]
     }
   }
 
-  // Clamp to viewport with padding
   const padding = 60
   for (const node of nodes) {
     node.targetX = Math.max(padding, Math.min(w - padding, node.targetX))
@@ -663,8 +713,13 @@ function drawScene(
   hoveredId: string | null,
   selectedId: string | null,
   time: number,
+  zoomPan?: ZoomPanState,
+  expandedGtms?: Set<string>,
 ) {
   ctx.clearRect(0, 0, w, h)
+
+  const zoom = zoomPan || { scale: 1, offsetX: 0, offsetY: 0 }
+  const expanded = expandedGtms || new Set<string>()
 
   const connectedNodes = new Set<string>()
   const connectedEdges = new Set<string>()
@@ -681,14 +736,25 @@ function drawScene(
 
   drawGridDots(ctx, w, h, time)
 
-  // Draw cluster boundaries around GTM groups
+  ctx.save()
+  ctx.translate(zoom.offsetX, zoom.offsetY)
+  ctx.scale(zoom.scale, zoom.scale)
+
+  const visibleNodes = nodes.filter(node => {
+    if (node.isGtm || SYSTEM_AGENTS.has(node.id) || !node.parentGtm) return true
+    return expanded.has(node.parentGtm)
+  })
+
   const gtmNodes = nodes.filter(n => n.isGtm)
+  const nodeMap = new Map(nodes.map(n => [n.id, n]))
+
   for (const gtm of gtmNodes) {
-    // Find all children of this GTM
+    const isExp = expanded.has(gtm.id)
+    if (!isExp) continue
+
     const children = nodes.filter(n => n.parentGtm === gtm.id)
     if (children.length === 0) continue
 
-    // Calculate bounding circle that encompasses GTM and all children
     let maxDist = 0
     for (const child of children) {
       const dx = child.x - gtm.x
@@ -697,7 +763,6 @@ function drawScene(
       maxDist = Math.max(maxDist, dist)
     }
 
-    // Draw subtle cluster boundary
     const clusterRadius = Math.max(maxDist, 80)
     ctx.save()
     ctx.globalAlpha = 0.08
@@ -709,7 +774,6 @@ function drawScene(
     ctx.stroke()
     ctx.setLineDash([])
 
-    // Draw very subtle fill
     const grad = ctx.createRadialGradient(gtm.x, gtm.y, 0, gtm.x, gtm.y, clusterRadius)
     grad.addColorStop(0, hexToRGBA(gtm.color, 0.03))
     grad.addColorStop(0.7, hexToRGBA(gtm.color, 0.015))
@@ -754,12 +818,37 @@ function drawScene(
     ctx.restore()
   }
 
+  const drawnAggregateEdges = new Set<string>()
+
   for (const edge of edges) {
-    const src = nodes.find((n) => n.id === edge.source)
-    const tgt = nodes.find((n) => n.id === edge.target)
+    let src = nodeMap.get(edge.source)
+    let tgt = nodeMap.get(edge.target)
     if (!src || !tgt) continue
 
-    const highlighted = connectedEdges.has(edge.id)
+    const srcCollapsed = src.parentGtm && !expanded.has(src.parentGtm)
+    const tgtCollapsed = tgt.parentGtm && !expanded.has(tgt.parentGtm)
+
+    if (srcCollapsed) {
+      const parentGtm = nodeMap.get(src.parentGtm!)
+      if (parentGtm) src = parentGtm
+    }
+    if (tgtCollapsed) {
+      const parentGtm = nodeMap.get(tgt.parentGtm!)
+      if (parentGtm) tgt = parentGtm
+    }
+
+    if (src.id === tgt.id) continue
+
+    const aggregateKey = `${src.id}->${tgt.id}`
+    const isAggregate = srcCollapsed || tgtCollapsed
+    if (isAggregate) {
+      if (drawnAggregateEdges.has(aggregateKey)) continue
+      drawnAggregateEdges.add(aggregateKey)
+    }
+
+    const highlighted = connectedEdges.has(edge.id) ||
+      (srcCollapsed && edge.source && nodeMap.get(edge.source)?.parentGtm === src.id) ||
+      (tgtCollapsed && edge.target && nodeMap.get(edge.target)?.parentGtm === tgt.id)
     const dimmed = connectedEdges.size > 0 && !highlighted
 
     const { sx, sy, c1x, c1y, c2x, c2y, ex, ey } = edgeCurve(src, tgt)
@@ -769,12 +858,14 @@ function drawScene(
     const baseAlpha = edge.active ? (highlighted ? 0.8 : 0.35) : 0.08
     const alpha = dimmed ? 0.05 : Math.min(1, baseAlpha + fireIntensity * 0.5)
 
+    const lineWidthMult = isAggregate ? 1.8 : 1
+
     ctx.save()
     ctx.globalAlpha = alpha * 0.4
     ctx.strokeStyle = edge.color
     ctx.shadowColor = edge.color
     ctx.shadowBlur = highlighted ? 20 : recentFire ? 14 : 8
-    ctx.lineWidth = highlighted ? 5 : 3
+    ctx.lineWidth = (highlighted ? 5 : 3) * lineWidthMult
     ctx.beginPath()
     ctx.moveTo(sx, sy)
     ctx.bezierCurveTo(c1x, c1y, c2x, c2y, ex, ey)
@@ -784,7 +875,7 @@ function drawScene(
     ctx.save()
     ctx.globalAlpha = alpha
     ctx.strokeStyle = edge.color
-    ctx.lineWidth = highlighted ? 2.5 : 1.2
+    ctx.lineWidth = (highlighted ? 2.5 : 1.2) * lineWidthMult
     ctx.beginPath()
     ctx.moveTo(sx, sy)
     ctx.bezierCurveTo(c1x, c1y, c2x, c2y, ex, ey)
@@ -795,7 +886,7 @@ function drawScene(
     const [ax, ay] = cubicBezier(sx, sy, c1x, c1y, c2x, c2y, ex, ey, arrowT)
     const [bx, by] = cubicBezier(sx, sy, c1x, c1y, c2x, c2y, ex, ey, arrowT + 0.04)
     const angle = Math.atan2(by - ay, bx - ax)
-    const aSize = highlighted ? 9 : 6
+    const aSize = (highlighted ? 9 : 6) * lineWidthMult
     ctx.save()
     ctx.globalAlpha = alpha
     ctx.fillStyle = edge.color
@@ -853,17 +944,18 @@ function drawScene(
     }
   }
 
-  for (const node of nodes) {
+  for (const node of visibleNodes) {
     const isHovered = hoveredId === node.id
     const isSelected = selectedId === node.id
     const dimmed = connectedNodes.size > 0 && !connectedNodes.has(node.id) && !isHovered && !isSelected
     const nodeAlpha = dimmed ? 0.15 : 1.0
+    const isCollapsedGtm = node.isGtm && !expanded.has(node.id)
 
     const breathe = Math.sin(time * 0.002 + node.pulsePhase) * 0.15 + 0.85
     const r = node.radius * (isHovered ? 1.15 : isSelected ? 1.1 : 1.0)
 
     if (node.status === "running" || isHovered || isSelected) {
-      const glowR = r * (isSelected ? 3.5 : isHovered ? 3.0 : 2.2) * breathe
+      const glowR = r * (isSelected ? 3.5 : isHovered ? 3.0 : isCollapsedGtm ? 2.8 : 2.2) * breathe
       const grad = ctx.createRadialGradient(node.x, node.y, r * 0.5, node.x, node.y, glowR)
       grad.addColorStop(0, hexToRGBA(node.color, 0.25 * nodeAlpha))
       grad.addColorStop(0.5, hexToRGBA(node.color, 0.08 * nodeAlpha))
@@ -874,29 +966,26 @@ function drawScene(
       ctx.fill()
     }
 
-    // GTM nodes get a special halo effect
     if (node.isGtm) {
-      const haloR = r * 1.6
+      const haloR = r * (isCollapsedGtm ? 1.3 : 1.6)
       const haloAlpha = (Math.sin(time * 0.002 + node.pulsePhase) * 0.2 + 0.4) * nodeAlpha
 
-      // Outer halo ring
       ctx.save()
       ctx.globalAlpha = haloAlpha * 0.5
       ctx.strokeStyle = node.color
-      ctx.lineWidth = 2.5
+      ctx.lineWidth = isCollapsedGtm ? 3 : 2.5
       ctx.beginPath()
       ctx.arc(node.x, node.y, haloR, 0, Math.PI * 2)
       ctx.stroke()
       ctx.restore()
 
-      // Inner accent ring
       ctx.save()
       ctx.globalAlpha = haloAlpha * 0.3
       ctx.strokeStyle = node.color
       ctx.lineWidth = 1
       ctx.setLineDash([6, 4])
       ctx.beginPath()
-      ctx.arc(node.x, node.y, r * 1.3, 0, Math.PI * 2)
+      ctx.arc(node.x, node.y, r * 1.15, 0, Math.PI * 2)
       ctx.stroke()
       ctx.setLineDash([])
       ctx.restore()
@@ -923,7 +1012,7 @@ function drawScene(
     ctx.save()
     ctx.fillStyle = innerGrad
     ctx.shadowColor = node.color
-    ctx.shadowBlur = isSelected ? 25 : isHovered ? 18 : 10
+    ctx.shadowBlur = isSelected ? 25 : isHovered ? 18 : isCollapsedGtm ? 15 : 10
     ctx.globalAlpha = nodeAlpha
     ctx.beginPath()
     ctx.arc(node.x, node.y, r, 0, Math.PI * 2)
@@ -948,6 +1037,8 @@ function drawScene(
     ctx.arc(node.x, node.y, r * 0.35, 0, Math.PI * 2)
     ctx.fill()
   }
+
+  ctx.restore()
 }
 
 function Sparkline({ data, color, width = 48, height = 16 }: { data: number[]; color: string; width?: number; height?: number }) {
@@ -1032,6 +1123,11 @@ export function TopologyPage() {
   const [liveConnected, setLiveConnected] = useState(false)
   const [eventLog, setEventLog] = useState<{ type: string; ts: string }[]>([])
   const [, forceRender] = useState(0)
+
+  const [expandedGtms, setExpandedGtms] = useState<Set<string>>(new Set())
+  const [zoomPan, setZoomPan] = useState<ZoomPanState>({ scale: 1, offsetX: 0, offsetY: 0 })
+  const isPanningRef = useRef(false)
+  const panStartRef = useRef({ x: 0, y: 0, offsetX: 0, offsetY: 0 })
 
   const selectNode = useCallback((node: TopoNode | null) => {
     const st = stateRef.current
@@ -1191,11 +1287,32 @@ export function TopologyPage() {
     resize()
     window.addEventListener("resize", resize)
 
+    const screenToWorld = (sx: number, sy: number) => {
+      const { scale, offsetX, offsetY } = zoomPan
+      return {
+        x: (sx - offsetX) / scale,
+        y: (sy - offsetY) / scale,
+      }
+    }
+
     const handleMouseMove = (e: MouseEvent) => {
       const rect = glCanvas.getBoundingClientRect()
-      const mx = e.clientX - rect.left
-      const my = e.clientY - rect.top
-      st.mouse = { x: mx, y: my }
+      const sx = e.clientX - rect.left
+      const sy = e.clientY - rect.top
+      st.mouse = { x: sx, y: sy }
+
+      if (isPanningRef.current) {
+        const dx = sx - panStartRef.current.x
+        const dy = sy - panStartRef.current.y
+        setZoomPan((prev) => ({
+          ...prev,
+          offsetX: panStartRef.current.offsetX + dx,
+          offsetY: panStartRef.current.offsetY + dy,
+        }))
+        return
+      }
+
+      const { x: mx, y: my } = screenToWorld(sx, sy)
 
       if (st.dragging) {
         const node = st.nodes.find((n) => n.id === st.dragging)
@@ -1208,27 +1325,38 @@ export function TopologyPage() {
         return
       }
 
+      const visibleNodes = st.nodes.filter((n) => {
+        if (n.isGtm || SYSTEM_AGENTS.has(n.id) || !n.parentGtm) return true
+        return expandedGtms.has(n.parentGtm)
+      })
+
       let closest: TopoNode | null = null
       let closestDist = Infinity
-      for (const n of st.nodes) {
+      for (const n of visibleNodes) {
         const d = distToNode(n.x, n.y, mx, my, n.radius * 1.5)
-        if (d < closestDist && d < 20) {
+        if (d < closestDist && d < 20 / zoomPan.scale) {
           closestDist = d
           closest = n
         }
       }
       st.hoveredNode = closest?.id || null
-      glCanvas.style.cursor = closest ? "pointer" : "default"
+      glCanvas.style.cursor = closest ? "pointer" : isPanningRef.current ? "grabbing" : "default"
     }
 
     const handleMouseDown = (e: MouseEvent) => {
       const rect = glCanvas.getBoundingClientRect()
-      const mx = e.clientX - rect.left
-      const my = e.clientY - rect.top
+      const sx = e.clientX - rect.left
+      const sy = e.clientY - rect.top
+      const { x: mx, y: my } = screenToWorld(sx, sy)
+
+      const visibleNodes = st.nodes.filter((n) => {
+        if (n.isGtm || SYSTEM_AGENTS.has(n.id) || !n.parentGtm) return true
+        return expandedGtms.has(n.parentGtm)
+      })
 
       let hit: TopoNode | null = null
-      for (const n of st.nodes) {
-        if (distToNode(n.x, n.y, mx, my, n.radius * 1.5) < 5) {
+      for (const n of visibleNodes) {
+        if (distToNode(n.x, n.y, mx, my, n.radius * 1.5) < 5 / zoomPan.scale) {
           hit = n
           break
         }
@@ -1236,14 +1364,33 @@ export function TopologyPage() {
       if (hit) {
         st.dragging = hit.id
         st.dragOffset = { x: mx - hit.x, y: my - hit.y }
+      } else {
+        isPanningRef.current = true
+        panStartRef.current = { x: sx, y: sy, offsetX: zoomPan.offsetX, offsetY: zoomPan.offsetY }
+        glCanvas.style.cursor = "grabbing"
       }
     }
 
     const handleMouseUp = (e: MouseEvent) => {
       const wasDragging = st.dragging
+      const wasPanning = isPanningRef.current
       const rect = glCanvas.getBoundingClientRect()
-      const mx = e.clientX - rect.left
-      const my = e.clientY - rect.top
+      const sx = e.clientX - rect.left
+      const sy = e.clientY - rect.top
+      const { x: mx, y: my } = screenToWorld(sx, sy)
+
+      if (wasPanning) {
+        const panDist = Math.sqrt(
+          (sx - panStartRef.current.x) ** 2 + (sy - panStartRef.current.y) ** 2
+        )
+        isPanningRef.current = false
+        glCanvas.style.cursor = "default"
+        if (panDist < 5) {
+          st.selectedNode = null
+          setSelectedDetail(null)
+        }
+        return
+      }
 
       if (wasDragging) {
         const node = st.nodes.find((n) => n.id === wasDragging)
@@ -1253,31 +1400,96 @@ export function TopologyPage() {
             (mx - (st.dragOffset.x + node.targetX)) ** 2 +
             (my - (st.dragOffset.y + node.targetY)) ** 2
           )
-          if (movedDist < 5) {
-            selectNode(node)
+          if (movedDist < 5 / zoomPan.scale) {
+            if (node.isGtm) {
+              setExpandedGtms((prev) => {
+                const next = new Set(prev)
+                if (next.has(node.id)) {
+                  next.delete(node.id)
+                } else {
+                  next.add(node.id)
+                }
+                return next
+              })
+              const rect2 = container.getBoundingClientRect()
+              setTimeout(() => {
+                layoutNodes(st.nodes, rect2.width, rect2.height, st.edges, expandedGtms.has(node.id) ? new Set([...expandedGtms].filter(id => id !== node.id)) : new Set([...expandedGtms, node.id]))
+                forceRender((n) => n + 1)
+              }, 10)
+            } else {
+              selectNode(node)
+            }
           }
         }
         return
       }
 
+      const visibleNodes = st.nodes.filter((n) => {
+        if (n.isGtm || SYSTEM_AGENTS.has(n.id) || !n.parentGtm) return true
+        return expandedGtms.has(n.parentGtm)
+      })
+
       let hit: TopoNode | null = null
-      for (const n of st.nodes) {
-        if (distToNode(n.x, n.y, mx, my, n.radius * 1.5) < 5) {
+      for (const n of visibleNodes) {
+        if (distToNode(n.x, n.y, mx, my, n.radius * 1.5) < 5 / zoomPan.scale) {
           hit = n
           break
         }
       }
       if (hit) {
-        selectNode(hit)
+        if (hit.isGtm) {
+          setExpandedGtms((prev) => {
+            const next = new Set(prev)
+            if (next.has(hit!.id)) {
+              next.delete(hit!.id)
+            } else {
+              next.add(hit!.id)
+            }
+            return next
+          })
+          const rect2 = container.getBoundingClientRect()
+          setTimeout(() => {
+            layoutNodes(st.nodes, rect2.width, rect2.height, st.edges, expandedGtms.has(hit!.id) ? new Set([...expandedGtms].filter(id => id !== hit!.id)) : new Set([...expandedGtms, hit!.id]))
+            forceRender((n) => n + 1)
+          }, 10)
+        } else {
+          selectNode(hit)
+        }
       } else {
         st.selectedNode = null
         setSelectedDetail(null)
       }
     }
 
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault()
+      const rect = glCanvas.getBoundingClientRect()
+      const sx = e.clientX - rect.left
+      const sy = e.clientY - rect.top
+
+      const zoomFactor = e.deltaY < 0 ? 1.1 : 0.9
+      const newScale = Math.max(0.3, Math.min(3, zoomPan.scale * zoomFactor))
+
+      const wx = (sx - zoomPan.offsetX) / zoomPan.scale
+      const wy = (sy - zoomPan.offsetY) / zoomPan.scale
+
+      setZoomPan({
+        scale: newScale,
+        offsetX: sx - wx * newScale,
+        offsetY: sy - wy * newScale,
+      })
+    }
+
+    const handleDblClick = (e: MouseEvent) => {
+      e.preventDefault()
+      setZoomPan({ scale: 1, offsetX: 0, offsetY: 0 })
+    }
+
     glCanvas.addEventListener("mousemove", handleMouseMove)
     glCanvas.addEventListener("mousedown", handleMouseDown)
     glCanvas.addEventListener("mouseup", handleMouseUp)
+    glCanvas.addEventListener("wheel", handleWheel, { passive: false })
+    glCanvas.addEventListener("dblclick", handleDblClick)
 
     function drawQuad(program: WebGLProgram) {
       if (!gl || !st.quadVBO) return
@@ -1334,7 +1546,7 @@ export function TopologyPage() {
       if (ctx2d) {
         ctx2d.save()
         ctx2d.scale(dpr, dpr)
-        drawScene(ctx2d, cw, ch, st.nodes, st.edges, st.hoveredNode, st.selectedNode, now)
+        drawScene(ctx2d, cw, ch, st.nodes, st.edges, st.hoveredNode, st.selectedNode, now, zoomPan, expandedGtms)
         ctx2d.restore()
       }
 
@@ -1451,10 +1663,12 @@ export function TopologyPage() {
       glCanvas.removeEventListener("mousemove", handleMouseMove)
       glCanvas.removeEventListener("mousedown", handleMouseDown)
       glCanvas.removeEventListener("mouseup", handleMouseUp)
+      glCanvas.removeEventListener("wheel", handleWheel)
+      glCanvas.removeEventListener("dblclick", handleDblClick)
       cancelAnimationFrame(animRef.current)
       unsub?.()
     }
-  }, [selectNode])
+  }, [selectNode, zoomPan, expandedGtms])
 
   const st = stateRef.current
 
@@ -1605,8 +1819,18 @@ export function TopologyPage() {
         )}
 
         {st.nodes.length > 0 && (
-          <div class="absolute inset-0 pointer-events-none" style={{ zIndex: 2 }}>
-            {st.nodes.map((node) => {
+          <div
+            class="absolute inset-0 pointer-events-none"
+            style={{
+              zIndex: 2,
+              transform: `translate(${zoomPan.offsetX}px, ${zoomPan.offsetY}px) scale(${zoomPan.scale})`,
+              transformOrigin: "0 0",
+            }}
+          >
+            {st.nodes.filter((node) => {
+              if (node.isGtm || SYSTEM_AGENTS.has(node.id) || !node.parentGtm) return true
+              return expandedGtms.has(node.parentGtm)
+            }).map((node) => {
               const isHovered = st.hoveredNode === node.id
               const isSelected = st.selectedNode === node.id
               const focusId = st.hoveredNode || st.selectedNode
@@ -1620,6 +1844,7 @@ export function TopologyPage() {
                 }
               }
               const dimmed = connectedNodes.size > 0 && !connectedNodes.has(node.id) && !isHovered && !isSelected
+              const isCollapsedGtm = node.isGtm && !expandedGtms.has(node.id)
 
               return (
                 <div
@@ -1628,9 +1853,11 @@ export function TopologyPage() {
                   style={{
                     left: `${node.x}px`,
                     top: `${node.y + node.radius + 14}px`,
-                    transform: "translateX(-50%)",
-                    transition: "opacity 0.3s ease, transform 0.2s ease",
+                    transform: `translateX(-50%) scale(${1 / zoomPan.scale})`,
+                    transformOrigin: "center top",
+                    transition: "opacity 0.3s ease",
                     opacity: dimmed ? 0.15 : isHovered || isSelected ? 1 : 0.8,
+                    cursor: node.isGtm ? "pointer" : "default",
                   }}
                 >
                   <div style={{
@@ -1639,7 +1866,7 @@ export function TopologyPage() {
                     WebkitBackdropFilter: "blur(16px)",
                     border: `1px solid ${isSelected ? node.color + "55" : isHovered ? node.color + "33" : "rgba(255,255,255,0.06)"}`,
                     borderRadius: "10px",
-                    padding: "8px 12px",
+                    padding: isCollapsedGtm ? "10px 14px" : "8px 12px",
                     whiteSpace: "nowrap",
                     boxShadow: isSelected
                       ? `0 0 24px ${node.color}22, 0 4px 16px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.06)`
@@ -1658,28 +1885,46 @@ export function TopologyPage() {
                           animation: node.status === "running" ? undefined : "none",
                         }}
                       />
-                      <span style={{ fontSize: node.isGtm ? "12px" : "11px", fontWeight: node.isGtm ? 700 : 600, color: C.text }}>
+                      <span style={{ fontSize: isCollapsedGtm ? "13px" : node.isGtm ? "12px" : "11px", fontWeight: node.isGtm ? 700 : 600, color: C.text }}>
                         {truncateLabel(node.label, node.isGtm ? 20 : 16)}
                       </span>
-                      <span style={{
-                        fontSize: "8px",
-                        fontFamily: "'JetBrains Mono', monospace",
-                        padding: "1px 5px",
-                        borderRadius: "4px",
-                        backgroundColor: `${node.color}18`,
-                        color: node.color,
-                        textTransform: "uppercase",
-                        letterSpacing: "0.5px",
-                      }}>
-                        {node.type}
-                      </span>
+                      {isCollapsedGtm && node.childCount ? (
+                        <span style={{
+                          fontSize: "9px",
+                          fontFamily: "'JetBrains Mono', monospace",
+                          padding: "2px 6px",
+                          borderRadius: "6px",
+                          backgroundColor: `${node.color}20`,
+                          color: node.color,
+                        }}>
+                          {node.childCount} services
+                        </span>
+                      ) : (
+                        <span style={{
+                          fontSize: "8px",
+                          fontFamily: "'JetBrains Mono', monospace",
+                          padding: "1px 5px",
+                          borderRadius: "4px",
+                          backgroundColor: `${node.color}18`,
+                          color: node.color,
+                          textTransform: "uppercase",
+                          letterSpacing: "0.5px",
+                        }}>
+                          {node.type}
+                        </span>
+                      )}
                     </div>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: "5px", gap: "8px" }}>
                       <span style={{ fontSize: "9px", fontFamily: "'JetBrains Mono', monospace", color: C.textMuted }}>
                         {node.eventCount} events
                       </span>
-                      <Sparkline data={node.reward} color={node.color} width={48} height={14} />
+                      <Sparkline data={isCollapsedGtm && node.aggregateReward ? node.aggregateReward : node.reward} color={node.color} width={isCollapsedGtm ? 60 : 48} height={14} />
                     </div>
+                    {isCollapsedGtm && (
+                      <div style={{ marginTop: "6px", fontSize: "8px", color: C.textDim, textAlign: "center" }}>
+                        click to expand
+                      </div>
+                    )}
                   </div>
                 </div>
               )
@@ -1688,7 +1933,14 @@ export function TopologyPage() {
         )}
 
         {st.edges.length > 0 && (
-          <div class="absolute inset-0 pointer-events-none" style={{ zIndex: 3 }}>
+          <div
+            class="absolute inset-0 pointer-events-none"
+            style={{
+              zIndex: 3,
+              transform: `translate(${zoomPan.offsetX}px, ${zoomPan.offsetY}px) scale(${zoomPan.scale})`,
+              transformOrigin: "0 0",
+            }}
+          >
             {st.edges.map((edge) => {
               const src = st.nodes.find((n) => n.id === edge.source)
               const tgt = st.nodes.find((n) => n.id === edge.target)
@@ -1708,7 +1960,7 @@ export function TopologyPage() {
                   style={{
                     left: `${mx}px`,
                     top: `${my}px`,
-                    transform: "translate(-50%, -50%)",
+                    transform: `translate(-50%, -50%) scale(${1 / zoomPan.scale})`,
                   }}
                 >
                   <span style={{
