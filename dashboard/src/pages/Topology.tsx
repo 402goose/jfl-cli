@@ -1123,6 +1123,7 @@ export function TopologyPage() {
   const [liveConnected, setLiveConnected] = useState(false)
   const [eventLog, setEventLog] = useState<{ type: string; ts: string }[]>([])
   const [, forceRender] = useState(0)
+  const [renderNodes, setRenderNodes] = useState<TopoNode[]>([])
 
   const [expandedGtms, setExpandedGtms] = useState<Set<string>>(new Set())
   const [zoomPan, setZoomPan] = useState<ZoomPanState>({ scale: 1, offsetX: 0, offsetY: 0 })
@@ -1268,6 +1269,7 @@ export function TopologyPage() {
           }
           const rect2 = container.getBoundingClientRect()
           layoutNodes(st.nodes, rect2.width, rect2.height, st.edges, expandedGtms)
+          setRenderNodes([...st.nodes])
           forceRender((n) => n + 1)
         })
         .catch(() => {
@@ -1277,6 +1279,7 @@ export function TopologyPage() {
             st.edges = edges
           }
           layoutNodes(st.nodes, rect.width, rect.height, st.edges, expandedGtms)
+          setRenderNodes([...st.nodes])
           forceRender((n) => n + 1)
         })
     }
