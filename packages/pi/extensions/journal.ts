@@ -85,7 +85,7 @@ const TYPE_COLORS: Record<string, string> = {
 }
 
 function showRecentJournal(ctx: PiContext): void {
-  const entries = readRecentEntries(projectRoot, 5)
+  const entries = readRecentEntries(projectRoot, 3)
 
   ctx.ui.setWidget("jfl-journal", (_tui: any, theme: PiTheme) => {
     if (!entries.length) {
@@ -96,13 +96,12 @@ function showRecentJournal(ctx: PiContext): void {
     }
 
     const lines: string[] = []
-    lines.push(theme.fg("border", "─── ") + theme.fg("accent", "Journal") + theme.fg("border", " ───"))
+    lines.push(theme.fg("border", "─── ") + theme.fg("dim", "Journal") + theme.fg("border", " ───"))
 
     for (const e of entries) {
       const icon = TYPE_ICONS[e.type] ?? "·"
-      const color = TYPE_COLORS[e.type] ?? "muted"
-      const status = e.status === "incomplete" ? theme.fg("warning", " ◌") : ""
-      lines.push(`  ${theme.fg(color, icon)} ${theme.fg("text", e.title)}${status}`)
+      const status = e.status === "incomplete" ? theme.fg("dim", " ◌") : ""
+      lines.push(`  ${theme.fg("dim", icon)} ${theme.fg("muted", e.title)}${status}`)
     }
 
     return { render: () => lines, invalidate() {} }
@@ -217,14 +216,10 @@ export async function onToolExecutionEnd(
 }
 
 export async function onJournalAgentEnd(
-  ctx: PiContext,
-  event: AgentEndEvent
+  _ctx: PiContext,
+  _event: AgentEndEvent
 ): Promise<void> {
-  const turnCount = (event.messages?.length ?? event.turnCount ?? 0)
-  if (turnCount > 3) {
-    const theme = ctx.ui.theme
-    ctx.ui.setStatus("journal", theme.fg("warning", "◌") + theme.fg("dim", " Journal recommended — Ctrl+Shift+J"))
-  }
+  // Removed: "Journal entry recommended" nudge (noisy)
 }
 
 export async function checkJournalBeforeCompact(

@@ -158,5 +158,6 @@ export interface JflConfig {
     disable_footer?: boolean
     disable_shortcuts?: boolean
     disable_notifications?: boolean
+    auto_start?: boolean
   }
 }

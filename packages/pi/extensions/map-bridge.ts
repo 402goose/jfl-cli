@@ -127,7 +127,7 @@ async function subscribeToHubSSE(ctx: PiContext): Promise<void> {
     }
   } catch (err: unknown) {
     if ((err as { name?: string }).name === "AbortError") return
-    ctx.log(`MAP SSE disconnected: ${err}`, "debug")
+    // Silently ignore — Context Hub may not be running
   }
 }
 
