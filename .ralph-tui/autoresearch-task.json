@@ -1,0 +1,22 @@
+{
+  "name": "Autoresearch Task",
+  "branchName": "ralph/autoresearch-1773285422085",
+  "description": "Without modifying any existing source files or tests, create a single new test file 'tests/test_smoke_additional.py' that adds 5-10 new passing tests for pure utility functions that are currently untested. Before writing any tests, first run 'python -m pytest --tb=no -q' to confirm all existing 274 tests pass, then run 'python -m pytest --co -q 2>/dev/null | head -50' to find untested modules. Only proceed if the baseline is 274/274 passing.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Without modifying any existing source files or tests, create a single new test f",
+      "description": "Without modifying any existing source files or tests, create a single new test file 'tests/test_smoke_additional.py' that adds 5-10 new passing tests for pure utility functions that are currently untested. Before writing any tests, first run 'python -m pytest --tb=no -q' to confirm all existing 274 tests pass, then run 'python -m pytest --co -q 2>/dev/null | head -50' to find untested modules. Only proceed if the baseline is 274/274 passing.",
+      "acceptanceCriteria": [
+        "Task completed"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    }
+  ],
+  "metadata": {
+    "updatedAt": "2026-03-12T03:17:02.085Z"
+  }
+}
