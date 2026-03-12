@@ -26,6 +26,10 @@ import { initStratusBridge, onAgentStart as onStratusStart, onAgentEnd as onStra
 import { setupPeterParker } from "./peter-parker.js"
 import { setupPortfolioBridge, onPortfolioShutdown } from "./portfolio-bridge.js"
 import { setupAgentGrid } from "./agent-grid.js"
+import { setupEvalTool } from "./eval-tool.js"
+import { setupPolicyHeadTool } from "./policy-head-tool.js"
+import { setupTrainingBufferTool, onTrainingAgentEnd } from "./training-buffer-tool.js"
+import { setupAutoresearch } from "./autoresearch.js"
 import { setupFooter } from "./footer.js"
 import { setupShortcuts } from "./shortcuts.js"
 import { setupNotifications } from "./notifications.js"
@@ -294,6 +298,10 @@ export default async function jflExtension(pi: any): Promise<void> {
     setupCrmTool(ctx)
     setupMemoryTool(ctx)
     setupSynopsisTool(ctx)
+    await setupEvalTool(ctx, config)
+    await setupPolicyHeadTool(ctx, config)
+    await setupTrainingBufferTool(ctx, config)
+    await setupAutoresearch(ctx, config)
 
     initStratusBridge(projectCwd)
     await setupPeterParker(ctx, config)
@@ -351,6 +359,7 @@ export default async function jflExtension(pi: any): Promise<void> {
     latestPiCtx = piCtx
     await onStratusEnd(ctx, event)
     await onEvalEnd(ctx, event)
+    await onTrainingAgentEnd(ctx, event)
     await updateHudWidget(ctx)
     await onJournalAgentEnd(ctx, event)
     jflEmit("agent:end", event)
