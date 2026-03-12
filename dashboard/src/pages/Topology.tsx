@@ -24,7 +24,7 @@ const C = {
 interface TopoNode {
   id: string
   label: string
-  type: "agent" | "orchestrator" | "eval" | "service"
+  type: "agent" | "orchestrator" | "eval" | "service" | "gtm"
   status: "running" | "idle" | "stopped"
   eventCount: number
   lastAction: string
@@ -40,6 +40,8 @@ interface TopoNode {
   reward: number[]
   produces?: string[]
   consumes?: string[]
+  parentGtm?: string  // For services: which GTM cluster they belong to
+  isGtm?: boolean     // True for GTM nodes themselves
 }
 
 interface TopoEdge {
@@ -71,12 +73,22 @@ interface DetailPanel {
 
 function nodeColor(type: string): { fill: string; glow: string } {
   switch (type) {
+    case "gtm": return { fill: C.cyan, glow: C.cyan + "88" }
     case "orchestrator": return { fill: C.purple, glow: C.purpleGlow }
     case "eval": return { fill: C.warning, glow: C.warningGlow }
     case "service": return { fill: C.success, glow: C.successGlow }
     default: return { fill: C.info, glow: C.infoGlow }
   }
 }
+
+// Label truncation for long service names
+function truncateLabel(label: string, maxLen: number = 18): string {
+  if (label.length <= maxLen) return label
+  return label.slice(0, maxLen - 1) + "…"
+}
+
+// System agents that should be in the center cluster
+const SYSTEM_AGENTS = new Set(["peter-parker", "telemetry-agent", "eval-engine", "stratus"])
 
 function edgeCategoryColor(cat: string): string {
   switch (cat) {
@@ -145,12 +157,55 @@ function transformApiTopology(
 ): { nodes: TopoNode[]; edges: TopoEdge[] } {
   const now = Date.now()
 
+  // Build a set of GTM ids from nodes that end with -gtm or have type 'gtm'
+  const gtmIds = new Set<string>()
+  for (const n of apiNodes) {
+    if (n.type === "gtm" || n.id.endsWith("-gtm")) {
+      gtmIds.add(n.id)
+    }
+  }
+
   const nodes: TopoNode[] = apiNodes.map((n) => {
-    const c = nodeColor(n.type)
+    // Determine if this is a GTM node
+    const isGtm = n.type === "gtm" || n.id.endsWith("-gtm")
+
+    // Determine parent GTM from node ID pattern: 'gtm-name/service-name'
+    let parentGtm: string | undefined
+    if (!isGtm && !SYSTEM_AGENTS.has(n.id)) {
+      // Check if ID contains a slash (gtm/service pattern)
+      if (n.id.includes("/")) {
+        parentGtm = n.id.split("/")[0]
+      } else {
+        // Try to match by prefix (e.g., 'productrank-arena' -> 'productrank-gtm')
+        for (const gtmId of gtmIds) {
+          const prefix = gtmId.replace(/-gtm$/, "")
+          if (n.id.startsWith(prefix + "-") || n.id.startsWith(prefix + "/")) {
+            parentGtm = gtmId
+            break
+          }
+        }
+      }
+    }
+
+    // Determine node type and radius
+    // GTM nodes: larger (38), System agents: medium (28), Services: smaller (22)
+    const effectiveType = isGtm ? "gtm" : n.type
+    let radius: number
+    if (isGtm) {
+      radius = 38
+    } else if (SYSTEM_AGENTS.has(n.id)) {
+      radius = 28
+    } else if (n.type === "orchestrator") {
+      radius = 26
+    } else {
+      radius = 22
+    }
+
+    const c = nodeColor(effectiveType)
     return {
       id: n.id,
       label: n.label,
-      type: n.type,
+      type: effectiveType as TopoNode["type"],
       status: n.status,
       eventCount: n.eventCount || Math.floor(Math.random() * 200) + 50,
       lastAction: `${n.type} activity`,
@@ -160,12 +215,14 @@ function transformApiTopology(
       y: 0,
       targetX: 0,
       targetY: 0,
-      radius: n.type === "orchestrator" ? 32 : n.type === "service" ? 28 : 24,
+      radius,
       color: c.fill,
       glowColor: c.glow,
       pulsePhase: Math.random() * Math.PI * 2,
       produces: n.produces,
       consumes: n.consumes,
+      parentGtm,
+      isGtm,
     }
   })
 
@@ -200,6 +257,13 @@ function transformApiTopology(
   return { nodes, edges }
 }
 
+// Cluster positions for GTMs (relative to center, will be scaled)
+interface ClusterLayout {
+  gtmX: number
+  gtmY: number
+  orbitRadius: number
+}
+
 function layoutNodes(nodes: TopoNode[], w: number, h: number, edges?: TopoEdge[]) {
   const cx = w / 2
   const cy = h / 2
@@ -207,81 +271,175 @@ function layoutNodes(nodes: TopoNode[], w: number, h: number, edges?: TopoEdge[]
 
   if (n === 0) return
 
-  // Preferred positions for known system nodes
-  const scale = Math.min(w / 900, h / 600, 1)
-  const knownPositions: Record<string, [number, number]> = {
-    "peter-parker": [cx, cy - 100 * scale],
-    "telemetry-agent": [cx - 200 * scale, cy - 60 * scale],
-    "eval-engine": [cx + 200 * scale, cy + 40 * scale],
-    "stratus": [cx + 200 * scale, cy - 120 * scale],
+  const scale = Math.min(w / 1200, h / 800, 1)
+
+  // Identify GTM nodes and system agents
+  const gtmNodes = nodes.filter(node => node.isGtm)
+  const systemAgents = nodes.filter(node => SYSTEM_AGENTS.has(node.id))
+  const serviceNodes = nodes.filter(node => !node.isGtm && !SYSTEM_AGENTS.has(node.id))
+
+  // Build cluster map: gtmId -> services
+  const clusters: Map<string, TopoNode[]> = new Map()
+  for (const gtm of gtmNodes) {
+    clusters.set(gtm.id, [])
   }
-
-  // For remaining nodes, use circular layout
-  const unknownNodes = nodes.filter(node => !knownPositions[node.id])
-  const knownNodes = nodes.filter(node => knownPositions[node.id])
-
-  // Place known nodes at their preferred positions
-  for (const node of knownNodes) {
-    const p = knownPositions[node.id]
-    node.targetX = p[0]
-    node.targetY = p[1]
-    if (node.x === 0 && node.y === 0) {
-      node.x = p[0] + (Math.random() - 0.5) * 60
-      node.y = p[1] + (Math.random() - 0.5) * 60
+  for (const svc of serviceNodes) {
+    if (svc.parentGtm && clusters.has(svc.parentGtm)) {
+      clusters.get(svc.parentGtm)!.push(svc)
     }
   }
 
-  // Place unknown nodes in a circular pattern around the center
-  if (unknownNodes.length > 0) {
-    const baseRadius = Math.min(w, h) * 0.32
-    const angleStep = (2 * Math.PI) / Math.max(unknownNodes.length, 1)
-    const startAngle = -Math.PI / 2 + Math.PI / 6 // Start from top, offset slightly
+  // Orphan services (no parent GTM found) - will go in outer ring
+  const orphanServices = serviceNodes.filter(svc => !svc.parentGtm || !clusters.has(svc.parentGtm))
 
-    unknownNodes.forEach((node, i) => {
-      const angle = startAngle + i * angleStep
-      // Vary radius slightly based on node type
-      const radiusOffset = node.type === "orchestrator" ? -20
-        : node.type === "service" ? 20
-        : 0
-      const r = baseRadius + radiusOffset
+  // Define GTM cluster positions in a triangle layout
+  // Left, top-right, bottom-right
+  const gtmCount = gtmNodes.length
+  const clusterPositions: ClusterLayout[] = []
 
-      node.targetX = cx + Math.cos(angle) * r
-      node.targetY = cy + Math.sin(angle) * r
+  if (gtmCount === 1) {
+    clusterPositions.push({ gtmX: cx - 200 * scale, gtmY: cy, orbitRadius: 100 * scale })
+  } else if (gtmCount === 2) {
+    clusterPositions.push({ gtmX: cx - 220 * scale, gtmY: cy, orbitRadius: 100 * scale })
+    clusterPositions.push({ gtmX: cx + 220 * scale, gtmY: cy, orbitRadius: 100 * scale })
+  } else if (gtmCount >= 3) {
+    // Triangle: left, top-right, bottom-right
+    const spreadX = 280 * scale
+    const spreadY = 180 * scale
+    clusterPositions.push({ gtmX: cx - spreadX, gtmY: cy, orbitRadius: 95 * scale })              // LEFT
+    clusterPositions.push({ gtmX: cx + spreadX * 0.6, gtmY: cy - spreadY, orbitRadius: 80 * scale })  // TOP-RIGHT
+    clusterPositions.push({ gtmX: cx + spreadX * 0.6, gtmY: cy + spreadY, orbitRadius: 95 * scale })  // BOTTOM-RIGHT
 
-      if (node.x === 0 && node.y === 0) {
-        node.x = node.targetX + (Math.random() - 0.5) * 80
-        node.y = node.targetY + (Math.random() - 0.5) * 80
+    // Additional GTMs spread in remaining positions
+    for (let i = 3; i < gtmCount; i++) {
+      const angle = Math.PI * 2 * (i - 3) / Math.max(gtmCount - 3, 1) + Math.PI / 4
+      const r = 320 * scale
+      clusterPositions.push({
+        gtmX: cx + Math.cos(angle) * r,
+        gtmY: cy + Math.sin(angle) * r,
+        orbitRadius: 85 * scale,
+      })
+    }
+  }
+
+  // Place GTM nodes and their child services
+  gtmNodes.forEach((gtm, i) => {
+    const pos = clusterPositions[i] || { gtmX: cx, gtmY: cy, orbitRadius: 100 * scale }
+
+    // Position the GTM node
+    gtm.targetX = pos.gtmX
+    gtm.targetY = pos.gtmY
+    if (gtm.x === 0 && gtm.y === 0) {
+      gtm.x = pos.gtmX + (Math.random() - 0.5) * 40
+      gtm.y = pos.gtmY + (Math.random() - 0.5) * 40
+    }
+
+    // Position child services in orbit around GTM
+    const children = clusters.get(gtm.id) || []
+    const childCount = children.length
+    if (childCount > 0) {
+      const angleStep = (Math.PI * 2) / childCount
+      const startAngle = -Math.PI / 2  // Start from top
+
+      children.forEach((child, ci) => {
+        const angle = startAngle + ci * angleStep
+        // Slightly vary orbit radius for visual interest
+        const orbitR = pos.orbitRadius + (ci % 2 === 0 ? 10 : -5)
+
+        child.targetX = pos.gtmX + Math.cos(angle) * orbitR
+        child.targetY = pos.gtmY + Math.sin(angle) * orbitR
+
+        if (child.x === 0 && child.y === 0) {
+          child.x = child.targetX + (Math.random() - 0.5) * 30
+          child.y = child.targetY + (Math.random() - 0.5) * 30
+        }
+      })
+    }
+  })
+
+  // Position system agents in center diamond formation
+  const systemCount = systemAgents.length
+  if (systemCount > 0) {
+    const diamondRadius = 55 * scale
+    const systemPositions = [
+      { x: cx, y: cy - diamondRadius * 0.7 },           // top
+      { x: cx + diamondRadius * 0.9, y: cy },           // right
+      { x: cx, y: cy + diamondRadius * 0.7 },           // bottom
+      { x: cx - diamondRadius * 0.9, y: cy },           // left
+    ]
+
+    // Map known system agents to specific positions
+    const agentPositionMap: Record<string, number> = {
+      "peter-parker": 0,       // top
+      "stratus": 1,            // right
+      "eval-engine": 2,        // bottom
+      "telemetry-agent": 3,    // left
+    }
+
+    systemAgents.forEach((agent, i) => {
+      const posIdx = agentPositionMap[agent.id] ?? (i % 4)
+      const pos = systemPositions[posIdx]
+
+      agent.targetX = pos.x
+      agent.targetY = pos.y
+
+      if (agent.x === 0 && agent.y === 0) {
+        agent.x = pos.x + (Math.random() - 0.5) * 25
+        agent.y = pos.y + (Math.random() - 0.5) * 25
       }
     })
   }
 
-  // Apply a simple force-directed adjustment to reduce edge crossings
-  // (3 iterations of repulsion)
-  if (edges && edges.length > 0) {
-    for (let iter = 0; iter < 3; iter++) {
-      for (let i = 0; i < nodes.length; i++) {
-        for (let j = i + 1; j < nodes.length; j++) {
-          const ni = nodes[i]
-          const nj = nodes[j]
-          const dx = ni.targetX - nj.targetX
-          const dy = ni.targetY - nj.targetY
-          const dist = Math.sqrt(dx * dx + dy * dy)
-          const minDist = 120
+  // Position orphan services in outer ring
+  if (orphanServices.length > 0) {
+    const outerRadius = Math.min(w, h) * 0.42
+    const angleStep = (Math.PI * 2) / orphanServices.length
+    const startAngle = Math.PI / 6
 
-          if (dist < minDist && dist > 0) {
-            const force = (minDist - dist) * 0.3
-            const fx = (dx / dist) * force
-            const fy = (dy / dist) * force
+    orphanServices.forEach((svc, i) => {
+      const angle = startAngle + i * angleStep
+      svc.targetX = cx + Math.cos(angle) * outerRadius
+      svc.targetY = cy + Math.sin(angle) * outerRadius
 
-            // Only move nodes that aren't in known positions
-            if (!knownPositions[ni.id]) {
-              ni.targetX += fx * 0.5
-              ni.targetY += fy * 0.5
-            }
-            if (!knownPositions[nj.id]) {
-              nj.targetX -= fx * 0.5
-              nj.targetY -= fy * 0.5
-            }
+      if (svc.x === 0 && svc.y === 0) {
+        svc.x = svc.targetX + (Math.random() - 0.5) * 50
+        svc.y = svc.targetY + (Math.random() - 0.5) * 50
+      }
+    })
+  }
+
+  // Apply gentle repulsion to prevent overlaps within clusters
+  for (let iter = 0; iter < 4; iter++) {
+    for (let i = 0; i < nodes.length; i++) {
+      for (let j = i + 1; j < nodes.length; j++) {
+        const ni = nodes[i]
+        const nj = nodes[j]
+
+        // Skip repulsion between GTMs and their own children
+        if (ni.isGtm && nj.parentGtm === ni.id) continue
+        if (nj.isGtm && ni.parentGtm === nj.id) continue
+
+        const dx = ni.targetX - nj.targetX
+        const dy = ni.targetY - nj.targetY
+        const dist = Math.sqrt(dx * dx + dy * dy)
+        const minDist = (ni.radius + nj.radius) * 2.5
+
+        if (dist < minDist && dist > 0) {
+          const force = (minDist - dist) * 0.15
+          const fx = (dx / dist) * force
+          const fy = (dy / dist) * force
+
+          // Don't move GTMs or system agents much
+          const niLocked = ni.isGtm || SYSTEM_AGENTS.has(ni.id)
+          const njLocked = nj.isGtm || SYSTEM_AGENTS.has(nj.id)
+
+          if (!niLocked) {
+            ni.targetX += fx * (njLocked ? 1.0 : 0.5)
+            ni.targetY += fy * (njLocked ? 1.0 : 0.5)
+          }
+          if (!njLocked) {
+            nj.targetX -= fx * (niLocked ? 1.0 : 0.5)
+            nj.targetY -= fy * (niLocked ? 1.0 : 0.5)
           }
         }
       }
@@ -289,7 +447,7 @@ function layoutNodes(nodes: TopoNode[], w: number, h: number, edges?: TopoEdge[]
   }
 
   // Clamp to viewport with padding
-  const padding = 80
+  const padding = 70
   for (const node of nodes) {
     node.targetX = Math.max(padding, Math.min(w - padding, node.targetX))
     node.targetY = Math.max(padding, Math.min(h - padding, node.targetY))
@@ -519,6 +677,79 @@ function drawScene(
 
   drawGridDots(ctx, w, h, time)
 
+  // Draw cluster boundaries around GTM groups
+  const gtmNodes = nodes.filter(n => n.isGtm)
+  for (const gtm of gtmNodes) {
+    // Find all children of this GTM
+    const children = nodes.filter(n => n.parentGtm === gtm.id)
+    if (children.length === 0) continue
+
+    // Calculate bounding circle that encompasses GTM and all children
+    let maxDist = 0
+    for (const child of children) {
+      const dx = child.x - gtm.x
+      const dy = child.y - gtm.y
+      const dist = Math.sqrt(dx * dx + dy * dy) + child.radius + 20
+      maxDist = Math.max(maxDist, dist)
+    }
+
+    // Draw subtle cluster boundary
+    const clusterRadius = Math.max(maxDist, 80)
+    ctx.save()
+    ctx.globalAlpha = 0.08
+    ctx.strokeStyle = gtm.color
+    ctx.lineWidth = 1
+    ctx.setLineDash([8, 12])
+    ctx.beginPath()
+    ctx.arc(gtm.x, gtm.y, clusterRadius, 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.setLineDash([])
+
+    // Draw very subtle fill
+    const grad = ctx.createRadialGradient(gtm.x, gtm.y, 0, gtm.x, gtm.y, clusterRadius)
+    grad.addColorStop(0, hexToRGBA(gtm.color, 0.03))
+    grad.addColorStop(0.7, hexToRGBA(gtm.color, 0.015))
+    grad.addColorStop(1, hexToRGBA(gtm.color, 0))
+    ctx.fillStyle = grad
+    ctx.beginPath()
+    ctx.arc(gtm.x, gtm.y, clusterRadius, 0, Math.PI * 2)
+    ctx.fill()
+    ctx.restore()
+  }
+
+  // Draw center system cluster boundary
+  const systemAgents = nodes.filter(n => SYSTEM_AGENTS.has(n.id))
+  if (systemAgents.length > 1) {
+    // Find center and max extent of system agents
+    let sumX = 0, sumY = 0
+    for (const agent of systemAgents) {
+      sumX += agent.x
+      sumY += agent.y
+    }
+    const centerX = sumX / systemAgents.length
+    const centerY = sumY / systemAgents.length
+
+    let maxDist = 0
+    for (const agent of systemAgents) {
+      const dx = agent.x - centerX
+      const dy = agent.y - centerY
+      const dist = Math.sqrt(dx * dx + dy * dy) + agent.radius + 15
+      maxDist = Math.max(maxDist, dist)
+    }
+
+    // Draw subtle diamond/circle for system cluster
+    ctx.save()
+    ctx.globalAlpha = 0.06
+    ctx.strokeStyle = C.purple
+    ctx.lineWidth = 1
+    ctx.setLineDash([4, 8])
+    ctx.beginPath()
+    ctx.arc(centerX, centerY, maxDist, 0, Math.PI * 2)
+    ctx.stroke()
+    ctx.setLineDash([])
+    ctx.restore()
+  }
+
   for (const edge of edges) {
     const src = nodes.find((n) => n.id === edge.source)
     const tgt = nodes.find((n) => n.id === edge.target)
@@ -639,7 +870,33 @@ function drawScene(
       ctx.fill()
     }
 
-    if (node.status === "running") {
+    // GTM nodes get a special halo effect
+    if (node.isGtm) {
+      const haloR = r * 1.6
+      const haloAlpha = (Math.sin(time * 0.002 + node.pulsePhase) * 0.2 + 0.4) * nodeAlpha
+
+      // Outer halo ring
+      ctx.save()
+      ctx.globalAlpha = haloAlpha * 0.5
+      ctx.strokeStyle = node.color
+      ctx.lineWidth = 2.5
+      ctx.beginPath()
+      ctx.arc(node.x, node.y, haloR, 0, Math.PI * 2)
+      ctx.stroke()
+      ctx.restore()
+
+      // Inner accent ring
+      ctx.save()
+      ctx.globalAlpha = haloAlpha * 0.3
+      ctx.strokeStyle = node.color
+      ctx.lineWidth = 1
+      ctx.setLineDash([6, 4])
+      ctx.beginPath()
+      ctx.arc(node.x, node.y, r * 1.3, 0, Math.PI * 2)
+      ctx.stroke()
+      ctx.setLineDash([])
+      ctx.restore()
+    } else if (node.status === "running") {
       const ringAlpha = (Math.sin(time * 0.003 + node.pulsePhase) * 0.3 + 0.5) * nodeAlpha
       const ringR = r * (1.5 + Math.sin(time * 0.001 + node.pulsePhase * 2) * 0.3)
       ctx.save()
@@ -1262,6 +1519,87 @@ export function TopologyPage() {
 
         <canvas ref={glCanvasRef} class="absolute inset-0 w-full h-full" style={{ zIndex: 1 }} />
 
+        {/* GTM Cluster Labels */}
+        {st.nodes.length > 0 && (
+          <div class="absolute inset-0 pointer-events-none" style={{ zIndex: 1.5 }}>
+            {st.nodes.filter(n => n.isGtm).map((gtm) => {
+              // Find max extent of this cluster to position label above
+              const children = st.nodes.filter(n => n.parentGtm === gtm.id)
+              let minY = gtm.y
+              for (const child of children) {
+                minY = Math.min(minY, child.y - child.radius)
+              }
+              // Position label above the cluster
+              const labelY = minY - 45
+
+              return (
+                <div
+                  key={`cluster-${gtm.id}`}
+                  class="absolute"
+                  style={{
+                    left: `${gtm.x}px`,
+                    top: `${Math.max(20, labelY)}px`,
+                    transform: "translateX(-50%)",
+                  }}
+                >
+                  <span style={{
+                    fontSize: "9px",
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontWeight: 600,
+                    padding: "3px 10px",
+                    borderRadius: "12px",
+                    color: gtm.color,
+                    background: "rgba(15, 15, 18, 0.7)",
+                    border: `1px solid ${gtm.color}30`,
+                    textTransform: "uppercase",
+                    letterSpacing: "1.5px",
+                  }}>
+                    {gtm.label.replace(/-gtm$/i, "").toUpperCase()}
+                  </span>
+                </div>
+              )
+            })}
+
+            {/* System Cluster Label */}
+            {st.nodes.filter(n => SYSTEM_AGENTS.has(n.id)).length > 1 && (() => {
+              const systemAgents = st.nodes.filter(n => SYSTEM_AGENTS.has(n.id))
+              let sumX = 0, minY = Infinity
+              for (const agent of systemAgents) {
+                sumX += agent.x
+                minY = Math.min(minY, agent.y - agent.radius)
+              }
+              const centerX = sumX / systemAgents.length
+              const labelY = minY - 35
+
+              return (
+                <div
+                  class="absolute"
+                  style={{
+                    left: `${centerX}px`,
+                    top: `${Math.max(20, labelY)}px`,
+                    transform: "translateX(-50%)",
+                  }}
+                >
+                  <span style={{
+                    fontSize: "8px",
+                    fontFamily: "'JetBrains Mono', monospace",
+                    fontWeight: 500,
+                    padding: "2px 8px",
+                    borderRadius: "10px",
+                    color: C.purple,
+                    background: "rgba(15, 15, 18, 0.6)",
+                    border: `1px solid ${C.purple}25`,
+                    textTransform: "uppercase",
+                    letterSpacing: "1px",
+                  }}>
+                    SYSTEM
+                  </span>
+                </div>
+              )
+            })()}
+          </div>
+        )}
+
         {st.nodes.length > 0 && (
           <div class="absolute inset-0 pointer-events-none" style={{ zIndex: 2 }}>
             {st.nodes.map((node) => {
@@ -1316,8 +1654,8 @@ export function TopologyPage() {
                           animation: node.status === "running" ? undefined : "none",
                         }}
                       />
-                      <span style={{ fontSize: "11px", fontWeight: 600, color: C.text }}>
-                        {node.label}
+                      <span style={{ fontSize: node.isGtm ? "12px" : "11px", fontWeight: node.isGtm ? 700 : 600, color: C.text }}>
+                        {truncateLabel(node.label, node.isGtm ? 20 : 16)}
                       </span>
                       <span style={{
                         fontSize: "8px",
@@ -1403,17 +1741,22 @@ export function TopologyPage() {
           </span>
         </div>
 
-        <div class="absolute bottom-5 left-5 flex items-center gap-5" style={{ zIndex: 10 }}>
+        <div class="absolute bottom-5 left-5 flex items-center gap-4" style={{ zIndex: 10 }}>
           {[
+            { color: C.cyan, label: "GTM", isGtm: true },
             { color: C.info, label: "Agent" },
             { color: C.purple, label: "Orchestrator" },
             { color: C.warning, label: "Eval" },
             { color: C.success, label: "Service" },
           ].map((item) => (
             <div key={item.label} class="flex items-center gap-1.5">
-              <span class="w-[6px] h-[6px] rounded-full" style={{
+              <span style={{
+                width: item.isGtm ? "10px" : "6px",
+                height: item.isGtm ? "10px" : "6px",
+                borderRadius: "50%",
                 backgroundColor: item.color,
                 boxShadow: `0 0 6px ${item.color}88`,
+                border: item.isGtm ? `1.5px solid ${item.color}` : "none",
               }} />
               <span class="text-[9px] uppercase tracking-wider" style={{ color: C.textMuted }}>
                 {item.label}
