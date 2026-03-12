@@ -925,7 +925,7 @@ Suggest the SINGLE highest-value change. JSON format:
 
       const child = spawn("claude", [
         "--dangerously-skip-permissions",
-        "-p", taskPrompt,
+        "-p", proposal!.task,
         "--output-format", "text",
       ], {
         cwd: projectRoot, stdio: "inherit", env,
