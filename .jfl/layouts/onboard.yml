@@ -1,0 +1,41 @@
+# JFL Onboarding Layout
+# Guided setup for new developers — single agent, training wheels
+name: jfl-onboard
+
+rows:
+  - size: 75%
+    panes:
+      - title: "🧠 Pi Guide"
+        command: jfl pi --mode onboarding
+        size: 50%
+        focus: true
+        env:
+          JFL_IDE_MODE: onboarding
+          JFL_MAX_SUGGESTIONS: 3
+
+      - title: "💻 Workspace"
+        size: 50%
+
+  - size: 25%
+    panes:
+      - title: "📋 Getting Started"
+        command: |
+          echo "Welcome to JFL! 🚀"
+          echo ""
+          echo "Your Pi assistant (left pane) will guide you through:"
+          echo "  1. Understanding the codebase"
+          echo "  2. Running your first eval"
+          echo "  3. Setting up your first agent"
+          echo "  4. Making your first improvement"
+          echo ""
+          echo "Press Ctrl+P to focus Pi at any time."
+          echo ""
+          read -p "Press Enter when ready..."
+          jfl eval status
+        size: 100%
+
+theme:
+  accent: colour75
+  border: colour238
+  bg: colour235
+  fg: colour248
