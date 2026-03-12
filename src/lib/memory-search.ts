@@ -201,8 +201,8 @@ function computeAdaptiveB(docLengths: number[]): number {
  * BM25 first-pass scoring over full document collection.
  *
  * Uses tuned k1/b parameters optimized for short, structured journal entries:
- * - k1=1.2: Aggressive term frequency saturation — in short docs (100-500 tokens),
- *   a term appearing 2-3 times is already highly relevant
+ * - k1=1.5: Term frequency saturation tuned for short queries — higher k1 allows
+ *   more discrimination between documents with varying term frequencies
  * - b: Adaptive based on corpus length variance (default 0.65)
  *
  * Key optimizations in this implementation:
@@ -214,7 +214,7 @@ async function searchMemoriesBM25(
   query: string,
   memories: Memory[],
   limit: number,
-  k1: number = 1.2,
+  k1: number = 1.5,
   bOverride?: number,
   legacy: boolean = false
 ): Promise<SearchResult[]> {
@@ -444,7 +444,7 @@ async function searchMemoriesHybrid(
 ): Promise<SearchResult[]> {
   // Run BM25 (lexical) and embedding (semantic) in parallel
   const [bm25Results, embeddingResults] = await Promise.all([
-    searchMemoriesBM25(query, memories, limit * 2, 1.2, undefined, legacy),
+    searchMemoriesBM25(query, memories, limit * 2, 1.5, undefined, legacy),
     searchMemoriesEmbedding(query, memories, limit * 2).catch(() => [])
   ])
 
@@ -493,14 +493,14 @@ async function searchMemoriesHybrid(
  *
  * @param results - Initial retrieval results (first-pass candidates)
  * @param query - Original search query
- * @param k1 - Term frequency saturation (default 1.2, tuned for short journal docs)
+ * @param k1 - Term frequency saturation (default 1.5, tuned for short queries)
  * @param bOverride - Optional override for b parameter (otherwise adaptive)
  * @param legacy - Use legacy tokenization
  */
 function reRankWithBM25(
   results: SearchResult[],
   query: string,
-  k1: number = 1.2,
+  k1: number = 1.5,
   bOverride?: number,
   legacy: boolean = false
 ): SearchResult[] {
@@ -610,7 +610,7 @@ export async function searchMemories(
   // Search based on method
   let results: SearchResult[]
   if (method === 'bm25') {
-    results = await searchMemoriesBM25(query, memories, maxItems * 2, 1.2, undefined, legacyTokenize)
+    results = await searchMemoriesBM25(query, memories, maxItems * 2, 1.5, undefined, legacyTokenize)
   } else if (method === 'tfidf') {
     results = await searchMemoriesTFIDF(query, memories, maxItems * 2, legacyTokenize)
   } else if (method === 'embedding') {
@@ -621,7 +621,7 @@ export async function searchMemories(
 
   // Second-pass: BM25 re-ranking
   if (rerank && results.length > 1) {
-    results = reRankWithBM25(results, query, 1.2, undefined, legacyTokenize)
+    results = reRankWithBM25(results, query, 1.5, undefined, legacyTokenize)
   }
 
   return results.slice(0, maxItems)
