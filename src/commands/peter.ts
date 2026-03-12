@@ -1316,6 +1316,185 @@ async function agentRun(projectRoot: string, agentName: string, rounds: number):
   console.log()
 }
 
+// ============================================================================
+// Telemetry Agent V2 Commands
+// ============================================================================
+
+async function runTelemetryAgent(projectRoot: string): Promise<void> {
+  const { TelemetryAgentV2 } = await import("../lib/telemetry-agent-v2.js")
+
+  console.log(chalk.bold("\n  Telemetry Agent V2 - Platform Digest Analysis\n"))
+
+  const agent = new TelemetryAgentV2({
+    projectRoot,
+    emitEvent: (type, data) => {
+      console.log(chalk.gray(`  [EVENT] ${type}`))
+    },
+  })
+
+  console.log(chalk.gray("  Fetching platform digest..."))
+
+  const result = await agent.run()
+
+  if (!result.digest24h) {
+    console.log(chalk.yellow("\n  Could not fetch platform digest."))
+    console.log(chalk.gray("  Check JFL_PLATFORM_URL and network connectivity.\n"))
+    return
+  }
+
+  console.log(chalk.green(`\n  Digest fetched for ${result.digest24h.periodHours}h period\n`))
+
+  // Show metrics
+  if (result.metrics) {
+    console.log(chalk.bold("  Current Metrics:"))
+    console.log(chalk.gray(`    Command Success Rate:  ${(result.metrics.command_success_rate * 100).toFixed(1)}%`))
+    console.log(chalk.gray(`    Command P90 Latency:   ${result.metrics.command_p90_latency_ms}ms`))
+    console.log(chalk.gray(`    Session Crash Rate:    ${(result.metrics.session_crash_rate * 100).toFixed(2)}%`))
+    console.log(chalk.gray(`    Hub Crash Rate:        ${(result.metrics.hub_crash_rate * 100).toFixed(2)}%`))
+    console.log(chalk.gray(`    Flow Completion Rate:  ${(result.metrics.flow_completion_rate * 100).toFixed(1)}%`))
+    console.log(chalk.gray(`    Cost Per Session:      $${result.metrics.cost_per_session_usd.toFixed(4)}`))
+    console.log(chalk.gray(`    Active Installs:       ${result.metrics.active_installs}`))
+    console.log(chalk.gray(`    Error Clusters:        ${result.metrics.error_cluster_count}`))
+    console.log()
+  }
+
+  // Show alerts
+  if (result.alerts.length > 0) {
+    console.log(chalk.bold(chalk.red("  Alerts:")))
+    for (const alert of result.alerts) {
+      console.log(chalk.red(`    ⚠ ${alert.name}: ${alert.percentChange.toFixed(1)}% decline`))
+      console.log(chalk.gray(`      ${alert.previous.toFixed(4)} → ${alert.current.toFixed(4)}`))
+    }
+    console.log()
+  }
+
+  // Show wins
+  if (result.wins.length > 0) {
+    console.log(chalk.bold(chalk.green("  Wins:")))
+    for (const win of result.wins) {
+      console.log(chalk.green(`    ✓ ${win.name}: ${win.percentChange.toFixed(1)}% improvement`))
+      console.log(chalk.gray(`      ${win.previous.toFixed(4)} → ${win.current.toFixed(4)}`))
+    }
+    console.log()
+  }
+
+  // Show proposed agents
+  if (result.proposedAgents.length > 0) {
+    console.log(chalk.bold("  Proposed Agents:"))
+    for (const agent of result.proposedAgents) {
+      const priority = agent.priority === "high" ? chalk.red(agent.priority) :
+                       agent.priority === "medium" ? chalk.yellow(agent.priority) :
+                       chalk.gray(agent.priority)
+      console.log(chalk.cyan(`    ${agent.name} [${priority}]`))
+      console.log(chalk.gray(`      ${agent.reason}`))
+    }
+    console.log(chalk.gray(`\n  Agent configs written to .jfl/agents/proposed/\n`))
+  }
+
+  // Show status
+  const status = agent.getStatus()
+  console.log(chalk.gray(`  Run #${status.runCount}`))
+  console.log(chalk.gray(`  Training tuples generated: ${status.totalTrainingTuples}`))
+  console.log()
+}
+
+async function runSentinelReview(projectRoot: string): Promise<void> {
+  const { SentinelRL } = await import("../lib/sentinel-rl.js")
+
+  console.log(chalk.bold("\n  Sentinel - Nightly System Review\n"))
+
+  const sentinel = new SentinelRL({
+    projectRoot,
+    emitEvent: (type, data) => {
+      console.log(chalk.gray(`  [EVENT] ${type}`))
+    },
+  })
+
+  console.log(chalk.gray("  Collecting inputs..."))
+
+  const { scores, recommendations, inputs } = await sentinel.run()
+
+  // Show scores
+  console.log(chalk.bold("\n  System Scores:"))
+  console.log(chalk.gray(`    Product Health:       ${(scores.productHealth * 100).toFixed(0)}% ${scoreEmoji(scores.productHealth)}`))
+  console.log(chalk.gray(`    Development Velocity: ${(scores.developmentVelocity * 100).toFixed(0)}% ${scoreEmoji(scores.developmentVelocity)}`))
+  console.log(chalk.gray(`    Agent Effectiveness:  ${(scores.agentEffectiveness * 100).toFixed(0)}% ${scoreEmoji(scores.agentEffectiveness)}`))
+  console.log(chalk.gray(`    Data Quality:         ${(scores.dataQuality * 100).toFixed(0)}% ${scoreEmoji(scores.dataQuality)}`))
+  console.log(chalk.bold(`    Composite:            ${(scores.composite * 100).toFixed(0)}% ${scoreEmoji(scores.composite)}`))
+  console.log()
+
+  // Show recommendations
+  if (recommendations.length > 0) {
+    console.log(chalk.bold("  Recommendations:"))
+    for (const rec of recommendations) {
+      const priority = rec.priority === "high" ? chalk.red(`[${rec.priority}]`) :
+                       rec.priority === "medium" ? chalk.yellow(`[${rec.priority}]`) :
+                       chalk.gray(`[${rec.priority}]`)
+      console.log(`    ${priority} ${rec.description}`)
+      console.log(chalk.gray(`      ${rec.reason}`))
+    }
+    console.log()
+  } else {
+    console.log(chalk.green("  No recommendations at this time.\n"))
+  }
+
+  // Show data summary
+  console.log(chalk.gray(`  Journal entries analyzed: ${inputs.journalEntries.length}`))
+  console.log(chalk.gray(`  Eval entries analyzed: ${inputs.evalHistory.length}`))
+  console.log(chalk.gray(`  PR reviews analyzed: ${inputs.prReviews.length}`))
+  console.log(chalk.gray(`  Training tuples: ${inputs.trainingStats.total}`))
+  console.log(chalk.gray(`  Replay entries: ${inputs.replayStats.totalEntries}`))
+  console.log(chalk.gray(`\n  Report written to .jfl/SENTINEL-REPORT.md\n`))
+}
+
+function scoreEmoji(score: number): string {
+  if (score >= 0.8) return chalk.green("●")
+  if (score >= 0.5) return chalk.yellow("●")
+  return chalk.red("●")
+}
+
+async function showMetrics(projectRoot: string): Promise<void> {
+  const { TelemetryAgentV2 } = await import("../lib/telemetry-agent-v2.js")
+
+  console.log(chalk.bold("\n  Current Platform Metrics\n"))
+
+  const agent = new TelemetryAgentV2({ projectRoot })
+  const metrics = await agent.getMetrics()
+
+  if (!metrics) {
+    console.log(chalk.yellow("  Could not fetch metrics from platform."))
+    console.log(chalk.gray("  Check JFL_PLATFORM_URL and network connectivity.\n"))
+    return
+  }
+
+  const format = (value: number, isPercent: boolean = false) => {
+    if (isPercent) return `${(value * 100).toFixed(1)}%`
+    return value.toFixed(4)
+  }
+
+  console.log(chalk.cyan("  Health Metrics:"))
+  console.log(chalk.gray(`    Command Success Rate:  ${format(metrics.command_success_rate, true)}`))
+  console.log(chalk.gray(`    Session Crash Rate:    ${format(metrics.session_crash_rate, true)}`))
+  console.log(chalk.gray(`    Hub Crash Rate:        ${format(metrics.hub_crash_rate, true)}`))
+  console.log(chalk.gray(`    Flow Completion Rate:  ${format(metrics.flow_completion_rate, true)}`))
+  console.log()
+
+  console.log(chalk.cyan("  Performance Metrics:"))
+  console.log(chalk.gray(`    Command P90 Latency:   ${metrics.command_p90_latency_ms}ms`))
+  console.log(chalk.gray(`    MCP Avg Latency:       ${metrics.mcp_avg_latency_ms.toFixed(1)}ms`))
+  console.log()
+
+  console.log(chalk.cyan("  Usage Metrics:"))
+  console.log(chalk.gray(`    Active Installs:       ${metrics.active_installs}`))
+  console.log(chalk.gray(`    Error Clusters:        ${metrics.error_cluster_count}`))
+  console.log(chalk.gray(`    Hook Hit Rate:         ${format(metrics.hook_hit_rate, true)}`))
+  console.log()
+
+  console.log(chalk.cyan("  Cost Metrics:"))
+  console.log(chalk.gray(`    Cost Per Session:      $${metrics.cost_per_session_usd.toFixed(4)}`))
+  console.log()
+}
+
 async function agentSwarm(projectRoot: string, rounds: number): Promise<void> {
   const { MetaOrchestrator } = await import("../lib/meta-orchestrator.js")
 
@@ -1447,6 +1626,21 @@ export async function peterCommand(
       break
     }
 
+    case "telemetry": {
+      await runTelemetryAgent(projectRoot)
+      break
+    }
+
+    case "sentinel": {
+      await runSentinelReview(projectRoot)
+      break
+    }
+
+    case "metrics": {
+      await showMetrics(projectRoot)
+      break
+    }
+
     default: {
       console.log(chalk.bold("\n  Peter Parker - Model-Routed Agent Orchestrator\n"))
       console.log(chalk.gray("  Commands:"))
@@ -1458,7 +1652,12 @@ export async function peterCommand(
       console.log("    jfl peter status                               Show status + recent events")
       console.log("    jfl peter dashboard                            Live event stream dashboard")
       console.log()
-      console.log(chalk.bold("  Scoped Agents (new):\n"))
+      console.log(chalk.bold("  Telemetry & RL:\n"))
+      console.log("    jfl peter telemetry                       Run telemetry agent (platform digest)")
+      console.log("    jfl peter sentinel                        Run Sentinel nightly review")
+      console.log("    jfl peter metrics                         Show current platform metrics")
+      console.log()
+      console.log(chalk.bold("  Scoped Agents:\n"))
       console.log("    jfl peter agent create                    Interactive agent creation")
       console.log("    jfl peter agent list                      List configured agents")
       console.log("    jfl peter agent run <name> [--rounds N]   Run a specific scoped agent")

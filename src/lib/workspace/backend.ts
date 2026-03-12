@@ -62,13 +62,28 @@ export interface WorkspaceBackend {
 }
 
 export function detectBackend(): "cmux" | "tmux" {
+  // 1. Already inside a cmux workspace
   if (process.env.CMUX_WORKSPACE_ID) return "cmux"
 
+  // 2. Explicit socket path set
+  const envSocket = process.env.CMUX_SOCKET_PATH || process.env.CMUX_SOCKET
+  if (envSocket) {
+    try {
+      const { existsSync } = require("fs")
+      if (existsSync(envSocket)) return "cmux"
+    } catch {}
+  }
+
+  // 3. Default socket paths (release, debug, staging)
   try {
     const { existsSync } = require("fs")
-    if (existsSync("/tmp/cmux.sock")) return "cmux"
+    const paths = ["/tmp/cmux.sock", "/tmp/cmux-debug.sock", "/tmp/cmux-staging.sock"]
+    for (const p of paths) {
+      if (existsSync(p)) return "cmux"
+    }
   } catch {}
 
+  // 4. cmux binary installed
   try {
     const { execSync } = require("child_process")
     execSync("which cmux", { stdio: "ignore" })

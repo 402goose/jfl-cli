@@ -264,9 +264,9 @@ export async function ideAvailableCommand(): Promise<void> {
     return
   }
 
-  const { getAvailableItems } = await import("../lib/ide-panes.js")
-  const layout = loadIdeLayout(root)
-  const items = getAvailableItems(root, layout)
+  // Use the new surface registry for the full list (includes flows, telemetry, portfolio)
+  const { getAvailableItems: getNewItems } = await import("../lib/workspace/surface-registry.js")
+  const items = getNewItems(root, [])
   printAvailableItems(items)
 }
 

@@ -1,0 +1,29 @@
+# CLI Speed Agent
+# Optimizes CLI command execution time - avg_ms (lower is better)
+
+[agent]
+name = "cli-speed"
+scope = "performance"
+metric = "avg_ms"
+direction = "minimize"
+time_budget_seconds = 300
+
+[eval]
+# Eval script is READ-ONLY during a session
+script = "eval/cli-speed.sh"
+data = "eval/fixtures/cli-commands.jsonl"
+
+[constraints]
+files_in_scope = ["src/commands/**/*.ts", "src/lib/**/*.ts", "src/utils/**/*.ts"]
+files_readonly = ["eval/**", "node_modules/**"]
+max_file_changes = 10
+
+[policy]
+embedding_model = "stratus-x1ac-base-claude-sonnet-4-6"
+exploration_rate = 0.2
+decay_per_round = 0.01
+min_exploration = 0.05
+
+[context_scope]
+produces = ["perf:cli-improved", "perf:latency-reduced"]
+consumes = ["code:refactored", "code:optimized"]
