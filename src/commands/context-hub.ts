@@ -1173,6 +1173,23 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus,
       return
     }
 
+    // Eval entries (all raw entries for cycle display)
+    if (url.pathname === "/api/eval/entries" && req.method === "GET") {
+      try {
+        const { readEvals } = await import("../lib/eval-store.js")
+        const limit = parseInt(url.searchParams.get("limit") || "100", 10)
+        const entries = readEvals(projectRoot)
+          .sort((a, b) => b.ts.localeCompare(a.ts))
+          .slice(0, limit)
+        res.writeHead(200, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ entries }))
+      } catch (err: any) {
+        res.writeHead(500, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ error: err.message }))
+      }
+      return
+    }
+
     // Eval leaderboard
     if (url.pathname === "/api/eval/leaderboard" && req.method === "GET") {
       try {

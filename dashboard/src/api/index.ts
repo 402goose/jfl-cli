@@ -62,6 +62,24 @@ export interface EvalAgent {
   trajectory: number[]
 }
 
+export interface EvalEntry {
+  v: 1
+  ts: string
+  agent: string
+  run_id: string
+  dataset?: string
+  model_version?: string
+  metrics: Record<string, number>
+  composite?: number
+  predictions?: Record<string, number>
+  delta?: Record<string, number>
+  session?: string
+  notes?: string
+  improved?: boolean
+  pr_number?: number
+  branch?: string
+}
+
 export interface TrajectoryPoint {
   ts: string
   value: number
@@ -346,4 +364,6 @@ export const api = {
   topology: () => apiFetch<TopologyData>("/api/v1/topology"),
 
   autoresearchStatus: () => apiFetch<AutoresearchStatus>("/api/v1/autoresearch/status"),
+
+  evalEntries: (limit = 100) => apiFetch<{ entries: EvalEntry[] }>(`/api/eval/entries?limit=${limit}`),
 }

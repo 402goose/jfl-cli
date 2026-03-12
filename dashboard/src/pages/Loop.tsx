@@ -1,49 +1,71 @@
-import { api, HubEvent, EvalAgent } from "@/api"
+import { api, HubEvent, EvalAgent, EvalEntry } from "@/api"
 import { Sparkline } from "@/components"
 import { usePolling, timeAgo, cn } from "@/lib/hooks"
 
-interface LoopCycle {
+interface CycleDisplay {
   ts: string
   branch?: string
   prNumber?: number
   delta?: number
+  composite?: number
   improved?: boolean
   agent?: string
-  source?: string
+  testsTotal?: number
+  testsPassed?: number
+  description?: string
 }
 
-function extractCycles(events: HubEvent[]): LoopCycle[] {
-  return events
-    .filter(e => e.type === "eval:scored")
-    .map(ev => {
-      const d = ev.data || {}
-      return {
-        ts: ev.ts,
-        branch: d.branch as string | undefined,
-        prNumber: d.pr_number as number | undefined,
-        delta: d.delta as number | undefined,
-        improved: d.improved === "true" || d.improved === true,
-        agent: d.agent as string | undefined,
-        source: ev.source,
-      }
-    })
-    .sort((a, b) => b.ts.localeCompare(a.ts))
+function extractBranchDescription(branch?: string): string | undefined {
+  if (!branch) return undefined
+  // Extract meaningful part from branch name
+  // e.g., "pp/autoresearch-r1-add-tests-1234567890" → "Round 1"
+  // e.g., "pp/test-self-driving-loop" → "test-self-driving-loop"
+  const match = branch.match(/autoresearch-r(\d+)/)
+  if (match) return `Round ${match[1]}`
+
+  // Remove common prefixes and timestamps
+  let desc = branch
+    .replace(/^pp\//, "")
+    .replace(/^feature\//, "")
+    .replace(/-\d{10,}$/, "") // remove trailing timestamps
+    .replace(/-/g, " ")
+
+  // Capitalize first letter
+  if (desc) desc = desc.charAt(0).toUpperCase() + desc.slice(1)
+  return desc || undefined
+}
+
+function entriesFromEvals(entries: EvalEntry[]): CycleDisplay[] {
+  return entries.map(e => ({
+    ts: e.ts,
+    branch: e.branch,
+    prNumber: e.pr_number,
+    delta: e.delta?.composite,
+    composite: e.composite,
+    improved: e.improved,
+    agent: e.agent,
+    testsTotal: e.metrics?.tests_total,
+    testsPassed: e.metrics?.tests_passed,
+    description: extractBranchDescription(e.branch) || e.notes,
+  }))
 }
 
 export function LoopPage() {
   const events = usePolling(() => api.events(500), 15000)
   const leaderboard = usePolling(() => api.leaderboard(), 15000)
   const flowExecs = usePolling(() => api.flowExecutions(), 15000)
+  const evalEntries = usePolling(() => api.evalEntries(100), 15000)
 
   const allEvents = events.data?.events || []
   const agents = leaderboard.data || []
   const executions = flowExecs.data || []
+  const entries = evalEntries.data?.entries || []
 
-  const cycles = extractCycles(allEvents)
+  const cycles = entriesFromEvals(entries)
   const detectCount = allEvents.filter(e => e.type === "telemetry:insight").length
   const proposeCount = allEvents.filter(e => e.type.startsWith("peter:")).length
-  const evalCount = allEvents.filter(e => e.type === "eval:scored").length
-  const mergeCount = cycles.filter(c => c.improved).length
+  const evalCount = cycles.length
+  const mergeCount = cycles.filter(c => c.improved === true).length
   const rejectCount = cycles.filter(c => c.improved === false).length
   const flowRuns = executions.length
 
@@ -161,24 +183,65 @@ export function LoopPage() {
           <h3 class="text-xs text-muted-foreground uppercase tracking-wider mb-3">Recent Cycles</h3>
           <div class="space-y-1">
             {cycles.slice(0, 20).map((c, i) => (
-              <div key={`${c.ts}-${i}`} class="flex items-center gap-3 py-1.5 text-sm">
-                <span class="text-[10px] text-muted-foreground mono w-14 shrink-0">{timeAgo(c.ts)}</span>
-                <span class={cn("w-2 h-2 rounded-full shrink-0", c.improved ? "bg-success" : "bg-destructive")} />
-                <span class="truncate flex-1 text-muted-foreground">{c.branch || c.agent || "\u2014"}</span>
-                {c.prNumber && <span class="text-xs mono text-muted-foreground">#{c.prNumber}</span>}
-                {c.delta != null && (
-                  <span class={cn(
-                    "text-xs mono tabular-nums",
-                    c.improved ? "text-success" : "text-destructive",
-                  )}>
-                    {c.delta >= 0 ? "+" : ""}{c.delta.toFixed(4)}
+              <div
+                key={`${c.ts}-${i}`}
+                class={cn(
+                  "flex items-center gap-3 py-2 px-2 text-sm rounded -mx-2",
+                  c.improved === true && "bg-success/5",
+                  c.improved === false && "bg-destructive/5",
+                )}
+              >
+                {/* Timestamp */}
+                <span class="text-[10px] text-muted-foreground mono w-12 shrink-0">{timeAgo(c.ts)}</span>
+
+                {/* Status indicator */}
+                <span class={cn(
+                  "w-2 h-2 rounded-full shrink-0",
+                  c.improved === true ? "bg-success" : c.improved === false ? "bg-destructive" : "bg-muted-foreground/50",
+                )} />
+
+                {/* Experiment name/description */}
+                <span class="truncate flex-1 text-foreground" title={c.branch || c.agent}>
+                  {c.description || c.branch || c.agent || "Eval run"}
+                </span>
+
+                {/* Score badge */}
+                {c.composite != null && (
+                  <span class="text-xs mono tabular-nums bg-muted px-1.5 py-0.5 rounded">
+                    {c.composite.toFixed(2)}
                   </span>
                 )}
+
+                {/* Delta badge */}
+                {c.delta != null && (
+                  <span class={cn(
+                    "text-xs mono tabular-nums px-1.5 py-0.5 rounded",
+                    c.delta >= 0 ? "bg-success/20 text-success" : "bg-destructive/20 text-destructive",
+                  )}>
+                    {c.delta >= 0 ? "+" : ""}{c.delta.toFixed(3)}
+                  </span>
+                )}
+
+                {/* Test count */}
+                {c.testsTotal != null && (
+                  <span class="text-[10px] text-muted-foreground mono whitespace-nowrap">
+                    {c.testsPassed != null && c.testsPassed !== c.testsTotal
+                      ? `${c.testsPassed}/${c.testsTotal}`
+                      : `${c.testsTotal}`} tests
+                  </span>
+                )}
+
+                {/* PR number */}
+                {c.prNumber && (
+                  <span class="text-[10px] mono text-muted-foreground">#{c.prNumber}</span>
+                )}
+
+                {/* Status text */}
                 <span class={cn(
-                  "text-[10px] mono",
-                  c.improved ? "text-success" : "text-destructive",
+                  "text-[10px] mono w-14 text-right",
+                  c.improved === true ? "text-success" : c.improved === false ? "text-destructive" : "text-muted-foreground",
                 )}>
-                  {c.improved ? "merged" : "rejected"}
+                  {c.improved === true ? "\u2713 merged" : c.improved === false ? "\u2717 rejected" : "\u2014"}
                 </span>
               </div>
             ))}
