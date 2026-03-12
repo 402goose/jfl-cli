@@ -1,0 +1,32 @@
+{
+  "version": 1,
+  "sessionId": "2e4710c6-9dbb-472c-bbf4-5c29b8cfd1ed",
+  "status": "running",
+  "startedAt": "2026-03-12T02:50:44.553Z",
+  "updatedAt": "2026-03-12T02:50:44.555Z",
+  "currentIteration": 0,
+  "maxIterations": 10,
+  "tasksCompleted": 0,
+  "isPaused": false,
+  "agentPlugin": "claude",
+  "trackerState": {
+    "plugin": "json",
+    "prdPath": "/Users/alectaggart/CascadeProjects/jfl-cli/.ralph-tui/autoresearch-task.json",
+    "totalTasks": 1,
+    "tasks": [
+      {
+        "id": "US-001",
+        "title": "Improve test_pass_rate score (currently 1.0000)",
+        "status": "open",
+        "completedInSession": false
+      }
+    ]
+  },
+  "iterations": [],
+  "skippedTaskIds": [],
+  "cwd": "/Users/alectaggart/CascadeProjects/jfl-cli",
+  "activeTaskIds": [
+    "US-001"
+  ],
+  "subagentPanelVisible": false
+}
