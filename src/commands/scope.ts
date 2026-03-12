@@ -473,7 +473,101 @@ export async function scopeCommand(action?: string, ...args: string[]): Promise<
       break
     }
 
+    case "impact": {
+      const [serviceName, ...changeScopes] = args
+      if (!serviceName) {
+        console.log(chalk.yellow("Usage: jfl scope impact <service> [scope1] [scope2] ..."))
+        console.log(chalk.dim('  Example: jfl scope impact jfl-cli cli:api-change cli:command-change'))
+        console.log(chalk.dim('  If no scopes given, uses all produces from the service'))
+        return
+      }
+      await detectImpact(serviceName, changeScopes)
+      break
+    }
+
     default:
-      console.log(chalk.yellow("Unknown action. Usage: jfl scope [list|set|test|viz]"))
+      console.log(chalk.yellow("Unknown action. Usage: jfl scope [list|set|test|viz|impact]"))
   }
+}
+
+/**
+ * Detect which services are affected by a change in the given service.
+ * Matches the service's produces against all other services' consumes.
+ */
+async function detectImpact(serviceName: string, changeScopes: string[]): Promise<void> {
+  const root = findProjectRoot()
+  if (!root) { console.log(chalk.red("Not in a JFL project")); return }
+  const config = loadConfig(root)
+  if (!config) { console.log(chalk.red("Cannot load config")); return }
+
+  // Resolve the source service's produces
+  const services = config.registered_services || []
+  const sourceService = services.find(s => s.name === serviceName)
+
+  let producesPatterns = changeScopes
+  if (producesPatterns.length === 0 && sourceService?.path) {
+    const svcConfig = loadConfig(sourceService.path)
+    producesPatterns = svcConfig?.context_scope?.produces || []
+  }
+
+  if (producesPatterns.length === 0) {
+    console.log(chalk.yellow(`No produces patterns for ${serviceName}`))
+    return
+  }
+
+  const isJson = process.argv.includes("--json")
+  const affected: { service: string; path: string; matchedPatterns: string[] }[] = []
+
+  for (const svc of services) {
+    if (svc.name === serviceName) continue
+    if (!svc.path) continue
+
+    const svcConfig = loadConfig(svc.path)
+    const consumes = svcConfig?.context_scope?.consumes || []
+
+    const matched: string[] = []
+    for (const produce of producesPatterns) {
+      for (const consume of consumes) {
+        if (scopeMatches(produce, consume)) {
+          matched.push(`${produce} ↔ ${consume}`)
+        }
+      }
+    }
+
+    if (matched.length > 0) {
+      affected.push({ service: svc.name, path: svc.path, matchedPatterns: matched })
+    }
+  }
+
+  if (isJson) {
+    console.log(JSON.stringify({ source: serviceName, produces: producesPatterns, affected }, null, 2))
+    return
+  }
+
+  if (affected.length === 0) {
+    console.log(chalk.green(`✔ No downstream impact from ${serviceName} changes`))
+    return
+  }
+
+  console.log(chalk.bold(`\n${chalk.cyan("⚡")} Impact from ${chalk.bold(serviceName)} changes:\n`))
+  for (const a of affected) {
+    console.log(`  ${chalk.yellow("→")} ${chalk.bold(a.service)}`)
+    for (const m of a.matchedPatterns) {
+      console.log(`    ${chalk.dim(m)}`)
+    }
+  }
+  console.log()
+}
+
+function scopeMatches(event: string, pattern: string): boolean {
+  if (pattern === "*") return true
+  if (pattern.endsWith(":*")) {
+    const prefix = pattern.slice(0, -1)
+    return event.startsWith(prefix)
+  }
+  if (pattern.endsWith("*")) {
+    const prefix = pattern.slice(0, -1)
+    return event.startsWith(prefix)
+  }
+  return event === pattern
 }

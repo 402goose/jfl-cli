@@ -23,5 +23,21 @@
   },
   "contextHub": {
     "port": 4358
+  },
+  "context_scope": {
+    "produces": [
+      "cli:api-change",
+      "cli:command-change",
+      "cli:eval-change",
+      "cli:template-api",
+      "eval:scored",
+      "training:tuple"
+    ],
+    "consumes": [
+      "platform:api-change",
+      "template:schema-change",
+      "eval:*"
+    ],
+    "denied": []
   }
 }
