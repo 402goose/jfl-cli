@@ -1,0 +1,29 @@
+# Code Quality Agent
+# Optimizes TypeScript type safety - inverse of tsc errors (1 / (1 + errors))
+
+[agent]
+name = "code-quality"
+scope = "quality"
+metric = "tsc_errors_inverse"  # 1 / (1 + tsc_errors), higher is better
+direction = "maximize"
+time_budget_seconds = 300
+
+[eval]
+# Eval script is READ-ONLY during a session
+script = "eval/code-quality.ts"
+data = "eval/fixtures/quality-baseline.jsonl"
+
+[constraints]
+files_in_scope = ["src/**/*.ts", "src/**/*.tsx"]
+files_readonly = ["eval/**", "node_modules/**"]
+max_file_changes = 10
+
+[policy]
+embedding_model = "stratus-x1ac-base-claude-sonnet-4-6"
+exploration_rate = 0.15
+decay_per_round = 0.02
+min_exploration = 0.05
+
+[context_scope]
+produces = ["code:quality-improved", "code:type-errors-fixed"]
+consumes = ["tests:coverage-improved", "code:refactored"]

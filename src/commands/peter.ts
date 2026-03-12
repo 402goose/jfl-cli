@@ -1122,11 +1122,283 @@ Suggest the SINGLE highest-value change. JSON format:
   console.log()
 }
 
+// ============================================================================
+// Scoped Agent Commands
+// ============================================================================
+
+async function agentCreate(projectRoot: string): Promise<void> {
+  const { writeAgentConfig, generateAgentToml } = await import("../lib/agent-config.js")
+  const readline = await import("readline")
+
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  })
+
+  const ask = (q: string): Promise<string> =>
+    new Promise(resolve => rl.question(q, resolve))
+
+  console.log(chalk.bold("\n  Create Scoped Agent\n"))
+
+  const name = await ask("  Agent name (e.g., search-quality): ")
+  const scope = await ask("  Scope (e.g., search, tests, quality): ")
+  const metric = await ask("  Metric (e.g., ndcg@10, test_pass_rate): ")
+  const direction = await ask("  Direction (maximize/minimize) [maximize]: ") || "maximize"
+  const timeBudget = await ask("  Time budget seconds [300]: ") || "300"
+  const evalScript = await ask("  Eval script path [eval/eval.ts]: ") || "eval/eval.ts"
+  const evalData = await ask("  Eval data path [eval/fixtures/data.jsonl]: ") || "eval/fixtures/data.jsonl"
+  const filesInScope = await ask("  Files in scope (glob, comma-sep) [src/**]: ") || "src/**"
+
+  rl.close()
+
+  const configPath = writeAgentConfig(projectRoot, {
+    name,
+    scope,
+    metric,
+    direction: direction as "maximize" | "minimize",
+    time_budget_seconds: parseInt(timeBudget, 10),
+    eval: {
+      script: evalScript,
+      data: evalData,
+    },
+    constraints: {
+      files_in_scope: filesInScope.split(",").map(s => s.trim()),
+      files_readonly: ["eval/**"],
+      max_file_changes: 10,
+    },
+    policy: {
+      embedding_model: "stratus-x1ac-base-claude-sonnet-4-6",
+      exploration_rate: 0.2,
+      decay_per_round: 0.01,
+      min_exploration: 0.05,
+    },
+  })
+
+  console.log(chalk.green(`\n  Agent config created: ${configPath}\n`))
+}
+
+async function agentList(projectRoot: string): Promise<void> {
+  const { listAgentConfigs, loadAgentConfig } = await import("../lib/agent-config.js")
+
+  const agents = listAgentConfigs(projectRoot)
+
+  if (agents.length === 0) {
+    console.log(chalk.yellow("\n  No agents configured."))
+    console.log(chalk.gray("  Run: jfl peter agent create\n"))
+    return
+  }
+
+  console.log(chalk.bold("\n  Configured Agents\n"))
+
+  for (const name of agents) {
+    try {
+      const config = loadAgentConfig(projectRoot, name)
+      console.log(chalk.cyan(`  ${name}`))
+      console.log(chalk.gray(`    Scope: ${config.scope}`))
+      console.log(chalk.gray(`    Metric: ${config.metric} (${config.direction})`))
+      console.log(chalk.gray(`    Time budget: ${config.time_budget_seconds}s`))
+      console.log(chalk.gray(`    Files: ${config.constraints.files_in_scope.join(", ")}`))
+      console.log()
+    } catch (err: any) {
+      console.log(chalk.red(`  ${name}: Error loading config - ${err.message}`))
+    }
+  }
+}
+
+async function agentRun(projectRoot: string, agentName: string, rounds: number): Promise<void> {
+  const { loadAgentConfig, validateAgentConfig } = await import("../lib/agent-config.js")
+  const { startSession, runBaseline, runRound, endSession, saveSessionState } = await import("../lib/agent-session.js")
+  const { ReplayBuffer } = await import("../lib/replay-buffer.js")
+  const { StratusClient } = await import("../lib/stratus-client.js")
+
+  // Load and validate config
+  let config
+  try {
+    config = loadAgentConfig(projectRoot, agentName)
+  } catch (err: any) {
+    console.log(chalk.red(`\n  Agent not found: ${agentName}`))
+    console.log(chalk.gray("  Run: jfl peter agent list\n"))
+    return
+  }
+
+  const validation = validateAgentConfig(config, projectRoot)
+  if (!validation.valid) {
+    console.log(chalk.red(`\n  Invalid agent config:`))
+    for (const err of validation.errors) {
+      console.log(chalk.red(`    - ${err}`))
+    }
+    console.log()
+    return
+  }
+
+  console.log(chalk.bold(`\n  Running Scoped Agent: ${agentName} (${rounds} rounds)\n`))
+  console.log(chalk.gray(`  Metric: ${config.metric} (${config.direction})`))
+  console.log(chalk.gray(`  Time budget: ${config.time_budget_seconds}s per round`))
+  console.log(chalk.gray(`  Pattern: branch → change → eval → keep|revert → repeat\n`))
+
+  // Start session
+  const session = startSession(config, projectRoot)
+  saveSessionState(session)
+
+  console.log(chalk.cyan(`  Session: ${session.id}`))
+  console.log(chalk.cyan(`  Branch: ${session.branch}`))
+  console.log(chalk.gray(`  Eval snapshot: ${session.evalSnapshot.hash.slice(0, 8)}\n`))
+
+  // Run baseline
+  console.log(chalk.gray("  Running baseline eval..."))
+  let baseline
+  try {
+    baseline = await runBaseline(session)
+  } catch (err: any) {
+    console.log(chalk.red(`  Baseline eval failed: ${err.message}`))
+    return
+  }
+  console.log(chalk.green(`  Baseline: ${baseline.toFixed(4)}\n`))
+
+  const replayBuffer = new ReplayBuffer(projectRoot)
+  const transitions: any[] = []
+
+  // Stratus for task generation
+  const stratus = process.env.STRATUS_API_KEY
+    ? new StratusClient({ apiKey: process.env.STRATUS_API_KEY })
+    : null
+
+  for (let round = 1; round <= rounds; round++) {
+    console.log(chalk.bold(`\n  ── Round ${round}/${rounds} ${"─".repeat(40)}\n`))
+
+    // Generate task
+    let task = `Improve ${config.metric} by modifying files matching ${config.constraints.files_in_scope.join(", ")}`
+    if (stratus) {
+      try {
+        const prompt = `Suggest ONE specific code change to improve the ${config.metric} metric. Scope: ${config.scope}. Files: ${config.constraints.files_in_scope.join(", ")}. Be concrete and actionable. Return just the task description.`
+        const response = await stratus.reason(prompt, { maxTokens: 200, temperature: 0.7 + round * 0.05 })
+        task = response.choices[0]?.message?.content || task
+      } catch {}
+    }
+
+    const hypothesis = `Implementing this will improve ${config.metric}`
+
+    console.log(chalk.cyan(`  Task: ${task.slice(0, 80)}...`))
+
+    const { result, transition } = await runRound(session, round, task, hypothesis)
+    transitions.push(transition)
+
+    // Write to replay buffer
+    replayBuffer.write({
+      agent: config.name,
+      session_id: session.id,
+      state_hash: transition.state_hash,
+      state: transition.state,
+      action_diff: transition.action_diff,
+      action: transition.action,
+      hypothesis,
+      reward: result.delta,
+      timestamp: new Date().toISOString(),
+    })
+
+    const emoji = result.kept ? chalk.green("✓") : chalk.red("✗")
+    const deltaStr = result.delta > 0 ? `+${result.delta.toFixed(4)}` : result.delta.toFixed(4)
+    console.log(`  ${emoji} Result: ${result.metricAfter.toFixed(4)} (${deltaStr}) ${result.kept ? "KEPT" : "REVERTED"}`)
+  }
+
+  // End session
+  const summary = await endSession(session, transitions)
+
+  console.log(chalk.bold(`\n  ── Session Complete ${"─".repeat(35)}\n`))
+  console.log(chalk.gray(`  Rounds: ${summary.rounds}`))
+  console.log(chalk.gray(`  Improved: ${summary.improvedRounds}`))
+  console.log(chalk.gray(`  Total delta: ${summary.totalDelta > 0 ? "+" : ""}${summary.totalDelta.toFixed(4)}`))
+  console.log(chalk.gray(`  Best delta: +${summary.bestDelta.toFixed(4)}`))
+
+  if (summary.prUrl) {
+    console.log(chalk.green(`\n  PR created: ${summary.prUrl}`))
+  }
+  console.log()
+}
+
+async function agentSwarm(projectRoot: string, rounds: number): Promise<void> {
+  const { MetaOrchestrator } = await import("../lib/meta-orchestrator.js")
+
+  const orchestrator = new MetaOrchestrator(projectRoot)
+  const agents = orchestrator.getAgents()
+
+  if (agents.length === 0) {
+    console.log(chalk.yellow("\n  No agents configured."))
+    console.log(chalk.gray("  Run: jfl peter agent create\n"))
+    return
+  }
+
+  console.log(chalk.bold(`\n  Agent Swarm: ${agents.length} agents, ${rounds} rounds total\n`))
+
+  for (const agent of agents) {
+    console.log(chalk.gray(`    - ${agent.name} (${agent.metric})`))
+  }
+  console.log()
+
+  const result = await orchestrator.runSwarm(rounds, (agent, round, reward, reason) => {
+    const emoji = reward > 0 ? chalk.green("+") : reward < 0 ? chalk.red("-") : chalk.gray("=")
+    console.log(chalk.gray(`  [${round}/${rounds}] ${agent} → ${emoji}${Math.abs(reward).toFixed(4)} (${reason})`))
+  })
+
+  console.log(chalk.bold(`\n  ── Swarm Complete ${"─".repeat(38)}\n`))
+
+  const stats = orchestrator.getStats()
+  console.log(chalk.gray(`  Total rounds: ${stats.totalRounds}`))
+  console.log(chalk.gray(`  Avg EMA reward: ${stats.avgEmaReward.toFixed(4)}`))
+  console.log(chalk.gray(`  Overall win rate: ${(stats.overallWinRate * 100).toFixed(1)}%`))
+
+  if (stats.bestAgent) {
+    console.log(chalk.green(`  Best agent: ${stats.bestAgent.name} (EMA: ${stats.bestAgent.emaReward.toFixed(4)})`))
+  }
+
+  console.log(chalk.bold("\n  Per-Agent Results:\n"))
+  for (const [name, data] of Object.entries(result.perAgent)) {
+    console.log(chalk.cyan(`    ${name}: ${data.rounds} rounds, total delta: ${data.totalReward > 0 ? "+" : ""}${data.totalReward.toFixed(4)}`))
+  }
+  console.log()
+}
+
 export async function peterCommand(
   action?: string,
-  options: { cost?: boolean; quality?: boolean; balanced?: boolean; task?: string; rounds?: string; mode?: string } = {}
+  options: { cost?: boolean; quality?: boolean; balanced?: boolean; task?: string; rounds?: string; mode?: string; name?: string } = {}
 ) {
   const projectRoot = process.cwd()
+
+  // Handle "agent" subcommand
+  if (action === "agent") {
+    const subAction = options.name || options.task  // name is the subcommand, task might be agent name
+    if (subAction === "create") {
+      await agentCreate(projectRoot)
+      return
+    } else if (subAction === "list") {
+      await agentList(projectRoot)
+      return
+    } else if (subAction === "run") {
+      // jfl peter agent run <name> --rounds N
+      // The agent name would be in a different position
+      console.log(chalk.yellow("\n  Usage: jfl peter agent run <name> --rounds N\n"))
+      return
+    } else if (subAction === "swarm") {
+      const rounds = parseInt(options.rounds || "20", 10)
+      await agentSwarm(projectRoot, rounds)
+      return
+    } else if (subAction) {
+      // Assume it's an agent name for "run"
+      const rounds = parseInt(options.rounds || "5", 10)
+      await agentRun(projectRoot, subAction, rounds)
+      return
+    }
+
+    // Show agent help
+    console.log(chalk.bold("\n  Peter Parker - Scoped Agent Commands\n"))
+    console.log(chalk.gray("  Commands:"))
+    console.log("    jfl peter agent create                    Interactive agent creation")
+    console.log("    jfl peter agent list                      List configured agents")
+    console.log("    jfl peter agent run <name> [--rounds N]   Run a specific agent")
+    console.log("    jfl peter agent swarm [--rounds N]        Run all agents with meta-orchestrator")
+    console.log()
+    return
+  }
 
   switch (action) {
     case "setup": {
@@ -1182,10 +1454,15 @@ export async function peterCommand(
       console.log("    jfl peter run [--task <task>]                  Run orchestrator")
       console.log("    jfl peter pr --task <task>                     Run + branch + PR")
       console.log("    jfl peter experiment                           Proactive: pick + execute next experiment")
-      console.log("    jfl peter experiment --mode autoresearch       Tight loop: N experiments, PR the winner")
       console.log("    jfl peter autoresearch [--rounds N]            Shortcut for autoresearch mode")
       console.log("    jfl peter status                               Show status + recent events")
       console.log("    jfl peter dashboard                            Live event stream dashboard")
+      console.log()
+      console.log(chalk.bold("  Scoped Agents (new):\n"))
+      console.log("    jfl peter agent create                    Interactive agent creation")
+      console.log("    jfl peter agent list                      List configured agents")
+      console.log("    jfl peter agent run <name> [--rounds N]   Run a specific scoped agent")
+      console.log("    jfl peter agent swarm [--rounds N]        Run all agents with orchestrator")
       console.log()
     }
   }
