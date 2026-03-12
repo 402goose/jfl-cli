@@ -1,0 +1,22 @@
+{
+  "name": "Autoresearch Task",
+  "branchName": "ralph/autoresearch-1773353340703",
+  "description": "Add tests for error handling, exception paths, and failure modes across src/ modules — specifically testing what happens when external dependencies fail (network errors, disk errors, missing files), when inputs are malformed or out of range, and when resource limits are exceeded. Write 20-30 new test cases using unittest.mock to simulate failures and verify that appropriate exceptions are raised, errors are logged, and the system degrades gracefully without crashing.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Add tests for error handling, exception paths, and failure modes across src/ mod",
+      "description": "Add tests for error handling, exception paths, and failure modes across src/ modules — specifically testing what happens when external dependencies fail (network errors, disk errors, missing files), when inputs are malformed or out of range, and when resource limits are exceeded. Write 20-30 new test cases using unittest.mock to simulate failures and verify that appropriate exceptions are raised, errors are logged, and the system degrades gracefully without crashing.",
+      "acceptanceCriteria": [
+        "Task completed"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    }
+  ],
+  "metadata": {
+    "updatedAt": "2026-03-12T22:09:00.703Z"
+  }
+}
