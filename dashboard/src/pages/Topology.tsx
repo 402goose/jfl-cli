@@ -2064,6 +2064,126 @@ export function TopologyPage() {
             </div>
           </div>
         )}
+
+        {/* Minimap */}
+        <div
+          class="absolute"
+          style={{
+            right: selectedDetail ? "336px" : "20px",
+            bottom: "140px",
+            width: "180px",
+            height: "100px",
+            background: "rgba(12, 12, 15, 0.85)",
+            border: "1px solid rgba(60, 60, 60, 0.3)",
+            borderRadius: "6px",
+            overflow: "hidden",
+            zIndex: 10,
+            transition: "right 0.3s ease",
+          }}
+          onClick={(e: MouseEvent) => {
+            const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+            const mx = e.clientX - rect.left
+            const my = e.clientY - rect.top
+            const st = stateRef.current
+            if (st.nodes.length === 0) return
+
+            // Calculate bounds of all nodes
+            let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+            st.nodes.forEach((n) => {
+              minX = Math.min(minX, n.x)
+              maxX = Math.max(maxX, n.x)
+              minY = Math.min(minY, n.y)
+              maxY = Math.max(maxY, n.y)
+            })
+            const padding = 50
+            minX -= padding; maxX += padding; minY -= padding; maxY += padding
+            const worldW = maxX - minX
+            const worldH = maxY - minY
+
+            // Map click to world coords
+            const worldX = minX + (mx / 180) * worldW
+            const worldY = minY + (my / 100) * worldH
+
+            // Center viewport on that point
+            const canvas = canvasRef.current
+            if (!canvas) return
+            const { scale } = zoomPan
+            setZoomPan({
+              scale,
+              offsetX: canvas.width / 2 - worldX * scale,
+              offsetY: canvas.height / 2 - worldY * scale,
+            })
+          }}
+        >
+          <svg width="180" height="100" style={{ display: "block" }}>
+            {(() => {
+              const st = stateRef.current
+              if (st.nodes.length === 0) return null
+
+              // Calculate bounds
+              let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity
+              st.nodes.forEach((n) => {
+                minX = Math.min(minX, n.x)
+                maxX = Math.max(maxX, n.x)
+                minY = Math.min(minY, n.y)
+                maxY = Math.max(maxY, n.y)
+              })
+              const padding = 50
+              minX -= padding; maxX += padding; minY -= padding; maxY += padding
+              const worldW = maxX - minX
+              const worldH = maxY - minY
+
+              // Filter visible nodes
+              const visibleNodes = st.nodes.filter((n) => {
+                if (n.isGtm) return true
+                if (!n.parentGtm) return true
+                return expandedGtms.has(n.parentGtm)
+              })
+
+              // Map world to minimap
+              const toMiniX = (wx: number) => ((wx - minX) / worldW) * 180
+              const toMiniY = (wy: number) => ((wy - minY) / worldH) * 100
+
+              // Viewport rect
+              const canvas = canvasRef.current
+              const vpX = canvas ? (-zoomPan.offsetX / zoomPan.scale) : 0
+              const vpY = canvas ? (-zoomPan.offsetY / zoomPan.scale) : 0
+              const vpW = canvas ? (canvas.width / zoomPan.scale) : worldW
+              const vpH = canvas ? (canvas.height / zoomPan.scale) : worldH
+
+              return (
+                <>
+                  {/* Node dots */}
+                  {visibleNodes.map((n) => {
+                    const isCollapsedGtm = n.isGtm && !expandedGtms.has(n.id)
+                    const dotSize = isCollapsedGtm ? 5 : (n.isGtm ? 4 : 2)
+                    return (
+                      <circle
+                        key={n.id}
+                        cx={toMiniX(n.x)}
+                        cy={toMiniY(n.y)}
+                        r={dotSize}
+                        fill={n.color}
+                        opacity={0.8}
+                      />
+                    )
+                  })}
+                  {/* Viewport rectangle */}
+                  <rect
+                    x={toMiniX(vpX)}
+                    y={toMiniY(vpY)}
+                    width={(vpW / worldW) * 180}
+                    height={(vpH / worldH) * 100}
+                    fill="none"
+                    stroke={C.info}
+                    stroke-width="1"
+                    opacity={0.6}
+                  />
+                </>
+              )
+            })()}
+          </svg>
+        </div>
       </div>
 
       {selectedDetail && (
