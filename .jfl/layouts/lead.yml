@@ -1,0 +1,52 @@
+# JFL Engineering Lead Layout
+# Team orchestrator — manage agent fleet across workstreams
+name: jfl-lead
+
+before: jfl context-hub ensure
+
+rows:
+  - size: 15%
+    panes:
+      - title: "🗺️ Topology"
+        command: jfl scope impact --watch
+        size: 100%
+
+  - size: 55%
+    panes:
+      - title: "🧠 Peter Parker"
+        command: jfl peter agent swarm --rounds 20
+        size: 25%
+        focus: true
+        env:
+          JFL_AGENT_ROLE: orchestrator
+
+      - title: "🔍 Search Quality"
+        command: jfl peter agent run search-quality --rounds 20
+        size: 25%
+
+      - title: "🧪 Test Coverage"
+        command: jfl peter agent run test-coverage --rounds 20
+        size: 25%
+
+      - title: "✨ Code Quality"
+        command: jfl peter agent run code-quality --rounds 20
+        size: 25%
+
+  - size: 30%
+    panes:
+      - title: "📡 Scope Events"
+        command: jfl context-hub events --follow --pattern "scope:*,agent:*"
+        size: 35%
+
+      - title: "📈 Training Buffer"
+        command: watch -n 30 'jfl peter replay-buffer stats'
+        size: 30%
+
+      - title: "💻 Shell"
+        size: 35%
+
+theme:
+  accent: colour208
+  border: colour238
+  bg: colour235
+  fg: colour248

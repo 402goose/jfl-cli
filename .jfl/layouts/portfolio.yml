@@ -1,0 +1,39 @@
+# JFL Portfolio Owner Layout
+# Strategic view — monitor org-wide agent performance
+name: jfl-portfolio
+
+before: jfl context-hub ensure
+
+rows:
+  - size: 60%
+    panes:
+      - title: "📊 Dashboard"
+        command: |
+          echo "Opening Context Hub Dashboard..."
+          open http://localhost:4242/dashboard
+          jfl context-hub events --follow
+        size: 50%
+        focus: true
+
+      - title: "🗺️ Topology"
+        command: jfl scope impact --watch --portfolio
+        size: 50%
+
+  - size: 40%
+    panes:
+      - title: "🔔 Alerts"
+        command: jfl context-hub events --follow --pattern "alert:*,scope:impact"
+        size: 35%
+
+      - title: "📈 Agent Performance"
+        command: watch -n 30 'jfl peter agent list --verbose'
+        size: 35%
+
+      - title: "💻 Shell"
+        size: 30%
+
+theme:
+  accent: colour42
+  border: colour238
+  bg: colour235
+  fg: colour248
