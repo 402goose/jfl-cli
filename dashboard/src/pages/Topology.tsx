@@ -99,8 +99,8 @@ function truncateLabel(label: string, maxLen: number = 18): string {
 // System agents that should be in the center cluster
 const SYSTEM_AGENTS = new Set(["peter-parker", "telemetry-agent", "eval-engine", "stratus"])
 
-const COLLAPSED_GTM_RADIUS = 55
-const EXPANDED_GTM_RADIUS = 38
+const COLLAPSED_GTM_RADIUS = 36
+const EXPANDED_GTM_RADIUS = 32
 
 function edgeCategoryColor(cat: string): string {
   switch (cat) {
@@ -568,7 +568,7 @@ const FRAG_COMPOSITE = `
     vec2 uv = gl_FragCoord.xy / u_resolution;
     vec4 scene = texture2D(u_scene, uv);
     vec4 bloom = texture2D(u_bloom, uv);
-    vec3 color = scene.rgb + bloom.rgb * 1.2;
+    vec3 color = scene.rgb + bloom.rgb * 0.35;
     float vignette = 1.0 - 0.4 * length((uv - 0.5) * 1.5);
     color *= vignette;
     float scan = 0.97 + 0.03 * sin(uv.y * u_resolution.y * 1.5 + u_time * 0.5);
@@ -955,10 +955,10 @@ function drawScene(
     const r = node.radius * (isHovered ? 1.15 : isSelected ? 1.1 : 1.0)
 
     if (node.status === "running" || isHovered || isSelected) {
-      const glowR = r * (isSelected ? 3.5 : isHovered ? 3.0 : isCollapsedGtm ? 2.8 : 2.2) * breathe
+      const glowR = r * (isSelected ? 2.2 : isHovered ? 2.0 : isCollapsedGtm ? 1.4 : 1.6) * breathe
       const grad = ctx.createRadialGradient(node.x, node.y, r * 0.5, node.x, node.y, glowR)
-      grad.addColorStop(0, hexToRGBA(node.color, 0.25 * nodeAlpha))
-      grad.addColorStop(0.5, hexToRGBA(node.color, 0.08 * nodeAlpha))
+      grad.addColorStop(0, hexToRGBA(node.color, 0.15 * nodeAlpha))
+      grad.addColorStop(0.5, hexToRGBA(node.color, 0.04 * nodeAlpha))
       grad.addColorStop(1, hexToRGBA(node.color, 0))
       ctx.fillStyle = grad
       ctx.beginPath()
@@ -971,7 +971,7 @@ function drawScene(
       const haloAlpha = (Math.sin(time * 0.002 + node.pulsePhase) * 0.2 + 0.4) * nodeAlpha
 
       ctx.save()
-      ctx.globalAlpha = haloAlpha * 0.5
+      ctx.globalAlpha = haloAlpha * 0.25
       ctx.strokeStyle = node.color
       ctx.lineWidth = isCollapsedGtm ? 3 : 2.5
       ctx.beginPath()
@@ -980,7 +980,7 @@ function drawScene(
       ctx.restore()
 
       ctx.save()
-      ctx.globalAlpha = haloAlpha * 0.3
+      ctx.globalAlpha = haloAlpha * 0.15
       ctx.strokeStyle = node.color
       ctx.lineWidth = 1
       ctx.setLineDash([6, 4])
@@ -993,7 +993,7 @@ function drawScene(
       const ringAlpha = (Math.sin(time * 0.003 + node.pulsePhase) * 0.3 + 0.5) * nodeAlpha
       const ringR = r * (1.5 + Math.sin(time * 0.001 + node.pulsePhase * 2) * 0.3)
       ctx.save()
-      ctx.globalAlpha = ringAlpha * 0.3
+      ctx.globalAlpha = ringAlpha * 0.15
       ctx.strokeStyle = node.color
       ctx.lineWidth = 1
       ctx.setLineDash([4, 6])
@@ -1568,7 +1568,7 @@ export function TopologyPage() {
           gl.bindTexture(gl.TEXTURE_2D, st.sceneTexture)
           gl.uniform1i(gl.getUniformLocation(st.programs.threshold, "u_texture"), 0)
           gl.uniform2f(gl.getUniformLocation(st.programs.threshold, "u_resolution"), bw, bh)
-          gl.uniform1f(gl.getUniformLocation(st.programs.threshold, "u_threshold"), 0.18)
+          gl.uniform1f(gl.getUniformLocation(st.programs.threshold, "u_threshold"), 0.45)
           drawQuad(st.programs.threshold)
         }
 
@@ -1732,11 +1732,11 @@ export function TopologyPage() {
           />
         </div>
 
-        <canvas ref={glCanvasRef} class="absolute inset-0 w-full h-full" style={{ zIndex: 1 }} />
+        <canvas ref={glCanvasRef} class="absolute inset-0 w-full h-full" style={{ zIndex: 1, pointerEvents: "none" }} />
 
         {/* GTM Cluster Labels */}
         {st.nodes.length > 0 && (
-          <div class="absolute inset-0 pointer-events-none" style={{ zIndex: 1.5 }}>
+          <div class="absolute inset-0 pointer-events-none" style={{ zIndex: 5 }}>
             {st.nodes.filter(n => n.isGtm).map((gtm) => {
               // Find max extent of this cluster to position label above
               const children = st.nodes.filter(n => n.parentGtm === gtm.id)
