@@ -1,0 +1,5 @@
+{"query": "how to create an agent", "expected_results": ["agent-config.ts", "agent-session.ts", "agent-generator.ts"], "relevance_scores": [3, 2, 2]}
+{"query": "training buffer format", "expected_results": ["training-buffer.ts", "replay-buffer.ts"], "relevance_scores": [3, 2]}
+{"query": "policy head inference", "expected_results": ["policy-head.ts", "training-buffer.ts"], "relevance_scores": [3, 1]}
+{"query": "stratus api client", "expected_results": ["stratus-client.ts"], "relevance_scores": [3]}
+{"query": "memory search implementation", "expected_results": ["memory-search.ts", "memory-indexer.ts", "memory-db.ts"], "relevance_scores": [3, 2, 1]}
