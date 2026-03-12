@@ -1,23 +1,22 @@
 {
   "name": "Autoresearch Task",
-  "description": "Improve test_pass_rate score (currently 1.0000)",
-  "branchName": "ralph/autoresearch-1773283843622",
+  "branchName": "ralph/autoresearch-1773284000182",
+  "description": "Optimize the document indexing pipeline by implementing better text preprocessing: add stopword removal, implement phrase detection for multi-word queries, and improve the document scoring with length normalization (BM25 b parameter tuning). This directly targets the ndcg and precision metrics visible in smoke-test evaluations.",
   "userStories": [
     {
       "id": "US-001",
-      "title": "Improve test_pass_rate score (currently 1.0000)",
-      "description": "Improve test_pass_rate score (currently 1.0000)",
+      "title": "Optimize the document indexing pipeline by implementing better text preprocessin",
+      "description": "Optimize the document indexing pipeline by implementing better text preprocessing: add stopword removal, implement phrase detection for multi-word queries, and improve the document scoring with length normalization (BM25 b parameter tuning). This directly targets the ndcg and precision metrics visible in smoke-test evaluations.",
       "acceptanceCriteria": [
         "Task completed"
       ],
       "priority": 1,
-      "passes": true,
+      "passes": false,
       "notes": "",
-      "dependsOn": [],
-      "completionNotes": "Completed by agent"
+      "dependsOn": []
     }
   ],
   "metadata": {
-    "updatedAt": "2026-03-12T02:52:13.047Z"
+    "updatedAt": "2026-03-12T02:53:20.182Z"
   }
 }
