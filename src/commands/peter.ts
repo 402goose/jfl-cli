@@ -923,7 +923,11 @@ Suggest the SINGLE highest-value change. JSON format:
       delete env.CLAUDECODE
       delete env.CLAUDE_CODE
 
-      const child = spawn("ralph-tui", ["run", "--listen", "--prd", prdPath, "--headless"], {
+      const child = spawn("claude", [
+        "--dangerously-skip-permissions",
+        "-p", taskPrompt,
+        "--output-format", "text",
+      ], {
         cwd: projectRoot, stdio: "inherit", env,
       })
 
