@@ -1,0 +1,22 @@
+{
+  "name": "Autoresearch Task",
+  "branchName": "ralph/autoresearch-1773285308183",
+  "description": "Run 'git stash' or 'git checkout .' to reset ALL uncommitted changes to the codebase, returning to the last committed state. Then verify the test suite passes with 274/274 tests before making any further changes. Do not modify any source files — only reset and verify.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Run 'git stash' or 'git checkout .' to reset ALL uncommitted changes to the code",
+      "description": "Run 'git stash' or 'git checkout .' to reset ALL uncommitted changes to the codebase, returning to the last committed state. Then verify the test suite passes with 274/274 tests before making any further changes. Do not modify any source files — only reset and verify.",
+      "acceptanceCriteria": [
+        "Task completed"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    }
+  ],
+  "metadata": {
+    "updatedAt": "2026-03-12T03:15:08.183Z"
+  }
+}
