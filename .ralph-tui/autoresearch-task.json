@@ -1,0 +1,22 @@
+{
+  "name": "Autoresearch Task",
+  "branchName": "ralph/autoresearch-1773285641037",
+  "description": "Run 'git reset --hard HEAD' followed by 'python -m pytest --tb=no -q' to restore the repository to a clean committed state and verify baseline. Do not modify any files afterward.",
+  "userStories": [
+    {
+      "id": "US-001",
+      "title": "Run 'git reset --hard HEAD' followed by 'python -m pytest --tb=no -q' to restore",
+      "description": "Run 'git reset --hard HEAD' followed by 'python -m pytest --tb=no -q' to restore the repository to a clean committed state and verify baseline. Do not modify any files afterward.",
+      "acceptanceCriteria": [
+        "Task completed"
+      ],
+      "priority": 1,
+      "passes": false,
+      "notes": "",
+      "dependsOn": []
+    }
+  ],
+  "metadata": {
+    "updatedAt": "2026-03-12T03:20:41.037Z"
+  }
+}
