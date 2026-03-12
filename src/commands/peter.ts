@@ -1495,6 +1495,109 @@ async function showMetrics(projectRoot: string): Promise<void> {
   console.log()
 }
 
+async function runDailyLoop(projectRoot: string): Promise<void> {
+  const { MetaOrchestrator } = await import("../lib/meta-orchestrator.js")
+  const { loadAllAgentConfigs } = await import("../lib/agent-config.js")
+
+  console.log(chalk.bold("\n  Peter Parker - Daily RL Agent Loop\n"))
+
+  const orchestrator = new MetaOrchestrator(projectRoot)
+  const agents = orchestrator.getAgents()
+
+  if (agents.length === 0) {
+    console.log(chalk.yellow("  No RL agents configured."))
+    console.log(chalk.gray("  Run: jfl onboard <service-path> to discover metrics"))
+    console.log(chalk.gray("  Or:  jfl peter agent create\n"))
+    return
+  }
+
+  console.log(chalk.gray(`  Found ${agents.length} RL agent(s):\n`))
+  for (const agent of agents) {
+    console.log(chalk.gray(`    • ${agent.name} (${agent.metric}, ${agent.direction})`))
+  }
+  console.log()
+
+  // Read training buffer to check for stale agents
+  const tb = new TrainingBuffer(projectRoot)
+  const entries = tb.read()
+  const now = Date.now()
+  const staleThreshold = 24 * 60 * 60 * 1000 // 24 hours
+
+  const staleAgents: string[] = []
+  const activeAgents: string[] = []
+
+  for (const agent of agents) {
+    const agentEntries = entries.filter(e => e.agent === agent.name)
+    const latestEntry = agentEntries.sort((a, b) => b.ts.localeCompare(a.ts))[0]
+
+    if (!latestEntry) {
+      staleAgents.push(agent.name)
+      console.log(chalk.yellow(`  ⚠ ${agent.name}: No training data (never run)`))
+    } else {
+      const lastRun = new Date(latestEntry.ts).getTime()
+      if (now - lastRun > staleThreshold) {
+        staleAgents.push(agent.name)
+        const hoursAgo = Math.floor((now - lastRun) / (60 * 60 * 1000))
+        console.log(chalk.yellow(`  ⚠ ${agent.name}: Stale (${hoursAgo}h since last training)`))
+      } else {
+        activeAgents.push(agent.name)
+        console.log(chalk.green(`  ✓ ${agent.name}: Recent training data`))
+      }
+    }
+  }
+
+  console.log()
+
+  // Check for scope:impact events that should trigger downstream agents
+  const impactTriggered = orchestrator.getImpactTriggeredAgents()
+  if (impactTriggered.length > 0) {
+    console.log(chalk.cyan("  Scope impact events detected:"))
+    for (const { agent, impactPattern } of impactTriggered) {
+      console.log(chalk.gray(`    • ${agent.name} should react to: ${impactPattern}`))
+    }
+    console.log()
+  }
+
+  // Schedule next agent using meta-orchestrator
+  const decision = orchestrator.scheduleNext()
+  if (!decision) {
+    console.log(chalk.yellow("  No agent available to schedule."))
+    return
+  }
+
+  console.log(chalk.bold(`  Scheduled: ${decision.agent.name}`))
+  console.log(chalk.gray(`  Reason: ${decision.reason}`))
+  if (decision.impactPattern) {
+    console.log(chalk.gray(`  Triggered by: ${decision.impactPattern}`))
+  }
+  if (decision.emaReward !== undefined) {
+    console.log(chalk.gray(`  EMA Reward: ${decision.emaReward.toFixed(4)}`))
+  }
+  console.log()
+
+  // Run autoresearch for stale agents
+  if (staleAgents.length > 0) {
+    console.log(chalk.cyan(`  Running autoresearch for ${staleAgents.length} stale agent(s)...\n`))
+
+    for (const agentName of staleAgents) {
+      console.log(chalk.bold(`\n  ── ${agentName} ${"─".repeat(45)}\n`))
+      await agentRun(projectRoot, agentName, 3) // 3 rounds per stale agent
+    }
+  }
+
+  // Post summary event
+  await postHubEvent(projectRoot, "peter:daily-complete", {
+    total_agents: agents.length,
+    stale_agents: staleAgents,
+    active_agents: activeAgents,
+    impact_triggered: impactTriggered.map(t => t.agent.name),
+    scheduled: decision.agent.name,
+    reason: decision.reason,
+  })
+
+  console.log(chalk.green("\n  Daily loop complete.\n"))
+}
+
 async function agentSwarm(projectRoot: string, rounds: number): Promise<void> {
   const { MetaOrchestrator } = await import("../lib/meta-orchestrator.js")
 
@@ -1641,6 +1744,17 @@ export async function peterCommand(
       break
     }
 
+    case "daily": {
+      await runDailyLoop(projectRoot)
+      break
+    }
+
+    case "nightly": {
+      // Alias for daily
+      await runDailyLoop(projectRoot)
+      break
+    }
+
     default: {
       console.log(chalk.bold("\n  Peter Parker - Model-Routed Agent Orchestrator\n"))
       console.log(chalk.gray("  Commands:"))
@@ -1656,6 +1770,7 @@ export async function peterCommand(
       console.log("    jfl peter telemetry                       Run telemetry agent (platform digest)")
       console.log("    jfl peter sentinel                        Run Sentinel nightly review")
       console.log("    jfl peter metrics                         Show current platform metrics")
+      console.log("    jfl peter daily                           Daily RL loop (check stale agents, schedule next)")
       console.log()
       console.log(chalk.bold("  Scoped Agents:\n"))
       console.log("    jfl peter agent create                    Interactive agent creation")

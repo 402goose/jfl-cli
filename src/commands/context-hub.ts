@@ -33,6 +33,8 @@ import type { MAPEventType } from "../types/map.js"
 import { telemetry } from "../lib/telemetry.js"
 import { transformHookPayload } from "../lib/hook-transformer.js"
 import type { HookPayload } from "../types/map.js"
+import { loadAllAgentConfigs } from "../lib/agent-config.js"
+import { TrainingBuffer } from "../lib/training-buffer.js"
 
 const PID_FILE = ".jfl/context-hub.pid"
 const LOG_FILE = ".jfl/logs/context-hub.log"
@@ -1626,6 +1628,51 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus,
               consumes: service.context_scope?.consumes,
             })
           }
+        }
+
+        // Add RL agent nodes from .jfl/agents/*.toml configs
+        try {
+          const rlAgentConfigs = loadAllAgentConfigs(projectRoot)
+          const trainingBuffer = new TrainingBuffer(projectRoot)
+          const trainingEntries = trainingBuffer.read()
+
+          for (const config of rlAgentConfigs) {
+            const nodeId = `rl-agent-${config.name}`
+
+            // Skip if node already exists (e.g., matches a registered service name)
+            if (nodes.find(n => n.id === nodeId || n.id === config.name)) {
+              continue
+            }
+
+            // Check for recent training data (within last 24h)
+            const now = Date.now()
+            const recentWindow = 24 * 60 * 60 * 1000
+            const recentEntries = trainingEntries.filter(e => {
+              if (e.agent !== config.name) return false
+              const ts = new Date(e.ts).getTime()
+              return now - ts < recentWindow
+            })
+
+            const status = recentEntries.length > 0 ? "running" : "idle"
+
+            // Convert name to proper label (e.g., "cli-speed" -> "Cli Speed")
+            const label = config.name
+              .split("-")
+              .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1))
+              .join(" ")
+
+            nodes.push({
+              id: nodeId,
+              label,
+              type: "agent",
+              status,
+              eventCount: recentEntries.length,
+              produces: config.context_scope?.produces,
+              consumes: config.context_scope?.consumes,
+            })
+          }
+        } catch (err: any) {
+          // Non-fatal: RL agents are optional
         }
 
         // For portfolio mode, fetch child GTM services and their registered services
