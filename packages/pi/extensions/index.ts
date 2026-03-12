@@ -26,6 +26,7 @@ import { initStratusBridge, onAgentStart as onStratusStart, onAgentEnd as onStra
 import { setupPeterParker } from "./peter-parker.js"
 import { setupPortfolioBridge, onPortfolioShutdown } from "./portfolio-bridge.js"
 import { setupAgentGrid } from "./agent-grid.js"
+import { initAgentNames } from "./agent-names.js"
 import { setupFooter } from "./footer.js"
 import { setupShortcuts } from "./shortcuts.js"
 import { setupNotifications } from "./notifications.js"
@@ -296,6 +297,7 @@ export default async function jflExtension(pi: any): Promise<void> {
     setupSynopsisTool(ctx)
 
     initStratusBridge(projectCwd)
+    initAgentNames(projectCwd)
     await setupPeterParker(ctx, config)
     await setupPortfolioBridge(ctx, config)
     setupAgentGrid(ctx)

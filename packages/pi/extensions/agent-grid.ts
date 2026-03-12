@@ -12,6 +12,7 @@ import { existsSync, readdirSync, statSync } from "fs"
 import { join } from "path"
 import type { PiContext, PiTheme } from "./types.js"
 import { hubUrl, authToken } from "./map-bridge.js"
+import { resolveDisplayName, formatAgentLabel } from "./agent-names.js"
 
 interface AgentHealth {
   name: string
@@ -63,7 +64,7 @@ function getLocalSessions(root: string): Array<{ name: string; age: number }> {
       const stat = statSync(join(journalDir, f))
       const age = now - stat.mtimeMs
       if (age < 600000) {
-        sessions.push({ name: f.replace(".jsonl", "").replace("session-", "").slice(0, 24), age })
+        sessions.push({ name: resolveDisplayName(f.replace(".jsonl", "").replace("session-", "")), age })
       }
     } catch {}
   }
@@ -130,8 +131,9 @@ export function setupAgentGrid(ctx: PiContext): void {
                   : theme.fg("dim", "○")
 
                 const onlineStr = isOnline ? "" : theme.fg("error", " (offline)")
+                const displayName = resolveDisplayName(a.name)
 
-                lines.push(`  ${statusIcon} ${theme.fg("text", a.name.padEnd(20))} ${theme.fg("muted", a.role ?? "")}${onlineStr}`)
+                lines.push(`  ${statusIcon} ${theme.fg("text", displayName.padEnd(20))} ${theme.fg("muted", a.role ?? "")}${onlineStr}`)
 
                 if (a.task) {
                   lines.push(`    ${theme.fg("dim", a.task.slice(0, w - 8))}`)

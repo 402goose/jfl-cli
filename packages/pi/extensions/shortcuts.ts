@@ -12,6 +12,7 @@ import { join } from "path"
 import { execSync } from "child_process"
 import type { PiContext, PiTheme, JflConfig } from "./types.js"
 import { getCurrentBranch } from "./session.js"
+import { resolveDisplayName } from "./agent-names.js"
 
 let projectRoot = ""
 
@@ -172,7 +173,7 @@ async function showGridOverlay(ctx: PiContext): Promise<void> {
           const stat = require("fs").statSync(join(journalDir, f))
           const age = now - stat.mtimeMs
           if (age < 600000) {
-            const name = f.replace(".jsonl", "").replace("session-", "").slice(0, 20)
+            const name = resolveDisplayName(f.replace(".jsonl", "").replace("session-", ""))
             agents.push({
               name,
               status: age < 120000 ? "active" : "idle",

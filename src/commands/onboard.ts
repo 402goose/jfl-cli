@@ -810,7 +810,7 @@ export async function onboardCommand(
     `  ${chalk.gray(`${servicePath}/.jfl/`)}\n` +
     `  ${chalk.gray(`${servicePath}/.claude/`)}\n` +
     `  ${chalk.gray(`${servicePath}/knowledge/`)}\n` +
-    `  ${chalk.gray(`${gtmPath}/.claude/agents/service-${metadata.name}.md`)}\n` +
+    `  ${chalk.gray(`${gtmPath}/.claude/agents/${metadata.name}.md`)}\n` +
     `  ${chalk.gray(`${gtmPath}/.claude/skills/${metadata.name}/`)}\n\n` +
     `Next steps:\n` +
     `  1. Fill in service knowledge docs:\n` +

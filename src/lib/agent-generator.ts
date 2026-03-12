@@ -132,7 +132,7 @@ No other services registered yet. When services are onboarded, you'll be able to
     const peerTable = peers
       .map((p: any) => {
         const whenToUse = getWhenToUseForType(p.type)
-        return `| @peer-service-${p.name} | ${p.type} | ${whenToUse} |`
+        return `| @${p.name} | ${p.type} | ${whenToUse} |`
       })
       .join("\n")
 
@@ -148,15 +148,15 @@ ${peerTable}
 
 **Direct @-mention (preferred):**
 \`\`\`
-@peer-service-formation can you generate a landing page?
-@peer-service-context-hub what changed system-wide in last 24h?
+@formation can you generate a landing page?
+@context-hub what changed system-wide in last 24h?
 \`\`\`
 
 **MCP fallback (if agent spawning unavailable):**
 \`\`\`
-service_peer_call("peer-service-formation", "generate", {...})
+service_peer_call("formation", "generate", {...})
 service_peer_list()  # List all peers
-service_peer_status("peer-service-formation")  # Check status
+service_peer_status("formation")  # Check status
 \`\`\`
 
 ### When to Collaborate vs Handle Alone
@@ -207,7 +207,7 @@ export function generateAgentDefinition(
   servicePath: string,
   gtmPath: string
 ): AgentDefinition {
-  const name = `service-${metadata.name}`
+  const name = metadata.name
   const color = getAgentColor(metadata.type)
   const capabilities = generateCapabilities(metadata, servicePath)
   const safetyGates = generateSafetyGates(metadata)
@@ -246,20 +246,27 @@ export function writeAgentDefinition(
 
   const agentFile = join(agentsDir, `${agentDef.name}.md`)
 
+  const label = agentDef.name
+    .split("-")
+    .map((w: string) => w.length <= 3 && w === w.toUpperCase() ? w : w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ")
+
   const content = `---
 name: ${agentDef.name}
+label: ${label}
 version: 1.0.0
 color: ${agentDef.color}
+type: service
 description: ${agentDef.description}
 ---
 
-# Service Agent: ${agentDef.name}
+# ${label}
 
 **Working Directory:** \`${agentDef.workingDirectory}\`
 
 ## Your Role
 
-You are the service agent for **${agentDef.name}**. You manage this service's codebase, operations, and integration with the GTM ecosystem.
+You are the service agent for **${label}**. You manage this service's codebase, operations, and integration with the GTM ecosystem.
 
 ## Knowledge Base
 
@@ -333,7 +340,7 @@ You can be invoked via:
 
 When spawned, the GTM agent may provide context from GTM knowledge docs. Use this to align with overall strategy.
 
-${generatePeerServicesSection(agentDef.name.replace("service-", ""), gtmPath)}
+${generatePeerServicesSection(agentDef.name, gtmPath)}
 
 ## Example Requests
 

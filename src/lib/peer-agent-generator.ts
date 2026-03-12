@@ -12,7 +12,7 @@ import { join } from "path"
 import { readFileSync } from "fs"
 
 export interface PeerAgentDefinition {
-  name: string // peer-service-{name}
+  name: string // service name (e.g. "stratus-api")
   serviceName: string // Actual service name
   serviceType: string // api, web, worker, etc.
   servicePath: string // Absolute path
@@ -54,9 +54,8 @@ export function generatePeerAgentDefinition(
   currentServicePath: string,
   gtmPath: string
 ): PeerAgentDefinition {
-  const name = `peer-service-${peerService.name}`
+  const name = peerService.name
 
-  // Generate capability-based triggers
   const capabilities = generatePeerCapabilities(peerService.type)
 
   return {
@@ -137,17 +136,23 @@ export function writePeerAgentDefinition(
 
   const agentFile = join(agentsDir, `${agentDef.name}.md`)
 
+  const label = agentDef.serviceName
+    .split("-")
+    .map((w: string) => w.length <= 3 && w === w.toUpperCase() ? w : w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ")
+
   const whenToUse = generateWhenToUse(agentDef.serviceType, agentDef.serviceName)
 
   const content = `---
 name: ${agentDef.name}
+label: ${label}
 version: 1.0.0
 color: blue
 description: ${agentDef.description}
 type: peer-service
 ---
 
-# Peer Service: ${agentDef.serviceName}
+# ${label}
 
 **Service Type:** ${agentDef.serviceType}
 **Service Path:** \`${agentDef.servicePath}\`
@@ -221,7 +226,7 @@ When you @-mention this peer:
 function generateWhenToUse(serviceType: string, serviceName: string): string {
   switch (serviceType) {
     case "api":
-      return `Use \`@peer-service-${serviceName}\` when you need to:
+      return `Use \`@${serviceName}\` when you need to:
 - Check API endpoint status or health
 - Understand API routes and handlers
 - Coordinate API changes that affect your service
@@ -229,7 +234,7 @@ function generateWhenToUse(serviceType: string, serviceName: string): string {
 - Verify API schema or contracts`
 
     case "web":
-      return `Use \`@peer-service-${serviceName}\` when you need to:
+      return `Use \`@${serviceName}\` when you need to:
 - Check frontend deployment status
 - Understand UI components or flows
 - Coordinate UI changes with backend
@@ -237,7 +242,7 @@ function generateWhenToUse(serviceType: string, serviceName: string): string {
 - Verify frontend build status`
 
     case "worker":
-      return `Use \`@peer-service-${serviceName}\` when you need to:
+      return `Use \`@${serviceName}\` when you need to:
 - Check background job status
 - Understand job queue state
 - Coordinate async operations
@@ -245,7 +250,7 @@ function generateWhenToUse(serviceType: string, serviceName: string): string {
 - Verify job processing results`
 
     case "library":
-      return `Use \`@peer-service-${serviceName}\` when you need to:
+      return `Use \`@${serviceName}\` when you need to:
 - Understand library APIs and interfaces
 - Work on plugin or package features
 - Run library tests and builds
@@ -253,7 +258,7 @@ function generateWhenToUse(serviceType: string, serviceName: string): string {
 - Debug integration issues`
 
     case "infrastructure":
-      return `Use \`@peer-service-${serviceName}\` when you need to:
+      return `Use \`@${serviceName}\` when you need to:
 - Check system health across services
 - Get aggregated metrics or logs
 - Coordinate service deployments
@@ -261,7 +266,7 @@ function generateWhenToUse(serviceType: string, serviceName: string): string {
 - Verify connectivity or resources`
 
     case "container":
-      return `Use \`@peer-service-${serviceName}\` when you need to:
+      return `Use \`@${serviceName}\` when you need to:
 - Check container status
 - Understand Docker configuration
 - Coordinate container operations
@@ -269,7 +274,7 @@ function generateWhenToUse(serviceType: string, serviceName: string): string {
 - Get container logs or metrics`
 
     case "cli":
-      return `Use \`@peer-service-${serviceName}\` when you need to:
+      return `Use \`@${serviceName}\` when you need to:
 - Execute CLI commands
 - Automate workflows
 - Run scripts or tools
@@ -277,7 +282,7 @@ function generateWhenToUse(serviceType: string, serviceName: string): string {
 - Verify CLI functionality`
 
     default:
-      return `Use \`@peer-service-${serviceName}\` when you need to:
+      return `Use \`@${serviceName}\` when you need to:
 - Check service status
 - Understand service capabilities
 - Coordinate with this service
@@ -316,10 +321,21 @@ export function syncPeerAgents(
     mkdirSync(agentsDir, { recursive: true })
   }
 
-  // Get existing peer agent files
+  // Get existing peer agent files (check both old and new naming conventions)
   const existingPeerFiles = existsSync(agentsDir)
-    ? readdirSync(agentsDir).filter((f) => f.startsWith("peer-service-") && f.endsWith(".md"))
+    ? readdirSync(agentsDir).filter((f) => f.endsWith(".md") && !f.startsWith("_") && f !== "README.md")
     : []
+
+  // Read frontmatter to identify peer agent files (works with old and new naming)
+  const peerFileSet = new Set<string>()
+  for (const f of existingPeerFiles) {
+    try {
+      const content = readFileSync(join(agentsDir, f), "utf-8")
+      if (content.includes("type: peer-service") || f.startsWith("peer-service-")) {
+        peerFileSet.add(f)
+      }
+    } catch {}
+  }
 
   // Generate/update peer agent files for all registered services
   const currentPeerFiles = new Set<string>()
@@ -329,22 +345,29 @@ export function syncPeerAgents(
     const fileName = `${agentDef.name}.md`
     currentPeerFiles.add(fileName)
 
+    // Remove old-style file if it exists (migration)
+    const oldFileName = `peer-service-${agentDef.name}.md`
+    const oldFilePath = join(agentsDir, oldFileName)
+    if (existsSync(oldFilePath)) {
+      unlinkSync(oldFilePath)
+      peerFileSet.delete(oldFileName)
+    }
+
     const filePath = join(agentsDir, fileName)
 
     if (existsSync(filePath)) {
-      // Update existing
       writePeerAgentDefinition(agentDef, servicePath)
       stats.updated++
     } else {
-      // Add new
       writePeerAgentDefinition(agentDef, servicePath)
       stats.added++
     }
   }
 
   // Remove stale peer agent files (services that were unregistered)
-  for (const existingFile of existingPeerFiles) {
-    if (!currentPeerFiles.has(existingFile)) {
+  for (const existingFile of peerFileSet) {
+    const nameWithoutExt = existingFile.replace(/\.md$/, "").replace(/^peer-service-/, "")
+    if (!currentPeerFiles.has(existingFile) && !currentPeerFiles.has(`${nameWithoutExt}.md`)) {
       unlinkSync(join(agentsDir, existingFile))
       stats.removed++
     }
