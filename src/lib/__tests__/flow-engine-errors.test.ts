@@ -181,6 +181,8 @@ flows:
       await engine.start()
 
       // Trigger 250 events to exceed the 200 limit
+      // Note: capturedCallback returns a promise since handleEvent is async
+      const promises: Promise<void>[] = []
       for (let i = 0; i < 250; i++) {
         const event: MAPEvent = {
           id: `event-${i}`,
@@ -189,8 +191,12 @@ flows:
           source: 'test',
           data: { index: i },
         }
-        capturedCallback?.(event)
+        const result = capturedCallback?.(event)
+        if (result) promises.push(result)
       }
+
+      // Wait for all async handlers to complete
+      await Promise.all(promises)
 
       const executions = engine.getExecutions()
       expect(executions.length).toBe(200)

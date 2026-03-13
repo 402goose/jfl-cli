@@ -19,9 +19,36 @@ let jflVersion: string | undefined
 function getJflVersion(): string {
   if (jflVersion) return jflVersion
   try {
-    const pkgPath = fileURLToPath(new URL('../../package.json', import.meta.url))
-    const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'))
-    jflVersion = pkg.version || 'unknown'
+    // Try multiple strategies to find package.json
+    let pkgPath: string | undefined
+
+    // Strategy 1: CommonJS __dirname (Jest test environment)
+    if (typeof __dirname !== 'undefined') {
+      pkgPath = join(__dirname, '../../package.json')
+    }
+
+    // Strategy 2: process.cwd() fallback
+    if (!pkgPath || !existsSync(pkgPath)) {
+      pkgPath = join(process.cwd(), 'package.json')
+    }
+
+    // Strategy 3: ESM import.meta.url (production) - wrapped to avoid parse errors
+    if (!existsSync(pkgPath)) {
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-implied-eval
+        const metaUrl = new Function('return import.meta.url')()
+        pkgPath = fileURLToPath(new URL('../../package.json', metaUrl))
+      } catch {
+        // import.meta not available
+      }
+    }
+
+    if (pkgPath && existsSync(pkgPath)) {
+      const pkg = JSON.parse(readFileSync(pkgPath, 'utf-8'))
+      jflVersion = pkg.version || 'unknown'
+    } else {
+      jflVersion = 'unknown'
+    }
   } catch {
     jflVersion = 'unknown'
   }
