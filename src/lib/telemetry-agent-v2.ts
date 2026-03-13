@@ -489,40 +489,212 @@ consumes = []
   }
 
   /**
-   * Analyze all local data sources for product improvement insights
+   * Analyze ALL data sources — platform telemetry + local data — for product improvement insights
    */
-  async analyzeProduct(): Promise<{
+  async analyzeProduct(platformDigest?: PlatformDigest | null): Promise<{
     insights: ProductInsight[]
     claudeMdUpdates: string[]
     staleDocs: string[]
     trainingGaps: string[]
+    platformMetrics: Record<string, unknown> | null
   }> {
     const insights: ProductInsight[] = []
     const claudeMdUpdates: string[] = []
     const staleDocs: string[] = []
     const trainingGaps: string[] = []
 
-    // 1. Read MAP events — what's actually happening in the system
+    // ══════════════════════════════════════════════════════════════════
+    // PLATFORM TELEMETRY — the real shit from the database
+    // ══════════════════════════════════════════════════════════════════
+
+    // Fetch digests if not provided
+    const digest24h = platformDigest || await this.fetchDigest(24)
+    const digest7d = await this.fetchDigest(168)
+
+    let platformMetrics: Record<string, unknown> | null = null
+
+    if (digest24h) {
+      platformMetrics = {}
+
+      // ── Command performance analysis ──
+      const slowCommands = digest24h.commands.filter(c => c.p90DurationMs > 1000)
+      if (slowCommands.length > 0) {
+        insights.push({
+          type: 'performance', severity: 'warning',
+          title: `${slowCommands.length} slow commands (p90 > 1s)`,
+          detail: slowCommands.map(c => `${c.command}: p90=${c.p90DurationMs}ms, avg=${c.avgDurationMs}ms (${c.count} calls)`).join('; ')
+        })
+      }
+
+      const failingCommands = digest24h.commands.filter(c => c.successRate < 0.9 && c.count >= 3)
+      if (failingCommands.length > 0) {
+        insights.push({
+          type: 'performance', severity: 'critical',
+          title: `${failingCommands.length} unreliable commands (<90% success)`,
+          detail: failingCommands.map(c => `${c.command}: ${(c.successRate * 100).toFixed(0)}% success, ${c.errorCount} errors out of ${c.count}`).join('; ')
+        })
+      }
+
+      // ── Which command is used most? That's what to optimize first ──
+      const sorted = [...digest24h.commands].sort((a, b) => b.count - a.count)
+      if (sorted.length > 0) {
+        platformMetrics.mostUsedCommand = sorted[0].command
+        platformMetrics.mostUsedCount = sorted[0].count
+        platformMetrics.leastUsedCommand = sorted[sorted.length - 1].command
+        platformMetrics.leastUsedCount = sorted[sorted.length - 1].count
+      }
+
+      // ── Error cluster analysis ──
+      if (digest24h.errorClusters.length > 0) {
+        const growingErrors = digest24h.errorClusters.filter(e => e.count >= 3)
+        if (growingErrors.length > 0) {
+          insights.push({
+            type: 'system', severity: 'critical',
+            title: `${growingErrors.length} recurring error clusters`,
+            detail: growingErrors.map(e => `[${e.errorType}] "${e.message}" — ${e.count}x across ${e.affectedInstalls} install(s), last seen ${e.lastSeen}`).join('\n')
+          })
+        }
+        platformMetrics.errorClusters = digest24h.errorClusters.length
+        platformMetrics.totalErrors = digest24h.totalErrors
+      }
+
+      // ── Cost analysis ──
+      if (digest24h.modelCosts.length > 0) {
+        const totalCost = digest24h.totalCostUsd
+        const costPerSession = digest24h.costPerSessionUsd
+        platformMetrics.totalCost24h = totalCost
+        platformMetrics.costPerSession = costPerSession
+
+        // Which model burns the most?
+        const sortedCosts = [...digest24h.modelCosts].sort((a, b) => b.estimatedCostUsd - a.estimatedCostUsd)
+        const topCostModel = sortedCosts[0]
+        if (topCostModel && topCostModel.estimatedCostUsd > 0.10) {
+          insights.push({
+            type: 'performance', severity: 'info',
+            title: `Top cost: ${topCostModel.model} ($${topCostModel.estimatedCostUsd.toFixed(4)})`,
+            detail: `${topCostModel.callCount} calls, ${topCostModel.totalTokens} tokens. Total 24h cost: $${totalCost.toFixed(4)} across ${digest24h.totalSessions} sessions ($${costPerSession.toFixed(4)}/session).`
+          })
+        }
+
+        // Cost trend: compare 24h vs 7d average
+        if (digest7d && digest7d.totalCostUsd > 0) {
+          const dailyAvg7d = digest7d.totalCostUsd / 7
+          const costTrend = totalCost / dailyAvg7d
+          if (costTrend > 1.5) {
+            insights.push({
+              type: 'performance', severity: 'warning',
+              title: `Cost spike: ${(costTrend * 100).toFixed(0)}% of 7-day daily average`,
+              detail: `24h cost: $${totalCost.toFixed(4)} vs 7d daily avg: $${dailyAvg7d.toFixed(4)}. Check for runaway sessions or expensive model upgrades.`
+            })
+          }
+          platformMetrics.costTrend = costTrend
+        }
+      }
+
+      // ── Session health ──
+      if (digest24h.sessionHealth.crashRate > 0.05) {
+        insights.push({
+          type: 'system', severity: 'critical',
+          title: `Session crash rate: ${(digest24h.sessionHealth.crashRate * 100).toFixed(1)}%`,
+          detail: `${digest24h.sessionHealth.crashed} crashed out of ${digest24h.sessionHealth.started} started. Avg session duration: ${digest24h.sessionHealth.avgDurationS.toFixed(0)}s.`
+        })
+      }
+      platformMetrics.sessionCrashRate = digest24h.sessionHealth.crashRate
+      platformMetrics.avgSessionDuration = digest24h.sessionHealth.avgDurationS
+
+      // ── Hub health ──
+      if (digest24h.hubHealth.crashes > 0) {
+        insights.push({
+          type: 'system', severity: 'warning',
+          title: `Hub crashed ${digest24h.hubHealth.crashes}x in 24h`,
+          detail: `${digest24h.hubHealth.starts} starts, ${digest24h.hubHealth.stops} stops, ${digest24h.hubHealth.crashes} crashes. MCP latency: avg=${digest24h.hubHealth.avgMcpLatencyMs}ms p90=${digest24h.hubHealth.p90McpLatencyMs}ms.`
+        })
+      }
+      if (digest24h.hubHealth.p90McpLatencyMs > 500) {
+        insights.push({
+          type: 'performance', severity: 'warning',
+          title: `MCP p90 latency: ${digest24h.hubHealth.p90McpLatencyMs}ms`,
+          detail: `Context hub MCP calls are slow. Avg: ${digest24h.hubHealth.avgMcpLatencyMs}ms, p90: ${digest24h.hubHealth.p90McpLatencyMs}ms, p99: ${digest24h.hubHealth.p99McpLatencyMs}ms.`
+        })
+      }
+
+      // ── Hook coverage ──
+      if (digest24h.hookStats.totalReceived > 0 && digest24h.hookStats.fileHotspots.length > 0) {
+        const hotFiles = digest24h.hookStats.fileHotspots.slice(0, 5)
+        platformMetrics.fileHotspots = hotFiles
+        insights.push({
+          type: 'product', severity: 'info',
+          title: `File hotspots (most edited)`,
+          detail: hotFiles.map(f => `${f.file}: ${f.edits} edits`).join(', ')
+        })
+      }
+
+      // ── Tool usage patterns ──
+      if (digest24h.toolStats.length > 0) {
+        const unusedTools = digest24h.toolStats.filter(t => t.callCount === 0)
+        const errorProneTools = digest24h.toolStats.filter(t => t.errorRate > 0.1 && t.callCount >= 5)
+        if (errorProneTools.length > 0) {
+          insights.push({
+            type: 'system', severity: 'warning',
+            title: `${errorProneTools.length} MCP tools with >10% error rate`,
+            detail: errorProneTools.map(t => `${t.toolName}: ${(t.errorRate * 100).toFixed(0)}% errors, ${t.callCount} calls`).join('; ')
+          })
+        }
+        platformMetrics.totalToolCalls = digest24h.toolStats.reduce((sum, t) => sum + t.callCount, 0)
+      }
+
+      // ── Flow health ──
+      if (digest24h.flowStats.completionRate < 0.8 && digest24h.flowStats.triggered >= 5) {
+        insights.push({
+          type: 'system', severity: 'warning',
+          title: `Flow completion rate: ${(digest24h.flowStats.completionRate * 100).toFixed(0)}%`,
+          detail: `${digest24h.flowStats.completed}/${digest24h.flowStats.triggered} flows completed. ${digest24h.flowStats.failed} failed.`
+        })
+      }
+
+      // ── Session cost outliers ──
+      if (digest24h.sessionCosts.length > 0) {
+        const avgCost = digest24h.totalCostUsd / digest24h.sessionCosts.length
+        const expensive = digest24h.sessionCosts.filter(s => s.estimatedCostUsd > avgCost * 3)
+        if (expensive.length > 0) {
+          insights.push({
+            type: 'performance', severity: 'info',
+            title: `${expensive.length} expensive sessions (>3x avg cost)`,
+            detail: expensive.map(s => `Session ${s.sessionId.slice(0, 8)}: $${s.estimatedCostUsd.toFixed(4)}, ${s.durationS}s, ${s.totalTokens} tokens`).join('; ')
+          })
+        }
+      }
+
+      platformMetrics.totalEvents24h = digest24h.totalEvents
+      platformMetrics.totalSessions24h = digest24h.totalSessions
+      platformMetrics.activeInstalls = digest24h.activeInstalls
+      platformMetrics.commandSuccessRate = digest24h.commandSuccessRate
+    }
+
+    // ══════════════════════════════════════════════════════════════════
+    // LOCAL DATA — journals, MAP events, training buffer, agent configs
+    // ══════════════════════════════════════════════════════════════════
+
+    // 1. Read MAP events
     const eventsPath = join(this.projectRoot, '.jfl', 'map-events.jsonl')
     let recentEvents: Array<{ type: string; source?: string; ts: string; data?: Record<string, unknown> }> = []
     if (existsSync(eventsPath)) {
-      const lines = readFileSync(eventsPath, 'utf-8').trim().split('\n').slice(-200) // last 200 events
+      const lines = readFileSync(eventsPath, 'utf-8').trim().split('\n').slice(-200)
       for (const line of lines) {
         try { recentEvents.push(JSON.parse(line)) } catch {}
       }
     }
 
-    // Event type distribution — what's the system doing?
     const eventTypes = new Map<string, number>()
     for (const e of recentEvents) {
       eventTypes.set(e.type, (eventTypes.get(e.type) || 0) + 1)
     }
 
-    // 2. Read journals — what sessions are producing
+    // 2. Read journals
     const journalDir = join(this.projectRoot, '.jfl', 'journal')
     let recentJournalEntries: Array<{ ts: string; type: string; title: string; summary: string; session?: string }> = []
     if (existsSync(journalDir)) {
-      const files = readdirSync(journalDir).filter(f => f.endsWith('.jsonl')).sort().slice(-5) // last 5 journal files
+      const files = readdirSync(journalDir).filter(f => f.endsWith('.jsonl')).sort().slice(-5)
       for (const f of files) {
         const lines = readFileSync(join(journalDir, f), 'utf-8').trim().split('\n')
         for (const line of lines) {
@@ -531,10 +703,11 @@ consumes = []
       }
     }
 
-    // 3. Training buffer analysis — how is RL learning?
+    // 3. Training buffer analysis
     const bufferPath = join(this.projectRoot, '.jfl', 'training-buffer.jsonl')
     let tupleCount = 0
     let improvedCount = 0
+    let tuplesWithDiffs = 0
     let agentDistribution = new Map<string, number>()
     if (existsSync(bufferPath)) {
       const lines = readFileSync(bufferPath, 'utf-8').trim().split('\n')
@@ -544,11 +717,12 @@ consumes = []
           const t = JSON.parse(line)
           agentDistribution.set(t.agent || 'unknown', (agentDistribution.get(t.agent || 'unknown') || 0) + 1)
           if (t.reward?.improved) improvedCount++
+          if (t.action?.code_diff) tuplesWithDiffs++
         } catch {}
       }
     }
 
-    // 4. Agent configs — what agents exist and their health
+    // 4. Agent configs
     const agentDir = join(this.projectRoot, '.jfl', 'agents')
     const agentConfigs: string[] = []
     if (existsSync(agentDir)) {
@@ -557,7 +731,7 @@ consumes = []
       }
     }
 
-    // 5. Product context — is it fresh?
+    // 5. Product context freshness
     const contextPath = join(this.projectRoot, '.jfl', 'product-context.md')
     let contextAge = 999
     if (existsSync(contextPath)) {
@@ -567,14 +741,14 @@ consumes = []
       }
     }
 
-    // 6. CLAUDE.md analysis — is it accurate?
+    // 6. CLAUDE.md drift detection
     const claudeMdPath = join(this.projectRoot, 'CLAUDE.md')
     let claudeMdContent = ''
     if (existsSync(claudeMdPath)) {
       claudeMdContent = readFileSync(claudeMdPath, 'utf-8')
     }
 
-    // 7. Dashboard telemetry from events
+    // 7. Dashboard telemetry from local events
     const dashboardEvents = recentEvents.filter(e => e.type.startsWith('dashboard:'))
     const pageViews = new Map<string, number>()
     for (const e of dashboardEvents) {
@@ -584,54 +758,51 @@ consumes = []
       }
     }
 
-    // ── Generate insights ──
+    // ══════════════════════════════════════════════════════════════════
+    // LOCAL INSIGHTS
+    // ══════════════════════════════════════════════════════════════════
 
-    // Insight: Training data health
+    // Training data health
     if (tupleCount < 100) {
       insights.push({ type: 'training', severity: 'warning', title: 'Low training data', detail: `Only ${tupleCount} tuples in buffer. Need 500+ for meaningful policy head training. Run: jfl eval mine --all` })
     }
     if (tupleCount > 100 && improvedCount === 0) {
       insights.push({ type: 'training', severity: 'critical', title: 'No improvements in recent tuples', detail: `Last 100 tuples have 0 improvements. Agents may be stuck or metrics are wrong.` })
     }
-    trainingGaps.push(`Buffer: ${tupleCount} tuples, ${improvedCount}/100 recent improved`)
+    if (tupleCount > 0 && tuplesWithDiffs === 0) {
+      insights.push({ type: 'training', severity: 'info', title: 'No code diffs in training data', detail: `${tupleCount} tuples but none have code_diff attached. Run autoresearch to generate diff-enriched tuples for code-policy training.` })
+    }
+    trainingGaps.push(`Buffer: ${tupleCount} tuples, ${improvedCount}/100 recent improved, ${tuplesWithDiffs} with code diffs`)
     trainingGaps.push(`Agent distribution: ${[...agentDistribution].map(([k,v]) => `${k}=${v}`).join(', ')}`)
 
-    // Insight: Product context freshness
     if (contextAge > 24) {
       insights.push({ type: 'product', severity: 'warning', title: 'Product context stale', detail: `Product context is ${contextAge}h old. Run: jfl peter synthesize` })
     }
 
-    // Insight: Event flow health
     if (recentEvents.length < 10) {
       insights.push({ type: 'system', severity: 'warning', title: 'Low event flow', detail: `Only ${recentEvents.length} recent events. Context hub may not be running.` })
     }
 
-    // Insight: Journal activity
     const recentJournals = recentJournalEntries.filter(j => {
       const age = Date.now() - new Date(j.ts).getTime()
-      return age < 24 * 60 * 60 * 1000 // last 24h
+      return age < 24 * 60 * 60 * 1000
     })
     if (recentJournals.length === 0) {
       insights.push({ type: 'product', severity: 'info', title: 'No journal entries in 24h', detail: 'No sessions have produced journal entries recently. System may be idle.' })
     }
 
-    // Insight: Agent coverage
     const agentsWithTuples = new Set([...agentDistribution.keys()])
     const agentsWithoutData = agentConfigs.filter(a => !agentsWithTuples.has(a))
     if (agentsWithoutData.length > 0) {
       insights.push({ type: 'training', severity: 'info', title: 'Agents with no training data', detail: `${agentsWithoutData.join(', ')} have never produced tuples. Run autoresearch for them.` })
     }
 
-    // Insight: Dashboard usage patterns
     if (pageViews.size > 0) {
       const sorted = [...pageViews].sort((a, b) => b[1] - a[1])
-      const mostUsed = sorted[0][0]
-      const leastUsed = sorted[sorted.length - 1][0]
-      insights.push({ type: 'product', severity: 'info', title: 'Dashboard usage', detail: `Most visited: ${mostUsed} (${sorted[0][1]}x). Least visited: ${leastUsed} (${sorted[sorted.length - 1][1]}x).` })
+      insights.push({ type: 'product', severity: 'info', title: 'Dashboard usage', detail: `Most visited: ${sorted[0][0]} (${sorted[0][1]}x). Least visited: ${sorted[sorted.length - 1][0]} (${sorted[sorted.length - 1][1]}x).` })
     }
 
-    // CLAUDE.md accuracy checks
-    // Check if registered services match what CLAUDE.md says
+    // CLAUDE.md drift
     const servicesPath = join(this.projectRoot, '.jfl', 'services.json')
     if (existsSync(servicesPath)) {
       try {
@@ -644,26 +815,28 @@ consumes = []
         }
       } catch {}
     }
-    // Check if agent configs match CLAUDE.md
     for (const agent of agentConfigs) {
       if (!claudeMdContent.includes(agent)) {
         claudeMdUpdates.push(`Agent "${agent}" exists in .jfl/agents/ but not mentioned in CLAUDE.md`)
       }
     }
 
-    // Stale docs check
+    // Stale docs
     const knowledgeDir = join(this.projectRoot, 'knowledge')
     if (existsSync(knowledgeDir)) {
-      const mdFiles = readdirSync(knowledgeDir).filter(f => f.endsWith('.md'))
-      for (const f of mdFiles) {
-        const stat = spawnSync('stat', ['-f', '%m', join(knowledgeDir, f)], { encoding: 'utf-8' })
-        if (stat.stdout) {
-          const age = Math.floor((Date.now() / 1000 - parseInt(stat.stdout.trim())) / (3600 * 24))
-          if (age > 14) {
-            staleDocs.push(`${f} (${age} days old)`)
+      const checkDir = (dir: string, prefix: string) => {
+        if (!existsSync(dir)) return
+        for (const f of readdirSync(dir)) {
+          const full = join(dir, f)
+          const stat2 = spawnSync('stat', ['-f', '%m', full], { encoding: 'utf-8' })
+          if (f.endsWith('.md') && stat2.stdout) {
+            const age = Math.floor((Date.now() / 1000 - parseInt(stat2.stdout.trim())) / (3600 * 24))
+            if (age > 14) staleDocs.push(`${prefix}${f} (${age} days old)`)
           }
         }
       }
+      checkDir(knowledgeDir, '')
+      checkDir(join(knowledgeDir, 'research'), 'research/')
     }
 
     // Write insights to journal
@@ -676,9 +849,9 @@ consumes = []
           const entry = {
             v: 2, ts: new Date().toISOString(), session: 'telemetry-agent',
             type: 'discovery', status: 'complete',
-            title: `Product analysis: ${insights.length} insights`,
+            title: `Product analysis: ${insights.length} insights (${insights.filter(i => i.severity === 'critical').length} critical)`,
             summary: insights.map(i => `[${i.severity}] ${i.title}`).join('; '),
-            detail: JSON.stringify({ insights, claudeMdUpdates, staleDocs, trainingGaps }),
+            detail: JSON.stringify({ insights, claudeMdUpdates, staleDocs, trainingGaps, platformMetrics }),
           }
           appendFileSync(join(journalPath2, latest), '\n' + JSON.stringify(entry))
         }
@@ -688,15 +861,19 @@ consumes = []
     // Emit event
     this.emitEvent('telemetry:product-analysis', {
       insightCount: insights.length,
+      criticalCount: insights.filter(i => i.severity === 'critical').length,
+      warningCount: insights.filter(i => i.severity === 'warning').length,
       claudeMdUpdates: claudeMdUpdates.length,
       staleDocs: staleDocs.length,
       trainingGaps: trainingGaps.length,
       tupleCount,
+      tuplesWithDiffs,
       improvedRate: tupleCount > 0 ? (improvedCount / Math.min(100, tupleCount)) : 0,
       contextAgeH: contextAge,
+      hasPlatformData: !!digest24h,
     }, 'telemetry-agent-v2')
 
-    return { insights, claudeMdUpdates, staleDocs, trainingGaps }
+    return { insights, claudeMdUpdates, staleDocs, trainingGaps, platformMetrics }
   }
 
   /**
@@ -723,7 +900,7 @@ consumes = []
     if (!digest24h) {
       // Even without platform digest, run local product analysis
       let localAnalysis = null
-      try { localAnalysis = await this.analyzeProduct() } catch {}
+      try { localAnalysis = await this.analyzeProduct(null) } catch {}
       return {
         digest24h: null,
         digest7d: null,
@@ -790,10 +967,10 @@ consumes = []
       }, 'telemetry-agent-v2')
     }
 
-    // Run product analysis (local data)
+    // Run product analysis (platform telemetry + local data)
     let productAnalysis: Awaited<ReturnType<typeof this.analyzeProduct>> | null = null
     try {
-      productAnalysis = await this.analyzeProduct()
+      productAnalysis = await this.analyzeProduct(digest24h)
       if (productAnalysis.insights.length > 0) {
         console.log(`  Product analysis: ${productAnalysis.insights.length} insights`)
         for (const insight of productAnalysis.insights) {
