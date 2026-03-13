@@ -44,3 +44,4 @@ coverage/
 *.pyc
 *.pyo
 __pycache__/
+.jfl/sessions/
