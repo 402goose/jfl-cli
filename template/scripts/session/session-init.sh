@@ -200,8 +200,10 @@ if [[ -d "$WORKTREES_DIR" ]]; then
 fi
 
 # ==============================================================================
-# Step 2.9: Check for concurrent sessions via jfl-services
+# Step 2.9: Check for concurrent sessions via lock registry
 # ==============================================================================
+
+LOCK_SCRIPT="$SCRIPT_DIR/session-lock.sh"
 
 # Generate session details first
 user=$(git config user.name 2>/dev/null | tr ' ' '-' | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-' || echo "user")
@@ -217,41 +219,41 @@ if [[ -z "$working_branch" ]]; then
     working_branch=$(git branch --show-current)
 fi
 
-# Check for concurrent sessions via jfl-services API
-use_worktree=false
-api_response=""
-if command -v curl >/dev/null 2>&1; then
-    api_response=$(curl -s -X GET "http://localhost:3401/sessions/active?projectPath=$(pwd)" 2>/dev/null || echo "")
-
-    if [[ -n "$api_response" ]] && echo "$api_response" | jq -e '.count' >/dev/null 2>&1; then
-        session_count=$(echo "$api_response" | jq -r '.count // 0')
-
-        if [[ $session_count -gt 0 ]]; then
-            use_worktree=true
-            echo -e "${YELLOW}→${NC}  Multiple sessions detected ($session_count active) - using worktree for isolation"
-        else
-            echo -e "${GREEN}→${NC}  Single session - working directly on branch $working_branch"
-        fi
-    else
-        # API unavailable - fall back to local detection
-        echo -e "${YELLOW}→${NC}  jfl-services unavailable - checking locally..."
-        local_sessions=$(ps aux | grep -c "claude.*$(pwd)" 2>/dev/null || echo "1")
-        if [[ $local_sessions -gt 2 ]]; then
-            use_worktree=true
-            echo -e "${YELLOW}→${NC}  Multiple processes detected - using worktree for isolation"
-        fi
+# Clean stale sessions first
+if [[ -x "$LOCK_SCRIPT" ]]; then
+    cleaned=$("$LOCK_SCRIPT" clean 2>/dev/null | grep -o '[0-9]*' || echo "0")
+    if [[ "$cleaned" -gt 0 ]]; then
+        echo -e "${YELLOW}→${NC}  Cleaned $cleaned stale session lock(s)"
     fi
-else
-    # No curl - assume single session
-    echo -e "${GREEN}→${NC}  Working directly on branch $working_branch"
 fi
 
-# Register this session with jfl-services
-if command -v curl >/dev/null 2>&1; then
-    curl -s -X POST "http://localhost:3401/sessions/start" \
-        -H "Content-Type: application/json" \
-        -d "{\"id\":\"$session_name\",\"projectPath\":\"$(pwd)\",\"branch\":\"$working_branch\",\"user\":\"$user\",\"pid\":$$,\"worktree\":\"$use_worktree\"}" \
-        >/dev/null 2>&1 || true
+# Check for concurrent sessions via lock registry (no external service needed)
+use_worktree=false
+if [[ -x "$LOCK_SCRIPT" ]]; then
+    session_count=$("$LOCK_SCRIPT" count 2>/dev/null || echo "0")
+
+    if [[ $session_count -gt 0 ]]; then
+        use_worktree=true
+        echo -e "${YELLOW}→${NC}  $session_count active session(s) detected — using worktree for isolation"
+        # Show who's active
+        "$LOCK_SCRIPT" active 2>/dev/null | python3 -c "
+import sys, json
+try:
+    sessions = json.load(sys.stdin)
+    for s in sessions:
+        print(f'     • {s[\"id\"]} (branch: {s[\"branch\"]}, pid: {s[\"pid\"]})')
+except: pass
+" 2>/dev/null || true
+    else
+        echo -e "${GREEN}→${NC}  Single session — working directly on branch $working_branch"
+    fi
+else
+    echo -e "${YELLOW}→${NC}  session-lock.sh not found — assuming single session"
+fi
+
+# Register this session in the lock registry
+if [[ -x "$LOCK_SCRIPT" ]]; then
+    "$LOCK_SCRIPT" register "$session_name" "$working_branch" >/dev/null 2>&1 || true
 fi
 
 # ==============================================================================
@@ -305,6 +307,20 @@ if [[ "$use_worktree" == "true" ]]; then
         echo "$session_name" > "$REPO_DIR/.jfl/current-session-branch.txt"
         echo "$session_name" > "$worktree_path/.jfl/current-session-branch.txt"
 
+        # Update lock registry with worktree path
+        if [[ -x "$LOCK_SCRIPT" ]]; then
+            "$LOCK_SCRIPT" register "$session_name" "$session_name" "$worktree_path" >/dev/null 2>&1 || true
+        fi
+
+        # Start heartbeat in background (touch lock file every 30s)
+        if [[ -x "$LOCK_SCRIPT" ]]; then
+            (while true; do "$LOCK_SCRIPT" heartbeat "$session_name" >/dev/null 2>&1 || break; sleep 30; done) &
+            HEARTBEAT_PID=$!
+            echo "$HEARTBEAT_PID" > "$worktree_path/.jfl/heartbeat.pid"
+            disown "$HEARTBEAT_PID" 2>/dev/null || true
+            echo -e "${GREEN}✓${NC}  Heartbeat started (PID $HEARTBEAT_PID)"
+        fi
+
         echo ""
         echo -e "${GREEN}✓${NC}  Session ready in worktree: $worktree_path"
         echo ""
@@ -343,6 +359,15 @@ if [[ "$use_worktree" != "true" ]]; then
     # Save session info (no worktree path in direct mode)
     echo "direct" > "$REPO_DIR/.jfl/current-worktree.txt"
     echo "$session_name" > "$REPO_DIR/.jfl/current-session-branch.txt"
+
+    # Start heartbeat in background (touch lock file every 30s)
+    if [[ -x "$LOCK_SCRIPT" ]]; then
+        (while true; do "$LOCK_SCRIPT" heartbeat "$session_name" >/dev/null 2>&1 || break; sleep 30; done) &
+        HEARTBEAT_PID=$!
+        echo "$HEARTBEAT_PID" > "$REPO_DIR/.jfl/heartbeat.pid"
+        disown "$HEARTBEAT_PID" 2>/dev/null || true
+        echo -e "${GREEN}✓${NC}  Heartbeat started (PID $HEARTBEAT_PID)"
+    fi
 
     echo ""
     echo -e "${GREEN}✓${NC}  Session ready on branch: $session_name"
