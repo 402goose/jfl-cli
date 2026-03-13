@@ -415,88 +415,10 @@ export async function runRound(
 async function runClaudeCode(session: AgentSession, task: string): Promise<void> {
   const timeout = session.config.time_budget_seconds * 1000
 
-  // Read API key from .env files (check project root, then GTM root)
-  function readEnvKey(key: string): string {
-    for (const dir of [session.projectRoot, session.worktreePath, process.cwd()]) {
-      try {
-        const envPath = join(dir, ".env")
-        if (existsSync(envPath)) {
-          const content = readFileSync(envPath, "utf-8")
-          for (const line of content.split("\n")) {
-            const match = line.match(new RegExp(`^${key}=(.+)$`))
-            if (match) return match[1].trim().replace(/^["']|["']$/g, "")
-          }
-        }
-      } catch {}
-    }
-    return process.env[key] || ""
-  }
-
-  const apiKey = readEnvKey("ANTHROPIC_API_KEY")
-
-  // If we have an API key, use the Anthropic API directly (no claude CLI needed)
-  if (apiKey) {
-    console.log("  Using Anthropic API directly...")
-    const controller = new AbortController()
-    const timeoutId = setTimeout(() => controller.abort(), timeout)
-
-    try {
-      const systemPrompt = `You are a coding agent working in ${session.worktreePath}. Make changes to improve the codebase based on the task. Output ONLY the file changes as a series of shell commands (using cat, sed, or tee) that can be executed to apply your changes. No explanations, just executable commands.`
-
-      const response = await fetch("https://api.anthropic.com/v1/messages", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-api-key": apiKey,
-          "anthropic-version": "2023-06-01",
-        },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 8192,
-          system: systemPrompt,
-          messages: [{ role: "user", content: task }],
-        }),
-        signal: controller.signal,
-      })
-
-      clearTimeout(timeoutId)
-
-      if (!response.ok) {
-        const err = await response.text()
-        console.error(`  Anthropic API error: ${response.status} ${err.slice(0, 200)}`)
-        return
-      }
-
-      const data = await response.json() as any
-      const content = data.content?.[0]?.text || ""
-
-      // Execute the commands in the worktree
-      if (content.trim()) {
-        const { execSync } = await import("child_process")
-        try {
-          execSync(content, {
-            cwd: session.worktreePath,
-            timeout: 30000,
-            stdio: "inherit",
-            shell: "/bin/bash",
-          })
-        } catch (execErr: any) {
-          console.error(`  Change execution error: ${execErr.message?.slice(0, 200)}`)
-        }
-      }
-    } catch (err: any) {
-      clearTimeout(timeoutId)
-      if (err.name === "AbortError") {
-        console.error("  Change step timed out")
-      } else {
-        console.error(`  Change step error: ${err.message?.slice(0, 200)}`)
-      }
-    }
-    return
-  }
-
-  // Fallback: try claude CLI (works when OAuth is available, e.g. interactive sessions)
+  // Use claude CLI directly — relies on OAuth from macOS keychain
+  // Must run from a context with keychain access (terminal/tmux, NOT background daemon)
   return new Promise((resolve) => {
+    console.log("  Spawning claude CLI...")
     const child = spawn("claude", [
       "--dangerously-skip-permissions",
       "-p", task,
@@ -518,12 +440,14 @@ async function runClaudeCode(session: AgentSession, task: string): Promise<void>
       }, 5000)
     }, timeout)
 
-    child.on("error", () => {
+    child.on("error", (err) => {
+      console.error(`  Claude CLI error: ${err.message}`)
       clearTimeout(timeoutId)
       resolve()
     })
 
-    child.on("exit", () => {
+    child.on("exit", (code, signal) => {
+      console.error(`  Claude CLI exit: code=${code} signal=${signal}`)
       clearTimeout(timeoutId)
       resolve()
     })
