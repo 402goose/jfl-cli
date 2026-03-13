@@ -1739,7 +1739,7 @@ Your job: read the recent activity (journals, events, experiment results) and pr
 ${agentSummary}
 
 ## Recent Journal Entries (last 7 days)
-${journalEntries.slice(-30).join("\n")}
+${journalEntries.slice(-15).map(e => e.slice(0, 200)).join("\n")}
 
 ## Recent Events
 ${events.slice(-15).join("\n")}
@@ -1759,7 +1759,7 @@ Produce a concise product-context.md with these sections:
 Be concise. This document is consumed by agents, not humans. Skip fluff.`
 
   try {
-    const response = await stratus.reason(prompt, { maxTokens: 2000, temperature: 0.3 })
+    const response = await stratus.reason(prompt, { maxTokens: 1500, temperature: 0.3 })
     const synthesis = response.choices[0]?.message?.content || ""
 
     if (synthesis) {
