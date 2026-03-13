@@ -192,7 +192,7 @@ export function startSession(
 
   // Resolve target repo — agents can target a different service repo than the GTM root
   const repoRoot = config.target_repo
-    ? require("path").resolve(projectRoot, config.target_repo)
+    ? join(projectRoot, config.target_repo)
     : projectRoot
 
   // Fetch latest base branch
