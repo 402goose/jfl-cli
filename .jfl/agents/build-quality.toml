@@ -1,0 +1,30 @@
+# Build Quality Agent
+# Optimizes TypeScript type safety and test pass rate
+# quality_score = (1 / (1 + type_errors)) * test_pass_rate (higher is better)
+
+[agent]
+name = "build-quality"
+scope = "quality"
+metric = "quality_score"
+direction = "maximize"
+time_budget_seconds = 300
+
+[eval]
+# Eval script is READ-ONLY during a session
+script = "eval/build-quality.sh"
+data = "eval/fixtures/quality-baseline.jsonl"
+
+[constraints]
+files_in_scope = ["src/**/*.ts", "src/**/*.tsx"]
+files_readonly = ["eval/**", "node_modules/**", "dist/**"]
+max_file_changes = 15
+
+[policy]
+embedding_model = "stratus-x1ac-base-claude-sonnet-4-6"
+exploration_rate = 0.15
+decay_per_round = 0.02
+min_exploration = 0.05
+
+[context_scope]
+produces = ["code:quality-improved", "code:type-errors-fixed", "tests:coverage-improved"]
+consumes = ["code:refactored"]

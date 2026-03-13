@@ -1,0 +1,47 @@
+# JFL Developer Layout
+# Daily driver for IC developers working with agent teams
+name: jfl-dev
+
+before: jfl context-hub ensure
+
+rows:
+  - size: 70%
+    panes:
+      - title: "🧠 Pi Assistant"
+        command: jfl pi --mode dev-assist
+        size: 40%
+        focus: true
+        env:
+          JFL_IDE_MODE: dev
+          JFL_AGENT_ROLE: assistant
+
+      - title: "🔍 Search Agent"
+        command: jfl peter agent run search-quality --rounds 10
+        size: 30%
+        env:
+          JFL_IDE_MODE: dev
+
+      - title: "🧪 Test Agent"
+        command: jfl peter agent run test-coverage --rounds 10
+        size: 30%
+        env:
+          JFL_IDE_MODE: dev
+
+  - size: 30%
+    panes:
+      - title: "📡 Event Stream"
+        command: jfl context-hub events --follow --pattern "scope:*"
+        size: 40%
+
+      - title: "📊 Metrics"
+        command: watch -n 10 'jfl eval status --compact'
+        size: 30%
+
+      - title: "💻 Shell"
+        size: 30%
+
+theme:
+  accent: colour75
+  border: colour238
+  bg: colour235
+  fg: colour248

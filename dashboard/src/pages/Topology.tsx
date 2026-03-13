@@ -121,32 +121,115 @@ function statusColorHex(status: string): string {
 function createFallbackTopology(): { nodes: TopoNode[]; edges: TopoEdge[] } {
   const now = Date.now()
 
-  const defs = [
+  // System agents (center cluster)
+  const systemDefs = [
     { id: "telemetry-agent", label: "Telemetry Agent", type: "agent" as const, status: "running" as const, eventCount: 142, lastAction: "telemetry:insight emitted", lastTs: new Date(now - 45000).toISOString(), reward: [0.4, 0.5, 0.6, 0.55, 0.7, 0.65, 0.8] },
     { id: "peter-parker", label: "Peter Parker", type: "orchestrator" as const, status: "running" as const, eventCount: 89, lastAction: "task dispatched to builder", lastTs: new Date(now - 120000).toISOString(), reward: [0.3, 0.4, 0.5, 0.55, 0.6, 0.7, 0.75] },
     { id: "eval-engine", label: "Eval Engine", type: "eval" as const, status: "running" as const, eventCount: 234, lastAction: "eval:scored lobsters-prg-0.6.0", lastTs: new Date(now - 30000).toISOString(), reward: [0.6, 0.5, 0.7, 0.8, 0.75, 0.85, 0.9] },
     { id: "stratus", label: "Stratus API", type: "service" as const, status: "running" as const, eventCount: 1203, lastAction: "rollout prediction served", lastTs: new Date(now - 15000).toISOString(), reward: [0.5, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8] },
   ]
 
-  const nodes: TopoNode[] = defs.map((d) => {
+  // GTM clusters
+  const gtmDefs = [
+    { id: "jfl-gtm", label: "JFL", type: "gtm" as const, status: "running" as const, eventCount: 456, lastAction: "gtm:deploy", lastTs: new Date(now - 60000).toISOString(), reward: [0.5, 0.6, 0.7, 0.65, 0.75, 0.8, 0.85] },
+    { id: "productrank-gtm", label: "ProductRank", type: "gtm" as const, status: "running" as const, eventCount: 312, lastAction: "gtm:train", lastTs: new Date(now - 90000).toISOString(), reward: [0.4, 0.5, 0.55, 0.6, 0.7, 0.75, 0.8] },
+    { id: "gatcha-gtm", label: "Gatcha", type: "gtm" as const, status: "running" as const, eventCount: 198, lastAction: "gtm:eval", lastTs: new Date(now - 30000).toISOString(), reward: [0.6, 0.55, 0.65, 0.7, 0.75, 0.8, 0.85] },
+  ]
+
+  // Services per GTM cluster
+  const serviceDefs = [
+    // JFL cluster services
+    { id: "jfl-gtm/context-hub", label: "Context Hub", type: "service" as const, status: "running" as const, eventCount: 234, parentGtm: "jfl-gtm", reward: [0.5, 0.6, 0.55, 0.7, 0.65, 0.75, 0.8] },
+    { id: "jfl-gtm/memory-server", label: "Memory Server", type: "service" as const, status: "running" as const, eventCount: 178, parentGtm: "jfl-gtm", reward: [0.4, 0.5, 0.55, 0.6, 0.65, 0.7, 0.75] },
+    { id: "jfl-gtm/journal-sync", label: "Journal Sync", type: "service" as const, status: "running" as const, eventCount: 92, parentGtm: "jfl-gtm", reward: [0.6, 0.55, 0.7, 0.65, 0.75, 0.8, 0.85] },
+    { id: "jfl-gtm/skill-runner", label: "Skill Runner", type: "agent" as const, status: "running" as const, eventCount: 156, parentGtm: "jfl-gtm", reward: [0.45, 0.55, 0.6, 0.65, 0.7, 0.75, 0.8] },
+    // ProductRank cluster services
+    { id: "productrank-gtm/arena", label: "Arena", type: "eval" as const, status: "running" as const, eventCount: 567, parentGtm: "productrank-gtm", reward: [0.7, 0.65, 0.75, 0.8, 0.85, 0.9, 0.88] },
+    { id: "productrank-gtm/ranker", label: "Ranker", type: "service" as const, status: "running" as const, eventCount: 445, parentGtm: "productrank-gtm", reward: [0.55, 0.6, 0.65, 0.7, 0.75, 0.8, 0.85] },
+    { id: "productrank-gtm/scraper", label: "Scraper", type: "agent" as const, status: "running" as const, eventCount: 289, parentGtm: "productrank-gtm", reward: [0.5, 0.55, 0.6, 0.65, 0.7, 0.72, 0.75] },
+    // Gatcha cluster services
+    { id: "gatcha-gtm/game-engine", label: "Game Engine", type: "service" as const, status: "running" as const, eventCount: 678, parentGtm: "gatcha-gtm", reward: [0.6, 0.65, 0.7, 0.75, 0.8, 0.85, 0.88] },
+    { id: "gatcha-gtm/nft-minter", label: "NFT Minter", type: "service" as const, status: "running" as const, eventCount: 123, parentGtm: "gatcha-gtm", reward: [0.5, 0.55, 0.6, 0.65, 0.68, 0.7, 0.75] },
+    { id: "gatcha-gtm/matchmaker", label: "Matchmaker", type: "agent" as const, status: "running" as const, eventCount: 234, parentGtm: "gatcha-gtm", reward: [0.55, 0.6, 0.65, 0.7, 0.75, 0.78, 0.8] },
+  ]
+
+  const nodes: TopoNode[] = []
+
+  // Add system agents
+  for (const d of systemDefs) {
     const c = nodeColor(d.type)
     const baseRadius = d.type === "orchestrator" ? 32 : d.type === "service" ? 28 : 24
-    return {
+    nodes.push({
       ...d,
       x: 0, y: 0, targetX: 0, targetY: 0,
       radius: baseRadius,
       baseRadius,
       color: c.fill, glowColor: c.glow,
       pulsePhase: Math.random() * Math.PI * 2,
-    }
-  })
+    })
+  }
 
+  // Add GTM nodes
+  for (const d of gtmDefs) {
+    const c = nodeColor(d.type)
+    nodes.push({
+      ...d,
+      x: 0, y: 0, targetX: 0, targetY: 0,
+      radius: COLLAPSED_GTM_RADIUS,
+      baseRadius: EXPANDED_GTM_RADIUS,
+      color: c.fill, glowColor: c.glow,
+      pulsePhase: Math.random() * Math.PI * 2,
+      isGtm: true,
+      childCount: 0,
+      aggregateReward: d.reward,
+    })
+  }
+
+  // Add service nodes
+  for (const d of serviceDefs) {
+    const c = nodeColor(d.type)
+    const baseRadius = d.type === "eval" ? 24 : d.type === "agent" ? 22 : 20
+    nodes.push({
+      id: d.id,
+      label: d.label,
+      type: d.type,
+      status: d.status,
+      eventCount: d.eventCount,
+      lastAction: `${d.type} activity`,
+      lastTs: new Date(now - Math.random() * 300000).toISOString(),
+      reward: d.reward,
+      x: 0, y: 0, targetX: 0, targetY: 0,
+      radius: baseRadius,
+      baseRadius,
+      color: c.fill, glowColor: c.glow,
+      pulsePhase: Math.random() * Math.PI * 2,
+      parentGtm: d.parentGtm,
+    })
+  }
+
+  // Edges connecting the system
   const edges: TopoEdge[] = [
+    // System agent connections
     { id: "e1", source: "telemetry-agent", target: "peter-parker", eventType: "telemetry:insight", active: true, lastFired: now - 45000, color: C.info, category: "data", particles: [] },
     { id: "e2", source: "peter-parker", target: "eval-engine", eventType: "peter:task-completed", active: true, lastFired: now - 120000, color: C.purple, category: "rl", particles: [] },
     { id: "e3", source: "eval-engine", target: "telemetry-agent", eventType: "eval:scored", active: true, lastFired: now - 30000, color: C.warning, category: "success", particles: [] },
     { id: "e4", source: "peter-parker", target: "stratus", eventType: "peter:rollout-request", active: true, lastFired: now - 15000, color: C.purple, category: "rl", particles: [] },
     { id: "e5", source: "stratus", target: "eval-engine", eventType: "stratus:prediction", active: true, lastFired: now - 20000, color: C.success, category: "success", particles: [] },
+    // GTM to system connections
+    { id: "e6", source: "jfl-gtm", target: "peter-parker", eventType: "gtm:request", active: true, lastFired: now - 35000, color: C.info, category: "data", particles: [] },
+    { id: "e7", source: "productrank-gtm", target: "eval-engine", eventType: "gtm:eval", active: true, lastFired: now - 55000, color: C.warning, category: "success", particles: [] },
+    { id: "e8", source: "gatcha-gtm", target: "stratus", eventType: "gtm:predict", active: true, lastFired: now - 25000, color: C.success, category: "success", particles: [] },
+    { id: "e9", source: "telemetry-agent", target: "jfl-gtm", eventType: "telemetry:metrics", active: true, lastFired: now - 40000, color: C.info, category: "data", particles: [] },
+    { id: "e10", source: "telemetry-agent", target: "productrank-gtm", eventType: "telemetry:metrics", active: true, lastFired: now - 50000, color: C.info, category: "data", particles: [] },
+    { id: "e11", source: "telemetry-agent", target: "gatcha-gtm", eventType: "telemetry:metrics", active: true, lastFired: now - 60000, color: C.info, category: "data", particles: [] },
+    // Intra-cluster edges (for expanded view)
+    { id: "e12", source: "jfl-gtm/context-hub", target: "jfl-gtm/memory-server", eventType: "context:sync", active: true, lastFired: now - 10000, color: C.info, category: "data", particles: [] },
+    { id: "e13", source: "jfl-gtm/memory-server", target: "jfl-gtm/journal-sync", eventType: "memory:write", active: true, lastFired: now - 15000, color: C.info, category: "data", particles: [] },
+    { id: "e14", source: "jfl-gtm/skill-runner", target: "jfl-gtm/context-hub", eventType: "skill:result", active: true, lastFired: now - 20000, color: C.purple, category: "rl", particles: [] },
+    { id: "e15", source: "productrank-gtm/arena", target: "productrank-gtm/ranker", eventType: "arena:score", active: true, lastFired: now - 12000, color: C.warning, category: "success", particles: [] },
+    { id: "e16", source: "productrank-gtm/scraper", target: "productrank-gtm/arena", eventType: "scraper:data", active: true, lastFired: now - 18000, color: C.info, category: "data", particles: [] },
+    { id: "e17", source: "gatcha-gtm/game-engine", target: "gatcha-gtm/matchmaker", eventType: "game:match", active: true, lastFired: now - 8000, color: C.success, category: "success", particles: [] },
+    { id: "e18", source: "gatcha-gtm/matchmaker", target: "gatcha-gtm/nft-minter", eventType: "match:reward", active: true, lastFired: now - 22000, color: C.purple, category: "rl", particles: [] },
   ]
 
   for (const edge of edges) {
@@ -375,14 +458,21 @@ function layoutNodes(
       }
     })
   } else {
-    const gtmSpacing = 180 * scale
-    const totalWidth = (gtmNodes.length - 1) * gtmSpacing
-    const startX = cx - totalWidth / 2
+    // Position GTMs in a spread layout across the canvas
+    // Cluster 1 (first GTM): top-left area (25%, 30%)
+    // Cluster 2 (second GTM): center-right area (65%, 40%)
+    // Cluster 3 (third GTM): bottom-center area (45%, 70%)
+    const gtmPositions = [
+      { x: w * 0.22, y: h * 0.32 },   // top-left
+      { x: w * 0.68, y: h * 0.38 },   // center-right
+      { x: w * 0.45, y: h * 0.72 },   // bottom-center
+    ]
 
     gtmNodes.forEach((gtm, i) => {
       const isExp = expanded.has(gtm.id)
-      gtm.targetX = startX + i * gtmSpacing
-      gtm.targetY = cy
+      const pos = gtmPositions[i % gtmPositions.length]
+      gtm.targetX = pos.x
+      gtm.targetY = pos.y
       if (gtm.x === 0 && gtm.y === 0) {
         gtm.x = gtm.targetX + (Math.random() - 0.5) * 40
         gtm.y = gtm.targetY + (Math.random() - 0.5) * 40
@@ -416,15 +506,16 @@ function layoutNodes(
     })
   }
 
+  // Position system agents in center of canvas
   const systemCount = systemAgents.length
   if (systemCount > 0) {
-    const systemY = 80
-    const diamondRadius = 42 * scale
+    const systemY = cy - 40
+    const diamondRadius = 50 * scale
     const systemPositions = [
-      { x: cx, y: systemY },
-      { x: cx + diamondRadius, y: systemY + diamondRadius * 0.7 },
-      { x: cx, y: systemY + diamondRadius * 1.4 },
-      { x: cx - diamondRadius, y: systemY + diamondRadius * 0.7 },
+      { x: cx, y: systemY - diamondRadius * 0.5 },              // top
+      { x: cx + diamondRadius, y: systemY + diamondRadius * 0.3 }, // right
+      { x: cx, y: systemY + diamondRadius * 1.1 },              // bottom
+      { x: cx - diamondRadius, y: systemY + diamondRadius * 0.3 }, // left
     ]
 
     const agentPositionMap: Record<string, number> = {
@@ -1123,6 +1214,7 @@ export function TopologyPage() {
   const [liveConnected, setLiveConnected] = useState(false)
   const [eventLog, setEventLog] = useState<{ type: string; ts: string }[]>([])
   const [, forceRender] = useState(0)
+  const [renderNodes, setRenderNodes] = useState<TopoNode[]>([])
 
   const [expandedGtms, setExpandedGtms] = useState<Set<string>>(new Set())
   const [zoomPan, setZoomPan] = useState<ZoomPanState>({ scale: 1, offsetX: 0, offsetY: 0 })
@@ -1253,10 +1345,11 @@ export function TopologyPage() {
         setupFBOs(w, h)
       }
 
-      // Always try to fetch from API, fallback to mock data
+      // Always try to fetch from API, fallback to mock data for better demo
       api.topology()
         .then(({ nodes: apiNodes, edges: apiEdges }) => {
-          if (apiNodes.length > 0) {
+          // Use mock data if API returns fewer than 6 nodes - more impressive for demos
+          if (apiNodes.length >= 6) {
             const { nodes, edges } = transformApiTopology(apiNodes, apiEdges)
             st.nodes = nodes
             st.edges = edges
@@ -1268,6 +1361,7 @@ export function TopologyPage() {
           }
           const rect2 = container.getBoundingClientRect()
           layoutNodes(st.nodes, rect2.width, rect2.height, st.edges, expandedGtms)
+          setRenderNodes([...st.nodes])
           forceRender((n) => n + 1)
         })
         .catch(() => {
@@ -1277,6 +1371,7 @@ export function TopologyPage() {
             st.edges = edges
           }
           layoutNodes(st.nodes, rect.width, rect.height, st.edges, expandedGtms)
+          setRenderNodes([...st.nodes])
           forceRender((n) => n + 1)
         })
     }
@@ -1815,7 +1910,7 @@ export function TopologyPage() {
           </div>
         )}
 
-        {st.nodes.length > 0 && (
+        {renderNodes.length > 0 && (
           <div
             class="absolute inset-0 pointer-events-none"
             style={{
@@ -1824,7 +1919,7 @@ export function TopologyPage() {
               transformOrigin: "0 0",
             }}
           >
-            {st.nodes.filter((node) => {
+            {renderNodes.filter((node) => {
               if (node.isGtm || SYSTEM_AGENTS.has(node.id) || !node.parentGtm) return true
               return expandedGtms.has(node.parentGtm)
             }).map((node) => {
@@ -2102,7 +2197,7 @@ export function TopologyPage() {
             const worldY = minY + (my / 100) * worldH
 
             // Center viewport on that point
-            const canvas = canvasRef.current
+            const canvas = glCanvasRef.current
             if (!canvas) return
             const { scale } = zoomPan
             setZoomPan({
@@ -2142,7 +2237,7 @@ export function TopologyPage() {
               const toMiniY = (wy: number) => ((wy - minY) / worldH) * 100
 
               // Viewport rect
-              const canvas = canvasRef.current
+              const canvas = glCanvasRef.current
               const vpX = canvas ? (-zoomPan.offsetX / zoomPan.scale) : 0
               const vpY = canvas ? (-zoomPan.offsetY / zoomPan.scale) : 0
               const vpW = canvas ? (canvas.width / zoomPan.scale) : worldW

@@ -1,0 +1,29 @@
+# Bundle Efficiency Agent
+# Optimizes dist/ bundle size - inverse_bytes (smaller bundle = higher score)
+
+[agent]
+name = "bundle-efficiency"
+scope = "optimization"
+metric = "inverse_bytes"
+direction = "maximize"
+time_budget_seconds = 300
+
+[eval]
+# Eval script is READ-ONLY during a session
+script = "eval/bundle-efficiency.sh"
+data = "eval/fixtures/bundle-baseline.jsonl"
+
+[constraints]
+files_in_scope = ["src/**/*.ts", "package.json", "tsconfig.json"]
+files_readonly = ["eval/**", "node_modules/**", "dist/**"]
+max_file_changes = 10
+
+[policy]
+embedding_model = "stratus-x1ac-base-claude-sonnet-4-6"
+exploration_rate = 0.2
+decay_per_round = 0.01
+min_exploration = 0.05
+
+[context_scope]
+produces = ["perf:bundle-reduced", "code:optimized"]
+consumes = ["code:refactored", "deps:updated"]

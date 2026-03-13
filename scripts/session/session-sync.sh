@@ -154,6 +154,31 @@ echo "--- Syncing submodules ---"
 cd "$GTM_ROOT"
 git submodule update --init --recursive 2>/dev/null || true
 
+# Sync registered services (cross-repo safety net)
+# Edits to services from a GTM session aren't auto-committed — this catches them
+if [ -f ".jfl/config.json" ]; then
+    SERVICE_COUNT=$(jq -r '.registered_services | length // 0' .jfl/config.json 2>/dev/null)
+    if [ "$SERVICE_COUNT" -gt 0 ]; then
+        echo ""
+        echo "--- Syncing registered services ---"
+        for i in $(seq 0 $((SERVICE_COUNT - 1))); do
+            SVC_NAME=$(jq -r ".registered_services[$i].name" .jfl/config.json)
+            SVC_PATH=$(jq -r ".registered_services[$i].path" .jfl/config.json)
+            SVC_STATUS=$(jq -r ".registered_services[$i].status // \"active\"" .jfl/config.json)
+
+            if [ "$SVC_STATUS" != "active" ]; then
+                continue
+            fi
+
+            if [ -d "$SVC_PATH" ] && [ -d "$SVC_PATH/.git" ]; then
+                sync_repo "$SVC_PATH" "$SVC_NAME"
+            else
+                echo -e "${YELLOW}WARNING: Service $SVC_NAME not found at $SVC_PATH${NC}"
+            fi
+        done
+    fi
+fi
+
 # Final status
 echo ""
 echo "========================================"

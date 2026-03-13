@@ -4,6 +4,24 @@ import { existsSync } from "fs"
 import { join } from "path"
 import { getConfigValue, setConfig } from "./jfl-config.js"
 
+// Cache project detection result for the current process
+let _isProjectCache: { cwd: string; isProject: boolean } | undefined
+
+/**
+ * Fast check if directory is a JFL project (cached per-cwd)
+ */
+function checkIsProject(cwd: string): boolean {
+  if (_isProjectCache && _isProjectCache.cwd === cwd) {
+    return _isProjectCache.isProject
+  }
+  const isProject =
+    existsSync(join(cwd, ".jfl")) ||
+    existsSync(join(cwd, "CLAUDE.md")) ||
+    existsSync(join(cwd, "knowledge"))
+  _isProjectCache = { cwd, isProject }
+  return isProject
+}
+
 /**
  * Check if we're in a JFL project. If not, offer to navigate to known projects.
  * Returns true if we're in a project (or user navigated to one).
@@ -12,11 +30,8 @@ import { getConfigValue, setConfig } from "./jfl-config.js"
 export async function ensureInProject(): Promise<boolean> {
   const cwd = process.cwd()
 
-  // Check if already in a JFL project
-  const hasJflConfig =
-    existsSync(join(cwd, "CLAUDE.md")) || existsSync(join(cwd, "knowledge"))
-
-  if (hasJflConfig) {
+  // Check if already in a JFL project (uses cache)
+  if (checkIsProject(cwd)) {
     return true
   }
 
@@ -75,12 +90,8 @@ export async function ensureInProject(): Promise<boolean> {
 
 /**
  * Check if current directory is a JFL project (no prompts)
+ * Uses cached result for current working directory
  */
 export function isJflProject(): boolean {
-  const cwd = process.cwd()
-  return (
-    existsSync(join(cwd, ".jfl")) ||
-    existsSync(join(cwd, "CLAUDE.md")) ||
-    existsSync(join(cwd, "knowledge"))
-  )
+  return checkIsProject(process.cwd())
 }

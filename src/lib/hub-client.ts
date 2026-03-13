@@ -1,6 +1,7 @@
 /**
  * Hub API Client
  * @purpose HTTP client for Context Hub API — headless agent access to dashboard data
+ * @perf Caches hub config for 5 seconds to avoid repeated filesystem reads
  */
 
 import { readFileSync, existsSync } from "fs"
@@ -13,30 +14,65 @@ export interface HubConfig {
   baseUrl: string
 }
 
+// Cache for hub config to avoid repeated filesystem reads
+let _hubConfigCache: { config: HubConfig | null; cwd: string; ts: number } | undefined
+const HUB_CONFIG_CACHE_TTL_MS = 5000
+
+// Cache for project root lookup
+let _projectRootCache: { root: string; cwd: string } | undefined
+
 function findProjectRoot(cwd?: string): string {
-  let dir = cwd || process.cwd()
+  const startDir = cwd || process.cwd()
+
+  // Return cached result if same cwd
+  if (_projectRootCache && _projectRootCache.cwd === startDir) {
+    return _projectRootCache.root
+  }
+
+  let dir = startDir
   while (dir !== path.dirname(dir)) {
     if (existsSync(join(dir, ".jfl", "config.json")) || existsSync(join(dir, ".jfl"))) {
+      _projectRootCache = { root: dir, cwd: startDir }
       return dir
     }
     dir = path.dirname(dir)
   }
-  return cwd || process.cwd()
+
+  _projectRootCache = { root: startDir, cwd: startDir }
+  return startDir
 }
 
 export function getHubConfig(cwd?: string): HubConfig | null {
-  const root = findProjectRoot(cwd)
+  const effectiveCwd = cwd || process.cwd()
+  const now = Date.now()
+
+  // Return cached config if still valid
+  if (_hubConfigCache &&
+      _hubConfigCache.cwd === effectiveCwd &&
+      (now - _hubConfigCache.ts) < HUB_CONFIG_CACHE_TTL_MS) {
+    return _hubConfigCache.config
+  }
+
+  const root = findProjectRoot(effectiveCwd)
   const portFile = join(root, ".jfl", "context-hub.port")
   const tokenFile = join(root, ".jfl", "context-hub.token")
 
-  if (!existsSync(portFile)) return null
+  if (!existsSync(portFile)) {
+    _hubConfigCache = { config: null, cwd: effectiveCwd, ts: now }
+    return null
+  }
 
   const port = parseInt(readFileSync(portFile, "utf-8").trim(), 10)
-  if (isNaN(port)) return null
+  if (isNaN(port)) {
+    _hubConfigCache = { config: null, cwd: effectiveCwd, ts: now }
+    return null
+  }
 
   const token = existsSync(tokenFile) ? readFileSync(tokenFile, "utf-8").trim() : ""
 
-  return { port, token, baseUrl: `http://localhost:${port}` }
+  const config = { port, token, baseUrl: `http://localhost:${port}` }
+  _hubConfigCache = { config, cwd: effectiveCwd, ts: now }
+  return config
 }
 
 export async function hubFetch<T>(path: string, config?: HubConfig): Promise<T> {

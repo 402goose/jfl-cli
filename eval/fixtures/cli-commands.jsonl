@@ -1,0 +1,4 @@
+{"command": "jfl status", "expected_max_ms": 500}
+{"command": "jfl hud --compact", "expected_max_ms": 500}
+{"command": "jfl context-hub status", "expected_max_ms": 1000}
+{"command": "jfl telemetry status", "expected_max_ms": 300}

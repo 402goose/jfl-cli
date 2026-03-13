@@ -12,4 +12,23 @@ module.exports = {
     '!src/**/*.d.ts',
     '!src/**/__tests__/**',
   ],
+  transform: {
+    '^.+\\.tsx?$': [
+      'ts-jest',
+      {
+        useESM: false,
+        tsconfig: {
+          target: 'ES2022',
+          module: 'CommonJS',
+          moduleResolution: 'node',
+          esModuleInterop: true,
+          strict: true,
+          skipLibCheck: true,
+          resolveJsonModule: true,
+          types: ['jest', 'node'],
+          isolatedModules: true,
+        },
+      },
+    ],
+  },
 }

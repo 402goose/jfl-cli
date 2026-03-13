@@ -33,6 +33,8 @@ import type { MAPEventType } from "../types/map.js"
 import { telemetry } from "../lib/telemetry.js"
 import { transformHookPayload } from "../lib/hook-transformer.js"
 import type { HookPayload } from "../types/map.js"
+import { loadAllAgentConfigs } from "../lib/agent-config.js"
+import { TrainingBuffer } from "../lib/training-buffer.js"
 
 const PID_FILE = ".jfl/context-hub.pid"
 const LOG_FILE = ".jfl/logs/context-hub.log"
@@ -1567,11 +1569,10 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus,
         }
 
         // System agents (always present in a JFL installation)
+        // Only Peter Parker is a real system agent — others come from .jfl/agents/*.toml configs
+        // Stratus, eval-engine, telemetry-agent are either external infra or RL agents now
         const systemAgents = [
-          { id: "peter-parker", label: "Peter Parker", type: "orchestrator" as const, status: "running" as const, produces: ["peter:task-completed", "peter:rollout-request", "peter:experiment-start"], consumes: ["telemetry:insight", "eval:scored"] },
-          { id: "telemetry-agent", label: "Telemetry Agent", type: "agent" as const, status: "running" as const, produces: ["telemetry:insight", "telemetry:anomaly"], consumes: ["hook:*", "eval:*"] },
-          { id: "eval-engine", label: "Eval Engine", type: "eval" as const, status: "running" as const, produces: ["eval:scored", "eval:baseline"], consumes: ["peter:task-completed"] },
-          { id: "stratus", label: "Stratus API", type: "service" as const, status: "running" as const, produces: ["stratus:prediction", "stratus:rollout-result"], consumes: ["peter:rollout-request"] },
+          { id: "peter-parker", label: "Peter Parker", type: "orchestrator" as const, status: "running" as const, produces: ["peter:task-completed", "peter:rollout-request", "peter:experiment-start"], consumes: ["telemetry:insight", "telemetry:metric-alert", "eval:scored", "sentinel:recommendation"] },
         ]
 
         // Build nodes from registered services + system agents
@@ -1626,6 +1627,51 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus,
               consumes: service.context_scope?.consumes,
             })
           }
+        }
+
+        // Add RL agent nodes from .jfl/agents/*.toml configs
+        try {
+          const rlAgentConfigs = loadAllAgentConfigs(projectRoot)
+          const trainingBuffer = new TrainingBuffer(projectRoot)
+          const trainingEntries = trainingBuffer.read()
+
+          for (const config of rlAgentConfigs) {
+            const nodeId = `rl-agent-${config.name}`
+
+            // Skip if node already exists (e.g., matches a registered service name)
+            if (nodes.find(n => n.id === nodeId || n.id === config.name)) {
+              continue
+            }
+
+            // Check for recent training data (within last 24h)
+            const now = Date.now()
+            const recentWindow = 24 * 60 * 60 * 1000
+            const recentEntries = trainingEntries.filter(e => {
+              if (e.agent !== config.name) return false
+              const ts = new Date(e.ts).getTime()
+              return now - ts < recentWindow
+            })
+
+            const status = recentEntries.length > 0 ? "running" : "idle"
+
+            // Convert name to proper label (e.g., "cli-speed" -> "Cli Speed")
+            const label = config.name
+              .split("-")
+              .map((w: string) => w.charAt(0).toUpperCase() + w.slice(1))
+              .join(" ")
+
+            nodes.push({
+              id: nodeId,
+              label,
+              type: "agent",
+              status,
+              eventCount: recentEntries.length,
+              produces: config.context_scope?.produces,
+              consumes: config.context_scope?.consumes,
+            })
+          }
+        } catch (err: any) {
+          // Non-fatal: RL agents are optional
         }
 
         // For portfolio mode, fetch child GTM services and their registered services
@@ -2030,47 +2076,22 @@ async function ensureForProject(
   port: number,
   quiet = false
 ): Promise<{ status: "running" | "started" | "failed"; message: string }> {
+  // Rule: ensure ONLY starts hubs, NEVER kills them.
+  // If something is on the port, leave it alone.
+
   const status = isRunning(projectRoot)
   if (status.running) {
-    try {
-      const response = await fetch(`http://localhost:${port}/health`, {
-        signal: AbortSignal.timeout(2000)
-      })
-      if (response.ok) {
-        return { status: "running", message: `Already running (PID: ${status.pid})` }
-      }
-    } catch {
-      // Process exists but not responding, fall through
-    }
+    return { status: "running", message: `Already running (PID: ${status.pid})` }
   }
 
   const portInUse = await isPortInUse(port)
   if (portInUse) {
-    try {
-      const response = await fetch(`http://localhost:${port}/health`, {
-        signal: AbortSignal.timeout(2000)
-      })
-      if (response.ok) {
-        return { status: "running", message: "Running (PID file missing but healthy)" }
-      }
-    } catch {
-      // Not responding
-    }
-
-    try {
-      const lsofOutput = execSync(`lsof -ti :${port}`, { encoding: 'utf-8' }).trim()
-      if (lsofOutput) {
-        const orphanedPid = parseInt(lsofOutput.split('\n')[0], 10)
-        if (!status.pid || orphanedPid !== status.pid) {
-          process.kill(orphanedPid, 'SIGTERM')
-          await new Promise(resolve => setTimeout(resolve, 500))
-        }
-      }
-    } catch {
-      // lsof failed or process already gone
-    }
+    // Something is on this port. Don't kill it — could be a healthy hub
+    // whose PID file was lost, or a hub started by another process.
+    return { status: "running", message: `Port ${port} in use (assuming healthy)` }
   }
 
+  // Nothing running, nothing on port — safe to start
   const result = await startDaemon(projectRoot, port)
   if (result.success) {
     return { status: "started", message: result.message }
