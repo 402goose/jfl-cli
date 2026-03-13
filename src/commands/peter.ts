@@ -1266,11 +1266,33 @@ async function agentRun(projectRoot: string, agentName: string, rounds: number):
   for (let round = 1; round <= rounds; round++) {
     console.log(chalk.bold(`\n  ── Round ${round}/${rounds} ${"─".repeat(40)}\n`))
 
-    // Generate task
+    // Generate task — informed by past experiment history
     let task = `Improve ${config.metric} by modifying files matching ${config.constraints.files_in_scope.join(", ")}`
+
+    // Build history context from replay buffer + current session transitions
+    const pastTuples = replayBuffer.getForAgent(config.name).slice(-20) // Last 20 tuples
+    let historyContext = ""
+    if (pastTuples.length > 0 || transitions.length > 0) {
+      const allResults = [
+        ...pastTuples.map((t: any) => ({
+          action: t.action?.description || "unknown",
+          reward: t.reward,
+          kept: (t.reward ?? 0) > 0,
+        })),
+        ...transitions.map((t: any) => ({
+          action: t.action?.description || "unknown",
+          reward: t.reward,
+          kept: (t.reward ?? 0) > 0,
+        })),
+      ]
+      const kept = allResults.filter((r: any) => r.kept)
+      const discarded = allResults.filter((r: any) => !r.kept)
+      historyContext = `\n\nPast experiments for this agent:\nKept (worked): ${kept.map((r: any) => `"${r.action}" (reward: ${r.reward})`).join(", ") || "none yet"}\nDiscarded (failed): ${discarded.map((r: any) => `"${r.action}"`).join(", ") || "none yet"}\n\nDo NOT repeat failed approaches. Build on what worked. Try something NEW.`
+    }
+
     if (stratus) {
       try {
-        const prompt = `Suggest ONE specific code change to improve the ${config.metric} metric. Scope: ${config.scope}. Files: ${config.constraints.files_in_scope.join(", ")}. Be concrete and actionable. Return just the task description.`
+        const prompt = `Suggest ONE specific code change to improve the ${config.metric} metric (${config.direction}). Scope: ${config.scope}. Files: ${config.constraints.files_in_scope.join(", ")}. Be concrete and actionable. Return just the task description.${historyContext}`
         const response = await stratus.reason(prompt, { maxTokens: 200, temperature: 0.7 + round * 0.05 })
         task = response.choices[0]?.message?.content || task
       } catch {}
