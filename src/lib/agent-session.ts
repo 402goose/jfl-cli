@@ -73,7 +73,8 @@ export interface SessionSummary {
   bestDelta: number
   improvedRounds: number
   transitions: Transition[]
-  prUrl?: string
+  prUrl?: string       // Set later if human/agent creates PR from review
+  branchUrl?: string   // Remote branch URL for review
 }
 
 // ============================================================================
@@ -130,6 +131,7 @@ function emitScopeImpact(
       rounds: summary.rounds,
       improved_rounds: summary.improvedRounds,
       pr_url: summary.prUrl,
+      branch_url: summary.branchUrl,
       produces: session.config.context_scope.produces,
       consumes: session.config.context_scope.consumes,
     },
@@ -493,12 +495,14 @@ export async function endSession(
     transitions,
   }
 
-  // If we improved, optionally create PR and emit scope:impact events
-  // For minimize metrics, improvement means negative delta (lower is better)
+  // If we improved, push the branch (but do NOT create a PR or auto-merge)
+  // Following Karpathy's autoresearch pattern: branches grow overnight,
+  // humans (or their agents) review and merge in the morning
   if (improvedRounds > 0) {
-    const prUrl = await createPR(session, summary)
-    if (prUrl) {
-      summary.prUrl = prUrl
+    // Push the branch so it's available for review
+    const push = gitExec(["push", "-u", "origin", session.branch], session.worktreePath)
+    if (push.ok) {
+      summary.branchUrl = `https://github.com/402goose/${session.worktreePath.split('/').pop()}/tree/${session.branch}`
     }
 
     // Emit scope:impact events for each produces pattern
@@ -508,7 +512,7 @@ export async function endSession(
     }
   }
 
-  // Clean up worktree — main repo is untouched
+  // Clean up worktree — the branch persists on remote for review
   gitExec(["worktree", "remove", session.worktreePath, "--force"], session.projectRoot)
   gitExec(["worktree", "prune"], session.projectRoot)
 

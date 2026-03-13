@@ -1310,8 +1310,11 @@ async function agentRun(projectRoot: string, agentName: string, rounds: number):
   console.log(chalk.gray(`  Total delta: ${summary.totalDelta > 0 ? "+" : ""}${summary.totalDelta.toFixed(4)}`))
   console.log(chalk.gray(`  Best delta: +${summary.bestDelta.toFixed(4)}`))
 
+  if (summary.branchUrl) {
+    console.log(chalk.green(`\n  Branch pushed for review: ${summary.branchUrl}`))
+  }
   if (summary.prUrl) {
-    console.log(chalk.green(`\n  PR created: ${summary.prUrl}`))
+    console.log(chalk.green(`  PR: ${summary.prUrl}`))
   }
   console.log()
 }
