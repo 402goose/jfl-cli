@@ -1,8 +1,32 @@
 ---
 name: jfl-gtm
-description: GTM workspace runtime - run go-to-market as Claude Code does
-version: 1.0.0
+description: "GTM workspace runtime — discover workspaces, start sessions, write journal entries, load context, follow CLAUDE.md protocols. Use when: (1) starting a GTM session, (2) writing journal entries, (3) checking project status, (4) managing GTM workspaces. NOT for: product code changes (use coding-agent), simple file reads (use read tool)."
 user-invocable: true
+metadata:
+  {
+    "openclaw":
+      {
+        "emoji": "🚀",
+        "requires": { "bins": ["git", "jq"], "anyBins": ["jfl", "curl"] },
+        "install":
+          [
+            {
+              "id": "jfl",
+              "kind": "node",
+              "package": "just-fucking-launch",
+              "bins": ["jfl"],
+              "label": "Install JFL CLI (npm)",
+            },
+            {
+              "id": "jq",
+              "kind": "brew",
+              "formula": "jq",
+              "bins": ["jq"],
+              "label": "Install jq (brew)",
+            },
+          ],
+      },
+  }
 ---
 
 # JFL GTM Runtime

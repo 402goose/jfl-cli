@@ -1112,6 +1112,15 @@ openclaw
     await tagCommand(service, message, options)
   })
 
+openclaw
+  .command("install-skill")
+  .description("Install jfl-gtm skill into OpenClaw (~/.openclaw/skills/)")
+  .option("--dir <path>", "Custom install directory")
+  .action(async (options) => {
+    const { installSkillCommand } = await import("./commands/openclaw.js")
+    await installSkillCommand(options)
+  })
+
 // ============================================================================
 // CI WORKFLOWS
 // ============================================================================

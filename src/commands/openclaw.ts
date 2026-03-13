@@ -11,8 +11,10 @@
 import chalk from "chalk"
 import ora from "ora"
 import { execSync } from "child_process"
-import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync } from "fs"
-import { join, basename, resolve } from "path"
+import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync, cpSync } from "fs"
+import { join, basename, resolve, dirname } from "path"
+import { fileURLToPath } from "url"
+import { homedir } from "os"
 import axios from "axios"
 import {
   ensureAgent,
@@ -812,4 +814,86 @@ function readGtmName(gtmPath: string): string {
   }
 
   return basename(gtmPath)
+}
+
+// ============================================================================
+// install-skill
+// ============================================================================
+
+export async function installSkillCommand(options: { dir?: string }) {
+  const spinner = ora("Installing jfl-gtm skill into OpenClaw...").start()
+
+  const skillSourceDir = resolveSkillSourceDir()
+  if (!skillSourceDir || !existsSync(join(skillSourceDir, "SKILL.md"))) {
+    spinner.fail("Could not find jfl-gtm skill source")
+    console.log(chalk.gray("  Expected: skills/jfl-gtm/SKILL.md relative to jfl-cli"))
+    return
+  }
+
+  const targetBase = options.dir || join(homedir(), ".openclaw", "skills")
+  const targetDir = join(targetBase, "jfl-gtm")
+
+  mkdirSync(targetDir, { recursive: true })
+
+  const filesToCopy = ["SKILL.md", "README.md", "CONFIGURATION.md"]
+  const dirsToCopy = ["bin", "config", "test"]
+
+  for (const file of filesToCopy) {
+    const src = join(skillSourceDir, file)
+    if (existsSync(src)) {
+      cpSync(src, join(targetDir, file))
+    }
+  }
+
+  for (const dir of dirsToCopy) {
+    const src = join(skillSourceDir, dir)
+    if (existsSync(src)) {
+      cpSync(src, join(targetDir, dir), { recursive: true })
+    }
+  }
+
+  const binDir = join(targetDir, "bin")
+  if (existsSync(binDir)) {
+    try {
+      execSync(`chmod +x "${binDir}"/*`, { stdio: "pipe" })
+    } catch {
+      // Windows or no chmod
+    }
+  }
+
+  spinner.succeed(`Installed jfl-gtm to ${targetDir}`)
+
+  console.log("")
+  console.log(chalk.bold("  OpenClaw skill discovery paths (in precedence order):"))
+  console.log(chalk.gray("    6. <workspace>/skills/         (highest)"))
+  console.log(chalk.gray("    5. <workspace>/.agents/skills/"))
+  console.log(chalk.gray("    4. ~/.agents/skills/"))
+  console.log(chalk.cyan("    3. ~/.openclaw/skills/          ← installed here"))
+  console.log(chalk.gray("    2. openclaw bundled skills"))
+  console.log(chalk.gray("    1. config extra dirs            (lowest)"))
+  console.log("")
+  console.log(chalk.bold("  Next:"))
+  console.log(chalk.gray(`    Add workspace:  ${targetDir}/bin/config add ~/code/my-gtm`))
+  console.log(chalk.gray("    In OpenClaw:    /jfl_gtm"))
+  console.log("")
+}
+
+function resolveSkillSourceDir(): string | null {
+  const thisFile = fileURLToPath(import.meta.url)
+  const cliRoot = resolve(dirname(thisFile), "..", "..")
+  const candidate = join(cliRoot, "skills", "jfl-gtm")
+  if (existsSync(join(candidate, "SKILL.md"))) return candidate
+
+  try {
+    const gitRoot = execSync("git rev-parse --show-toplevel", {
+      encoding: "utf-8",
+      stdio: ["pipe", "pipe", "pipe"],
+    }).trim()
+    const gitCandidate = join(gitRoot, "skills", "jfl-gtm")
+    if (existsSync(join(gitCandidate, "SKILL.md"))) return gitCandidate
+  } catch {
+    // Not in git repo
+  }
+
+  return null
 }
