@@ -495,6 +495,37 @@ export async function endSession(
     transitions,
   }
 
+  // Write transitions to training buffer WITH diffs (for code-policy training)
+  try {
+    const { TrainingBuffer } = await import("./training-buffer.js")
+    const tb = new TrainingBuffer(session.projectRoot)
+    for (const t of transitions) {
+      tb.append({
+        agent: t.agent,
+        state: t.state,
+        action: {
+          ...t.action,
+          // Include the actual code diff for code-policy training (AutoHarness pattern)
+          code_diff: t.action_diff?.slice(0, 10000) || "", // Cap at 10KB
+        },
+        reward: {
+          composite_delta: t.reward,
+          dimension_deltas: {},
+          tests_added: 0,
+          quality_score: t.reward > 0 ? 1 : 0,
+          improved: t.reward > 0,
+        },
+        metadata: {
+          branch: session.branch,
+          source: "autoresearch",
+          session_id: session.id,
+          round: t.state?.trajectory_length || 0,
+          hypothesis: t.hypothesis,
+        },
+      })
+    }
+  } catch {}
+
   // If we improved, push the branch (but do NOT create a PR or auto-merge)
   // Following Karpathy's autoresearch pattern: branches grow overnight,
   // humans (or their agents) review and merge in the morning
