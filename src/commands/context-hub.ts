@@ -1426,6 +1426,99 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus,
       return
     }
 
+    // ── Autoresearch / Experiments API ──────────────────────────────
+
+    // Agent configs
+    if (url.pathname === "/api/v1/agents" && req.method === "GET") {
+      try {
+        const { listAgentConfigs, loadAgentConfig } = await import("../lib/agent-config.js")
+        const names = listAgentConfigs(projectRoot)
+        const agents = names.map(name => {
+          try { return loadAgentConfig(projectRoot, name) } catch { return null }
+        }).filter(Boolean)
+        res.writeHead(200, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ agents }))
+      } catch (err: any) {
+        res.writeHead(500, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ error: err.message }))
+      }
+      return
+    }
+
+    // Replay buffer (experiment history)
+    if (url.pathname === "/api/v1/experiments" && req.method === "GET") {
+      try {
+        const bufferPath = path.join(projectRoot, ".jfl", "replay-buffer.jsonl")
+        const trainingPath = path.join(projectRoot, ".jfl", "training-buffer.jsonl")
+        const experiments: any[] = []
+
+        for (const p of [bufferPath, trainingPath]) {
+          if (fs.existsSync(p)) {
+            const lines = fs.readFileSync(p, "utf-8").trim().split("\n").filter(Boolean)
+            for (const line of lines.slice(-100)) {
+              try { experiments.push(JSON.parse(line)) } catch {}
+            }
+          }
+        }
+
+        const agent = url.searchParams.get("agent")
+        const filtered = agent ? experiments.filter(e => e.agent === agent) : experiments
+
+        res.writeHead(200, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ experiments: filtered, total: filtered.length }))
+      } catch (err: any) {
+        res.writeHead(500, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ error: err.message }))
+      }
+      return
+    }
+
+    // Session results
+    if (url.pathname === "/api/v1/sessions" && req.method === "GET") {
+      try {
+        const sessionsDir = path.join(projectRoot, ".jfl", "sessions")
+        const sessions: any[] = []
+
+        if (fs.existsSync(sessionsDir)) {
+          for (const dir of fs.readdirSync(sessionsDir)) {
+            const resultsPath = path.join(sessionsDir, dir, "results.tsv")
+            if (fs.existsSync(resultsPath)) {
+              const content = fs.readFileSync(resultsPath, "utf-8").trim()
+              const lines = content.split("\n").slice(1) // skip header
+              const rounds = lines.filter(l => l.trim()).map(line => {
+                const [round, task, baseline, metric, delta, kept, duration, error, timestamp] = line.split("\t")
+                return { round: +round, task, baseline: +baseline, metric: +metric, delta: +delta, kept: kept === "1", duration_ms: +duration, error, timestamp }
+              })
+              if (rounds.length > 0) {
+                sessions.push({ id: dir, rounds, agent: dir.replace(/-[a-f0-9]{8}-\d+$/, "") })
+              }
+            }
+          }
+        }
+
+        res.writeHead(200, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ sessions }))
+      } catch (err: any) {
+        res.writeHead(500, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ error: err.message }))
+      }
+      return
+    }
+
+    // Product context
+    if (url.pathname === "/api/v1/product-context" && req.method === "GET") {
+      const contextPath = path.join(projectRoot, ".jfl", "product-context.md")
+      if (fs.existsSync(contextPath)) {
+        const content = fs.readFileSync(contextPath, "utf-8")
+        res.writeHead(200, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ context: content, updatedAt: fs.statSync(contextPath).mtime.toISOString() }))
+      } else {
+        res.writeHead(200, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ context: null, updatedAt: null }))
+      }
+      return
+    }
+
     // Flow definitions
     if (url.pathname === "/api/flows" && req.method === "GET") {
       if (!flowEngine) {
