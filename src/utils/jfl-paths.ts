@@ -25,6 +25,10 @@ function cachedExists(path: string): boolean {
   return exists
 }
 
+export function clearPathCache(): void {
+  existsCache.clear()
+}
+
 /**
  * Get XDG config home directory (cross-platform)
  */

@@ -15,6 +15,7 @@ import {
   ensureJflDirs,
   getProjectJflDir,
   getProjectJflFile,
+  clearPathCache,
 } from '../jfl-paths.js'
 
 // Mock fs module
@@ -25,6 +26,7 @@ const mockFs = fs as jest.Mocked<typeof fs>
 describe('jfl-paths', () => {
   beforeEach(() => {
     jest.clearAllMocks()
+    clearPathCache()
   })
 
   describe('JFL_PATHS constants', () => {
