@@ -81,6 +81,16 @@ function ensureSessionsDir(projectRoot: string): void {
   }
 }
 
+export const SESSION_ID_PATTERN = /^[a-zA-Z0-9._-]+$/
+
+export function validateSessionId(sessionId: string): void {
+  if (!sessionId || !SESSION_ID_PATTERN.test(sessionId)) {
+    throw new Error(
+      `Invalid session ID: "${sessionId}". Must match /^[a-zA-Z0-9._-]+$/.`
+    )
+  }
+}
+
 function flockWrite(filePath: string, content: string): void {
   try {
     execSync(
@@ -131,6 +141,7 @@ export function registerSession(
   projectRoot: string,
   session: Omit<SessionLock, "heartbeat">
 ): SessionLock {
+  validateSessionId(session.id)
   ensureSessionsDir(projectRoot)
 
   const lock: SessionLock = {
@@ -151,6 +162,7 @@ export function registerSession(
 }
 
 export function heartbeat(projectRoot: string, sessionId: string): boolean {
+  validateSessionId(sessionId)
   const path = lockFilePath(projectRoot, sessionId)
   if (!existsSync(path)) return false
 
@@ -172,6 +184,7 @@ export function updateClaims(
   sessionId: string,
   claiming: string[]
 ): boolean {
+  validateSessionId(sessionId)
   const path = lockFilePath(projectRoot, sessionId)
   if (!existsSync(path)) return false
 
@@ -193,6 +206,7 @@ export function unregisterSession(
   projectRoot: string,
   sessionId: string
 ): void {
+  validateSessionId(sessionId)
   const path = lockFilePath(projectRoot, sessionId)
   const flockPath = `${path}.flock`
 
@@ -223,7 +237,7 @@ export function getActiveSessions(projectRoot: string): SessionLock[] {
       const lock: SessionLock = JSON.parse(raw)
       const heartbeatAge = now - new Date(lock.heartbeat).getTime()
 
-      if (heartbeatAge > STALE_THRESHOLD_MS) continue
+      if (isNaN(heartbeatAge) || heartbeatAge > STALE_THRESHOLD_MS) continue
       if (!isPidAlive(lock.pid)) continue
 
       active.push(lock)
@@ -254,7 +268,7 @@ export function getStaleSessions(projectRoot: string): SessionLock[] {
       const heartbeatAge = now - new Date(lock.heartbeat).getTime()
       const pidAlive = isPidAlive(lock.pid)
 
-      if (heartbeatAge > STALE_THRESHOLD_MS || !pidAlive) {
+      if (isNaN(heartbeatAge) || heartbeatAge > STALE_THRESHOLD_MS || !pidAlive) {
         stale.push(lock)
       }
     } catch {
@@ -314,6 +328,7 @@ export function startHeartbeat(
   projectRoot: string,
   sessionId: string
 ): void {
+  validateSessionId(sessionId)
   stopHeartbeat(sessionId)
 
   const timer = setInterval(() => {

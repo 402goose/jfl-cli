@@ -23,6 +23,8 @@ import {
   releaseMergeLock,
   emitEvent,
   readRecentEvents,
+  validateSessionId,
+  SESSION_ID_PATTERN,
   type SessionLock,
 } from "../session-lock.js"
 
@@ -446,6 +448,134 @@ describe("Event Bus", () => {
   it("returns empty array when no events", () => {
     const events = readRecentEvents(projectRoot)
     expect(events.length).toBe(0)
+  })
+})
+
+describe("Session ID Validation", () => {
+  it("accepts valid session IDs", () => {
+    const valid = [
+      "session-goose-20260125-0240-bea0be",
+      "session-test-001",
+      "my.session",
+      "session_underscored",
+      "abc123",
+    ]
+    for (const id of valid) {
+      expect(() => validateSessionId(id)).not.toThrow()
+    }
+  })
+
+  it("rejects IDs with path traversal", () => {
+    expect(() => validateSessionId("../../../etc/passwd")).toThrow("Invalid session ID")
+  })
+
+  it("rejects IDs with shell metacharacters", () => {
+    const malicious = [
+      "; rm -rf /",
+      "$(whoami)",
+      "session`id`",
+      "a | cat /etc/passwd",
+      "session\nid",
+      "session id",
+      "",
+    ]
+    for (const id of malicious) {
+      expect(() => validateSessionId(id)).toThrow("Invalid session ID")
+    }
+  })
+
+  it("rejects IDs with slashes", () => {
+    expect(() => validateSessionId("session/bad")).toThrow("Invalid session ID")
+    expect(() => validateSessionId("session\\bad")).toThrow("Invalid session ID")
+  })
+
+  it("registerSession rejects bad IDs", () => {
+    const projectRoot = createTempProject()
+    expect(() =>
+      registerSession(projectRoot, {
+        id: "../escape",
+        pid: process.pid,
+        branch: "main",
+        worktree: null,
+        user: "attacker",
+        claiming: [],
+        started: new Date().toISOString(),
+      })
+    ).toThrow("Invalid session ID")
+  })
+
+  it("heartbeat rejects bad IDs", () => {
+    const projectRoot = createTempProject()
+    expect(() => heartbeat(projectRoot, "; rm -rf /")).toThrow("Invalid session ID")
+  })
+
+  it("unregisterSession rejects bad IDs", () => {
+    const projectRoot = createTempProject()
+    expect(() => unregisterSession(projectRoot, "$(whoami)")).toThrow("Invalid session ID")
+  })
+})
+
+describe("NaN Heartbeat Guard", () => {
+  let projectRoot: string
+
+  beforeEach(() => {
+    projectRoot = createTempProject()
+  })
+
+  it("treats sessions with corrupt heartbeat as stale", () => {
+    const lockPath = join(projectRoot, ".jfl", "sessions", "session-corrupt.lock")
+    const corruptLock = {
+      id: "session-corrupt",
+      pid: process.pid,
+      branch: "main",
+      worktree: null,
+      user: "tester",
+      claiming: [],
+      started: new Date().toISOString(),
+      heartbeat: "not-a-date",
+    }
+    writeFileSync(lockPath, JSON.stringify(corruptLock, null, 2))
+
+    const active = getActiveSessions(projectRoot)
+    expect(active.find((s) => s.id === "session-corrupt")).toBeUndefined()
+
+    const stale = getStaleSessions(projectRoot)
+    expect(stale.find((s) => s.id === "session-corrupt")).toBeDefined()
+  })
+
+  it("treats sessions with empty heartbeat as stale", () => {
+    const lockPath = join(projectRoot, ".jfl", "sessions", "session-empty-hb.lock")
+    const emptyHbLock = {
+      id: "session-empty-hb",
+      pid: process.pid,
+      branch: "main",
+      worktree: null,
+      user: "tester",
+      claiming: [],
+      started: new Date().toISOString(),
+      heartbeat: "",
+    }
+    writeFileSync(lockPath, JSON.stringify(emptyHbLock, null, 2))
+
+    const active = getActiveSessions(projectRoot)
+    expect(active.find((s) => s.id === "session-empty-hb")).toBeUndefined()
+  })
+
+  it("treats sessions with undefined heartbeat as stale", () => {
+    const lockPath = join(projectRoot, ".jfl", "sessions", "session-no-hb.lock")
+    const noHbLock = {
+      id: "session-no-hb",
+      pid: process.pid,
+      branch: "main",
+      worktree: null,
+      user: "tester",
+      claiming: [],
+      started: new Date().toISOString(),
+    }
+    writeFileSync(lockPath, JSON.stringify(noHbLock, null, 2))
+
+    const stale = getStaleSessions(projectRoot)
+    expect(stale.find((s) => s.id === "session-no-hb")).toBeDefined()
   })
 })
 
