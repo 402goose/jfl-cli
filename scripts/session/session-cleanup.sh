@@ -48,17 +48,10 @@ if [ -f ".auto-merge.pid" ]; then
   rm -f ".auto-merge.pid"
 fi
 
-# Stop context-hub if running (already handled by Stop hook, but be defensive)
-if [ -f ".jfl/context-hub.pid" ]; then
-  PID=$(cat ".jfl/context-hub.pid")
-  if kill -0 "$PID" 2>/dev/null; then
-    echo "  Stopping context-hub (PID: $PID)..."
-    kill -TERM "$PID" 2>/dev/null || true
-    sleep 1
-    kill -0 "$PID" 2>/dev/null && kill -9 "$PID" 2>/dev/null || true
-  fi
-  rm -f ".jfl/context-hub.pid"
-fi
+# Context Hub is a DAEMON — persists across sessions. Do NOT kill it here.
+# Killing it before Stop hooks fire causes ECONNREFUSED on all HTTP hooks.
+# The hub has 5-layer resilience (launchd, MCP auto-recovery, SessionStart ensure,
+# self-healing on crash, startup grace period). Only stop via: jfl context-hub stop
 
 # Get current session info
 BRANCH=$(git branch --show-current 2>/dev/null || echo "")
