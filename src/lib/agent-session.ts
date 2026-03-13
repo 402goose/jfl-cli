@@ -26,8 +26,9 @@ export interface AgentSession {
   id: string                    // Unique session identifier
   agentName: string             // Agent name from config
   config: AgentConfig           // Full agent config
-  projectRoot: string           // Original repo — never mutated, used for persistent files
-  worktreePath: string          // Isolated worktree in /tmp — all work happens here
+  projectRoot: string           // GTM root — where agent configs, eval scripts, and persistent files live
+  evalRoot: string              // Where eval scripts resolve from (same as projectRoot)
+  worktreePath: string          // Isolated worktree in /tmp — all work happens here (may be a service repo)
   branch: string                // Session branch name
   baseBranch: string            // Base branch (usually main)
   evalSnapshot: EvalSnapshot    // Frozen eval snapshot
@@ -234,6 +235,7 @@ export function startSession(
     agentName: config.name,
     config,
     projectRoot,
+    evalRoot: projectRoot,
     worktreePath,
     branch,
     baseBranch,
@@ -249,9 +251,10 @@ export function startSession(
 }
 
 export async function runBaseline(session: AgentSession): Promise<number> {
+  // Eval scripts live in GTM (evalRoot), not the service worktree
   const result = await runEvalSnapshot(
     session.evalSnapshot,
-    session.worktreePath,
+    session.evalRoot,
     session.config.time_budget_seconds * 1000
   )
 
@@ -346,10 +349,10 @@ export async function runRound(
   gitExec(["add", "-A"], session.worktreePath)
   gitExec(["commit", "-m", `agent(${session.agentName}): round ${round} - ${task.slice(0, 50)}`], session.worktreePath)
 
-  // Run frozen eval in worktree
+  // Run frozen eval — scripts verify against evalRoot (GTM), not the service worktree
   const evalResult = await runEvalSnapshot(
     session.evalSnapshot,
-    session.worktreePath,
+    session.evalRoot,
     session.config.time_budget_seconds * 1000
   )
 
