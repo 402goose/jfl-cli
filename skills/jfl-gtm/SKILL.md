@@ -69,18 +69,26 @@ All scripts are in `~/.openclaw/skills/jfl-gtm/bin/`:
 
 # Start specific workspace
 ~/.openclaw/skills/jfl-gtm/bin/session start /path/to/workspace
+
+# End session (commit, push, verify journal)
+~/.openclaw/skills/jfl-gtm/bin/session end
+
+# Show session status
+~/.openclaw/skills/jfl-gtm/bin/session status
 ```
 
 **What `session start` does:**
 1. Verifies GTM workspace (has `.jfl/` and `CLAUDE.md`)
-2. Reads CLAUDE.md for instructions
-3. Executes SessionStart protocol:
-   - Syncs repositories
-   - Runs health check (jfl-doctor)
-   - Ensures Context Hub running
-   - Loads unified context
-4. Shows project dashboard
-5. Enters GTM mode
+2. Delegates to `jfl openclaw session-start` (creates branch, auto-commit)
+3. Syncs repositories
+4. Ensures Context Hub running
+5. Shows project dashboard
+
+**What `session end` does:**
+1. Verifies journal entry exists (warns if missing)
+2. Commits outstanding changes
+3. Delegates to `jfl openclaw session-end`
+4. Pushes to origin
 
 ### Journal Entries
 

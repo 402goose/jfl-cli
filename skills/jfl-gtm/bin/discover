@@ -1,107 +1,124 @@
 #!/bin/bash
 # JFL GTM - Workspace Discovery
-# Discovers GTM workspaces on the system
+# Finds GTM workspaces on the system
 
 set -e
 
 CONFIG_FILE="${HOME}/.openclaw/openclaw.json"
 
-# Search paths
+# Default search paths (common locations across platforms)
 SEARCH_PATHS=(
   "$HOME/code"
+  "$HOME/Code"
   "$HOME/Projects"
+  "$HOME/projects"
   "$HOME/Documents"
   "$HOME/workspace"
+  "$HOME/Workspace"
   "$HOME/dev"
+  "$HOME/Dev"
+  "$HOME/src"
+  "$HOME/CascadeProjects"
 )
 
 # Add configured paths from openclaw.json
 if [[ -f "$CONFIG_FILE" ]]; then
   while IFS= read -r path; do
+    path="${path/#\~/$HOME}"
     [[ -n "$path" ]] && SEARCH_PATHS+=("$path")
   done < <(jq -r '.skills.entries["jfl-gtm"].config.workspace_paths[]?' "$CONFIG_FILE" 2>/dev/null)
 fi
 
-# Discover workspaces
+# Deduplicate
+declare -A seen_paths
+UNIQUE_PATHS=()
+for p in "${SEARCH_PATHS[@]}"; do
+  [[ -z "$p" ]] && continue
+  [[ ${seen_paths["$p"]+_} ]] && continue
+  seen_paths["$p"]=1
+  UNIQUE_PATHS+=("$p")
+done
+
 discover() {
   local found=0
 
-  for base_dir in "${SEARCH_PATHS[@]}"; do
+  for base_dir in "${UNIQUE_PATHS[@]}"; do
     [[ ! -d "$base_dir" ]] && continue
 
-    # Find directories with .jfl
     while IFS= read -r jfldir; do
       local workspace="${jfldir%/.jfl}"
 
-      # Verify it's a GTM workspace
-      if [[ -d "$workspace/knowledge" ]] && [[ -f "$workspace/CLAUDE.md" ]]; then
-        # Check for recent activity
-        local last_commit=$(git -C "$workspace" log -1 --format=%ct 2>/dev/null || echo 0)
-        local age_days=$(( ($(date +%s) - last_commit) / 86400 ))
+      # Must have knowledge/ or CLAUDE.md to be a GTM
+      [[ ! -d "$workspace/knowledge" ]] && [[ ! -f "$workspace/CLAUDE.md" ]] && continue
 
-        # Only show workspaces active in last 6 months
-        if [[ $age_days -lt 180 ]]; then
-          local name=$(jq -r '.name // empty' "$workspace/.jfl/config.json" 2>/dev/null || basename "$workspace")
+      local last_commit=$(git -C "$workspace" log -1 --format=%ct 2>/dev/null || echo 0)
+      local now=$(date +%s)
+      local age_days=$(( (now - last_commit) / 86400 ))
 
-          if [[ $age_days -eq 0 ]]; then
-            local age_str="today"
-          elif [[ $age_days -eq 1 ]]; then
-            local age_str="1 day ago"
-          else
-            local age_str="${age_days} days ago"
-          fi
+      # Skip workspaces inactive > 6 months
+      [[ $age_days -gt 180 ]] && [[ $last_commit -ne 0 ]] && continue
 
-          echo "$workspace|$name|$age_days|$age_str"
-          found=$((found + 1))
-        fi
+      local name=$(jq -r '.name // empty' "$workspace/.jfl/config.json" 2>/dev/null)
+      [[ -z "$name" ]] && name=$(basename "$workspace")
+
+      local age_str="unknown"
+      if [[ $last_commit -eq 0 ]]; then
+        age_str="no commits"
+      elif [[ $age_days -eq 0 ]]; then
+        age_str="today"
+      elif [[ $age_days -eq 1 ]]; then
+        age_str="1 day ago"
+      else
+        age_str="${age_days}d ago"
       fi
+
+      echo "$workspace|$name|$age_days|$age_str"
+      found=$((found + 1))
     done < <(find "$base_dir" -maxdepth 3 -type d -name ".jfl" 2>/dev/null)
   done
 
   if [[ $found -eq 0 ]]; then
     echo "No GTM workspaces found." >&2
     echo "" >&2
-    echo "Create one with: jfl init my-project" >&2
+    echo "Search paths:" >&2
+    for p in "${UNIQUE_PATHS[@]}"; do
+      [[ -d "$p" ]] && echo "  ✓ $p" >&2 || echo "  ✗ $p (missing)" >&2
+    done
+    echo "" >&2
+    echo "Create a workspace: jfl init my-project" >&2
+    echo "Or add a custom path: $(dirname "$0")/config add /your/path" >&2
     exit 1
   fi
 }
 
-# Format output
 FORMAT="${1:-simple}"
 
 case "$FORMAT" in
   simple)
-    # Just paths, one per line
-    discover | cut -d'|' -f1
+    discover | sort -t'|' -k3 -n | cut -d'|' -f1
     ;;
   detailed)
-    # Show with project names and activity
     echo "GTM Workspaces:"
     echo ""
     discover | sort -t'|' -k3 -n | while IFS='|' read -r path name age age_str; do
       echo "  • $name ($age_str)"
       echo "    $path"
-      echo ""
     done
+    echo ""
     ;;
   json)
-    # JSON output
     echo "["
     local first=1
     discover | sort -t'|' -k3 -n | while IFS='|' read -r path name age age_str; do
       [[ $first -eq 0 ]] && echo ","
       first=0
-      jq -n \
-        --arg path "$path" \
-        --arg name "$name" \
-        --arg age "$age" \
-        --arg age_str "$age_str" \
-        '{path: $path, name: $name, age_days: ($age | tonumber), age_string: $age_str}'
+      printf '{"path":"%s","name":"%s","age_days":%s,"age_string":"%s"}' "$path" "$name" "$age" "$age_str"
     done
+    echo ""
     echo "]"
     ;;
   *)
-    echo "Usage: discover [simple|detailed|json]" >&2
+    echo "Usage: discover [simple|detailed|json]"
     exit 1
     ;;
 esac
