@@ -188,18 +188,31 @@ export async function runEvalSnapshot(
   }
 
   return new Promise((resolve) => {
-    // Run eval using tsx/node
-    const evalRunner = `
-      import { evaluate } from '${snapshot.scriptSnapshot}';
-      const result = await evaluate('${snapshot.dataSnapshot}');
-      console.log(JSON.stringify({ metric: result }));
-    `
+    // Detect eval script type: .sh = bash, .ts/.js = TypeScript/Node module
+    const isShellScript = snapshot.scriptSnapshot.endsWith(".sh")
 
-    const child = spawn("npx", ["tsx", "-e", evalRunner], {
-      cwd: projectRoot,
-      stdio: ["pipe", "pipe", "pipe"],
-      timeout,
-    })
+    let child
+    if (isShellScript) {
+      // Shell scripts: exec directly, expect JSON output with metric-name fields
+      child = spawn("bash", [snapshot.scriptSnapshot], {
+        cwd: projectRoot,
+        stdio: ["pipe", "pipe", "pipe"],
+        timeout,
+        env: { ...process.env, EVAL_DATA_PATH: snapshot.dataSnapshot },
+      })
+    } else {
+      // TypeScript/JS: import and call evaluate() function
+      const evalRunner = `
+        import { evaluate } from '${snapshot.scriptSnapshot}';
+        const result = await evaluate('${snapshot.dataSnapshot}');
+        console.log(JSON.stringify({ metric: result }));
+      `
+      child = spawn("npx", ["tsx", "-e", evalRunner], {
+        cwd: projectRoot,
+        stdio: ["pipe", "pipe", "pipe"],
+        timeout,
+      })
+    }
 
     let stdout = ""
     let stderr = ""
@@ -240,6 +253,12 @@ export async function runEvalSnapshot(
             const parsed = JSON.parse(line)
             if (typeof parsed.metric === "number") {
               metric = parsed.metric
+              break
+            }
+            // Shell scripts output metric by name (e.g. {"hub_crash_rate": 0.33})
+            const numericValues = Object.values(parsed).filter((v): v is number => typeof v === "number")
+            if (numericValues.length > 0 && metric === 0) {
+              metric = numericValues[0]
               break
             }
           }
