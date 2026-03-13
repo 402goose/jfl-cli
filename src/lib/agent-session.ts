@@ -208,9 +208,10 @@ export function startSession(
     throw new Error(`Failed to create worktree for ${branch}: ${wt.output}`)
   }
 
-  // Create eval snapshot in the worktree (content-addressed, immutable)
+  // Create eval snapshot — eval scripts live in GTM (projectRoot), not the service worktree
+  // Copy eval files into the worktree so they're available during agent runs
   const evalSnapshot = createEvalSnapshot(
-    worktreePath,
+    projectRoot,
     config.eval.script,
     config.eval.data
   )
