@@ -137,8 +137,13 @@ export class TelemetryAgentV2 {
    */
   async fetchDigest(hours: number = 24): Promise<PlatformDigest | null> {
     try {
+      // Wake up Fly.io first (cold start can take 10+ seconds)
+      try {
+        await fetch(`${this.platformUrl}`, { method: 'HEAD', signal: AbortSignal.timeout(10000) }).catch(() => {})
+      } catch {}
+
       const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(), 45000) // Fly.io cold starts can be slow
+      const timer = setTimeout(() => controller.abort(), 60000) // 60s after warmup
 
       const response = await fetch(`${this.platformUrl}/api/v1/telemetry/digest`, {
         method: 'POST',
@@ -152,13 +157,39 @@ export class TelemetryAgentV2 {
 
       clearTimeout(timer)
 
+      if (response.status === 429) {
+        // Rate limited — wait and retry once
+        const retryAfter = parseInt(response.headers.get('retry-after') || '30', 10)
+        console.log(`Digest API rate limited, waiting ${retryAfter}s...`)
+        await new Promise(r => setTimeout(r, retryAfter * 1000))
+        const retry = await fetch(`${this.platformUrl}/api/v1/telemetry/digest`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-install-id': this.installId },
+          body: JSON.stringify({ hours }),
+          signal: AbortSignal.timeout(60000),
+        })
+        if (!retry.ok) {
+          console.error(`Digest API retry returned ${retry.status}`)
+          return null
+        }
+        const raw = await retry.json() as any
+        return this.normalizeDigest(raw)
+      }
+
       if (!response.ok) {
         console.error(`Digest API returned ${response.status}`)
         return null
       }
 
       const raw = await response.json() as any
+      return this.normalizeDigest(raw)
+    } catch (err: any) {
+      console.error(`Failed to fetch digest: ${err.message}`)
+      return null
+    }
+  }
 
+  private normalizeDigest(raw: any): PlatformDigest {
       // Normalize API field names to our PlatformDigest interface
       // API returns: commandUsage, toolFrequency, flowActivity, hookUsage
       // Our types expect: commands, toolStats, flowStats, hookStats
@@ -244,10 +275,6 @@ export class TelemetryAgentV2 {
       }
 
       return normalized
-    } catch (err: any) {
-      console.error(`Failed to fetch digest: ${err.message}`)
-      return null
-    }
   }
 
   /**
