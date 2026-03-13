@@ -2092,17 +2092,23 @@ async function ensureForProject(
 
   const portInUse = await isPortInUse(port)
   if (portInUse) {
-    try {
-      const response = await fetch(`http://localhost:${port}/health`, {
-        signal: AbortSignal.timeout(2000)
-      })
-      if (response.ok) {
-        return { status: "running", message: "Running (PID file missing but healthy)" }
+    // Try health check with generous timeout — hub may be busy processing events
+    for (const attempt of [1, 2, 3]) {
+      try {
+        const response = await fetch(`http://localhost:${port}/health`, {
+          signal: AbortSignal.timeout(5000)
+        })
+        if (response.ok) {
+          return { status: "running", message: "Running (PID file missing but healthy)" }
+        }
+      } catch {
+        if (attempt < 3) {
+          await new Promise(resolve => setTimeout(resolve, 1000))
+        }
       }
-    } catch {
-      // Not responding
     }
 
+    // Only kill if health check failed 3 times AND process doesn't match known PID
     try {
       const lsofOutput = execSync(`lsof -ti :${port}`, { encoding: 'utf-8' }).trim()
       if (lsofOutput) {
