@@ -9,7 +9,7 @@ models:
     model: gpt-4o
 
 trigger:
-  require_label: agent
+  require_label: false
   respond_to_mentions: true
   respond_to_replies: true
   bot_name: pr-sentinel
