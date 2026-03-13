@@ -84,28 +84,8 @@ const TYPE_COLORS: Record<string, string> = {
   spec: "muted",
 }
 
-function showRecentJournal(ctx: PiContext): void {
-  const entries = readRecentEntries(projectRoot, 3)
-
-  ctx.ui.setWidget("jfl-journal", (_tui: any, theme: PiTheme) => {
-    if (!entries.length) {
-      return {
-        render: () => [theme.fg("dim", "No journal entries yet — /journal to write one")],
-        invalidate() {},
-      }
-    }
-
-    const lines: string[] = []
-    lines.push(theme.fg("border", "─── ") + theme.fg("dim", "Journal") + theme.fg("border", " ───"))
-
-    for (const e of entries) {
-      const icon = TYPE_ICONS[e.type] ?? "·"
-      const status = e.status === "incomplete" ? theme.fg("dim", " ◌") : ""
-      lines.push(`  ${theme.fg("dim", icon)} ${theme.fg("muted", e.title)}${status}`)
-    }
-
-    return { render: () => lines, invalidate() {} }
-  }, { placement: "belowEditor" })
+function showRecentJournal(_ctx: PiContext): void {
+  // Widget removed — journal entries visible via /journal or Ctrl+Shift+J
 }
 
 export async function setupJournal(ctx: PiContext, _config: JflConfig): Promise<void> {

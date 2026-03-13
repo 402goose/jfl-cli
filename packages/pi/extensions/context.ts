@@ -16,6 +16,7 @@ import { contextRenderCall, contextRenderResult } from "./tool-renderers.js"
 
 let hubBaseUrl = "http://localhost:4242"
 let hubToken: string | null = null
+let projectRoot = ""
 
 function readToken(root: string): string | null {
   const tokenPath = join(root, ".jfl", "context-hub.token")
@@ -26,50 +27,83 @@ function readToken(root: string): string | null {
 }
 
 function getHubUrl(root: string): string {
+  // 1. Runtime port file (written by context-hub when it starts)
   const portFile = join(root, ".jfl", "context-hub.port")
   if (existsSync(portFile)) {
     const port = readFileSync(portFile, "utf-8").trim()
     if (port) return `http://localhost:${port}`
   }
+
+  // 2. Project config (static port assignment)
+  const configFile = join(root, ".jfl", "config.json")
+  if (existsSync(configFile)) {
+    try {
+      const config = JSON.parse(readFileSync(configFile, "utf-8"))
+      const port = config.contextHub?.port
+      if (port) return `http://localhost:${port}`
+    } catch {}
+  }
+
   return "http://localhost:4242"
 }
 
+function refreshHubUrl(): void {
+  hubBaseUrl = getHubUrl(projectRoot)
+  hubToken = readToken(projectRoot)
+}
+
 async function fetchContext(query?: string, limit = 10): Promise<string> {
-  try {
-    const params = new URLSearchParams()
-    if (query) params.set("query", query)
-    params.set("limit", String(limit))
+  // Try current URL first, then refresh and retry once on failure
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const params = new URLSearchParams()
+      if (query) params.set("query", query)
+      params.set("limit", String(limit))
 
-    const resp = await fetch(`${hubBaseUrl}/api/context?${params}`, {
-      headers: hubToken ? { Authorization: `Bearer ${hubToken}` } : {},
-    })
-
-    if (!resp.ok) return ""
-    const data = await resp.json() as { items?: Array<{ content: string; source?: string }> }
-    if (!data.items?.length) return ""
-
-    return data.items
-      .map((item) => {
-        const prefix = item.source ? `[${item.source}] ` : ""
-        return `${prefix}${item.content}`
+      const resp = await fetch(`${hubBaseUrl}/api/context?${params}`, {
+        headers: hubToken ? { Authorization: `Bearer ${hubToken}` } : {},
+        signal: AbortSignal.timeout(5000),
       })
-      .join("\n\n")
-  } catch {
-    return ""
+
+      if (!resp.ok) {
+        if (attempt === 0) { refreshHubUrl(); continue }
+        return ""
+      }
+
+      const data = await resp.json() as { items?: Array<{ content: string; source?: string }> }
+      if (!data.items?.length) return ""
+
+      return data.items
+        .map((item) => {
+          const prefix = item.source ? `[${item.source}] ` : ""
+          return `${prefix}${item.content}`
+        })
+        .join("\n\n")
+    } catch {
+      if (attempt === 0) { refreshHubUrl(); continue }
+      return ""
+    }
   }
+  return ""
 }
 
 export async function setupContext(ctx: PiContext, _config: JflConfig): Promise<void> {
   const root = ctx.session.projectRoot
-  hubToken = readToken(root)
-  hubBaseUrl = getHubUrl(root)
+  projectRoot = root
 
+  // Start Context Hub FIRST, then read the port it wrote
   try {
-    execSync("jfl context-hub ensure", { cwd: root, stdio: "ignore" })
+    execSync("jfl context-hub ensure", { cwd: root, stdio: "pipe", timeout: 15000 })
     ctx.log("Context Hub ensured", "debug")
-  } catch {
-    ctx.log("Context Hub ensure failed (may already be running)", "debug")
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    ctx.log(`Context Hub ensure failed: ${msg}`, "debug")
   }
+
+  // Now read the port (hub may have written .jfl/context-hub.port during ensure)
+  hubBaseUrl = getHubUrl(root)
+  hubToken = readToken(root)
+  ctx.log(`Context Hub URL: ${hubBaseUrl}`, "debug")
 
   ctx.registerTool({
     name: "jfl_context",

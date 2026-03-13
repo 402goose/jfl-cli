@@ -6,9 +6,18 @@
  * @purpose Generate service agent definitions for GTM integration
  */
 
-import { writeFileSync, mkdirSync, existsSync, readFileSync } from "fs"
+import { writeFileSync, mkdirSync, existsSync, readFileSync, readdirSync, unlinkSync } from "fs"
 import { join } from "path"
 import type { ServiceMetadata } from "./service-detector.js"
+
+const ACRONYMS = new Set(["api", "ui", "cli", "db", "ml", "ai", "ci", "cd", "io", "id", "url", "uri", "sdk", "rl", "mcp", "gtm", "crm", "cms", "cdn", "dns", "tcp", "udp", "ssh", "tls", "ssl", "jwt", "aws", "gcp"])
+
+function titleCase(str: string): string {
+  return str
+    .split("-")
+    .map(w => ACRONYMS.has(w.toLowerCase()) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ")
+}
 
 export interface AgentDefinition {
   name: string
@@ -132,7 +141,7 @@ No other services registered yet. When services are onboarded, you'll be able to
     const peerTable = peers
       .map((p: any) => {
         const whenToUse = getWhenToUseForType(p.type)
-        return `| @peer-service-${p.name} | ${p.type} | ${whenToUse} |`
+        return `| @${p.name} | ${p.type} | ${whenToUse} |`
       })
       .join("\n")
 
@@ -148,15 +157,15 @@ ${peerTable}
 
 **Direct @-mention (preferred):**
 \`\`\`
-@peer-service-formation can you generate a landing page?
-@peer-service-context-hub what changed system-wide in last 24h?
+@formation can you generate a landing page?
+@context-hub what changed system-wide in last 24h?
 \`\`\`
 
 **MCP fallback (if agent spawning unavailable):**
 \`\`\`
-service_peer_call("peer-service-formation", "generate", {...})
+service_peer_call("formation", "generate", {...})
 service_peer_list()  # List all peers
-service_peer_status("peer-service-formation")  # Check status
+service_peer_status("formation")  # Check status
 \`\`\`
 
 ### When to Collaborate vs Handle Alone
@@ -207,7 +216,7 @@ export function generateAgentDefinition(
   servicePath: string,
   gtmPath: string
 ): AgentDefinition {
-  const name = `service-${metadata.name}`
+  const name = metadata.name
   const color = getAgentColor(metadata.type)
   const capabilities = generateCapabilities(metadata, servicePath)
   const safetyGates = generateSafetyGates(metadata)
@@ -246,20 +255,24 @@ export function writeAgentDefinition(
 
   const agentFile = join(agentsDir, `${agentDef.name}.md`)
 
+  const label = titleCase(agentDef.name)
+
   const content = `---
 name: ${agentDef.name}
+label: ${label}
 version: 1.0.0
 color: ${agentDef.color}
+type: service
 description: ${agentDef.description}
 ---
 
-# Service Agent: ${agentDef.name}
+# ${label}
 
 **Working Directory:** \`${agentDef.workingDirectory}\`
 
 ## Your Role
 
-You are the service agent for **${agentDef.name}**. You manage this service's codebase, operations, and integration with the GTM ecosystem.
+You are the service agent for **${label}**. You manage this service's codebase, operations, and integration with the GTM ecosystem.
 
 ## Knowledge Base
 
@@ -333,7 +346,7 @@ You can be invoked via:
 
 When spawned, the GTM agent may provide context from GTM knowledge docs. Use this to align with overall strategy.
 
-${generatePeerServicesSection(agentDef.name.replace("service-", ""), gtmPath)}
+${generatePeerServicesSection(agentDef.name, gtmPath)}
 
 ## Example Requests
 
@@ -379,4 +392,61 @@ cat .jfl/journal/*.jsonl | tail -5
   writeFileSync(agentFile, content)
 
   return agentFile
+}
+
+/**
+ * Migrate old-style agent files (service-*.md, peer-service-*.md) to clean names.
+ * Renames files and updates frontmatter in place.
+ */
+export function migrateAgentFiles(agentsDir: string): { renamed: Array<{ from: string; to: string }> } {
+  const result: { renamed: Array<{ from: string; to: string }> } = { renamed: [] }
+
+  if (!existsSync(agentsDir)) return result
+
+  const files = readdirSync(agentsDir).filter((f: string) => f.endsWith(".md"))
+
+  for (const file of files) {
+    let newName: string | null = null
+
+    if (file.startsWith("service-")) {
+      newName = file.replace(/^service-/, "")
+    } else if (file.startsWith("peer-service-")) {
+      newName = file.replace(/^peer-service-/, "")
+    }
+
+    if (!newName || newName === file) continue
+
+    const oldPath = join(agentsDir, file)
+    const newPath = join(agentsDir, newName)
+
+    if (existsSync(newPath)) continue
+
+    let content = readFileSync(oldPath, "utf-8")
+
+    const oldId = file.replace(/\.md$/, "")
+    const newId = newName.replace(/\.md$/, "")
+    const label = titleCase(newId)
+
+    content = content.replace(`name: ${oldId}`, `name: ${newId}`)
+
+    if (!content.includes("label:")) {
+      content = content.replace(`name: ${newId}`, `name: ${newId}\nlabel: ${label}`)
+    }
+
+    if (!content.includes("type: service") && !content.includes("type: peer-service")) {
+      const type = oldId.startsWith("peer-service-") ? "peer-service" : "service"
+      content = content.replace(`name: ${newId}`, `name: ${newId}\ntype: ${type}`)
+    }
+
+    content = content.replace(new RegExp(`@${oldId}\\b`, "g"), `@${newId}`)
+    content = content.replace(new RegExp(`# Service Agent: ${oldId}`, "g"), `# ${label}`)
+    content = content.replace(new RegExp(`# Peer Service: ${oldId}`, "g"), `# ${label}`)
+
+    writeFileSync(newPath, content)
+    unlinkSync(oldPath)
+
+    result.renamed.push({ from: file, to: newName })
+  }
+
+  return result
 }

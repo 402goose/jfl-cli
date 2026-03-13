@@ -1,71 +1,60 @@
 #!/bin/bash
 # JFL GTM - Session Management
-# Initializes and manages GTM sessions
+# Start and end GTM sessions via jfl openclaw protocol
 
 set -e
 
 CONFIG_FILE="${HOME}/.openclaw/openclaw.json"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Get default workspace from config
 get_default_workspace() {
   jq -r '.skills.entries["jfl-gtm"].config.default_workspace // empty' "$CONFIG_FILE" 2>/dev/null
 }
 
-# Get workspace (from arg, default, or select)
 get_workspace() {
   local workspace="$1"
 
-  # If provided, use it
   if [[ -n "$workspace" ]]; then
     workspace="${workspace/#\~/$HOME}"
     echo "$workspace"
     return 0
   fi
 
-  # Try default
   workspace=$(get_default_workspace)
   if [[ -n "$workspace" ]]; then
-    echo "$workspace" >&2
     echo "Using default workspace: $workspace" >&2
     echo "$workspace"
     return 0
   fi
 
-  # Discover and select
   echo "🔍 Discovering GTM workspaces..." >&2
-  echo "" >&2
 
   local workspaces=()
   while IFS= read -r line; do
-    workspaces+=("$line")
-  done < <("$SCRIPT_DIR/discover" simple)
+    [[ -n "$line" ]] && workspaces+=("$line")
+  done < <("$SCRIPT_DIR/discover" simple 2>/dev/null)
 
   if [[ ${#workspaces[@]} -eq 0 ]]; then
     echo "❌ No GTM workspaces found" >&2
+    echo "   Create one with: jfl init my-project" >&2
     exit 1
   fi
 
   if [[ ${#workspaces[@]} -eq 1 ]]; then
-    # Only one, use it
-    echo "Found workspace: ${workspaces[0]}" >&2
+    echo "Found: ${workspaces[0]}" >&2
     echo "${workspaces[0]}"
     return 0
   fi
 
-  # Multiple workspaces - show menu
-  echo "Available workspaces:" >&2
   echo "" >&2
-
   local i=1
   for ws in "${workspaces[@]}"; do
     local name=$(jq -r '.name // empty' "$ws/.jfl/config.json" 2>/dev/null || basename "$ws")
-    echo "  $i. $name" >&2
-    echo "     $ws" >&2
+    echo "  $i. $name ($ws)" >&2
     i=$((i+1))
   done
-
   echo "" >&2
+
   read -p "Select workspace (1-${#workspaces[@]}): " selection >&2
 
   if [[ ! "$selection" =~ ^[0-9]+$ ]] || [[ $selection -lt 1 ]] || [[ $selection -gt ${#workspaces[@]} ]]; then
@@ -76,155 +65,192 @@ get_workspace() {
   echo "${workspaces[$((selection-1))]}"
 }
 
-# Verify workspace
 verify_workspace() {
   local workspace="$1"
-
-  if [[ ! -d "$workspace" ]]; then
-    echo "❌ Workspace doesn't exist: $workspace"
-    exit 1
-  fi
-
-  if [[ ! -d "$workspace/.jfl" ]]; then
-    echo "❌ Not a GTM workspace: missing .jfl/"
-    exit 1
-  fi
-
-  if [[ ! -f "$workspace/CLAUDE.md" ]]; then
-    echo "❌ Not a GTM workspace: missing CLAUDE.md"
-    exit 1
-  fi
+  [[ ! -d "$workspace" ]] && echo "❌ Path doesn't exist: $workspace" && exit 1
+  [[ ! -d "$workspace/.jfl" ]] && echo "❌ Not a GTM workspace (no .jfl/): $workspace" && exit 1
+  [[ ! -f "$workspace/CLAUDE.md" ]] && echo "❌ Not a GTM workspace (no CLAUDE.md): $workspace" && exit 1
 }
 
-# Initialize session
-init_session() {
+# --- session start ---
+
+start_session() {
   local workspace="$1"
+  local agent_name="${OPENCLAW_AGENT:-openclaw}"
 
   echo ""
-  echo "🚀 Initializing GTM session..."
-  echo "📁 Workspace: $workspace"
-  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "  JFL GTM Session"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
   cd "$workspace"
-
-  # Get project name
   local project_name=$(jq -r '.name // empty' .jfl/config.json 2>/dev/null || basename "$workspace")
-  export PROJECT_NAME="$project_name"
 
-  echo "📖 Reading CLAUDE.md..."
-
-  # Execute SessionStart protocol
-
-  # 1. Sync repos
   echo ""
-  echo "1️⃣ Syncing repositories..."
-  if [[ -f "./scripts/session/session-sync.sh" ]]; then
-    ./scripts/session/session-sync.sh 2>&1 | tail -5 || echo "⚠️  Sync script not available"
-  else
-    echo "✅ No sync script (skipping)"
-  fi
+  echo "📁 $project_name"
+  echo "   $workspace"
 
-  # 2. Run doctor check (for existing projects)
-  echo ""
-  echo "2️⃣ Running health check..."
-  local commit_count=$(git rev-list --count HEAD 2>/dev/null || echo "0")
-
-  if [[ "$commit_count" -gt "5" ]]; then
-    # Existing project
-    if [[ -f "./scripts/session/jfl-doctor.sh" ]]; then
-      local doctor_output=$(./scripts/session/jfl-doctor.sh 2>&1 || true)
-
-      if echo "$doctor_output" | grep -q "WARNING\|ERROR"; then
-        echo "$doctor_output"
-        echo ""
-        echo "⚠️  Doctor found issues"
-        echo "    Run: ./scripts/session/jfl-doctor.sh --fix"
+  # Delegate to jfl openclaw if available
+  if command -v jfl &>/dev/null; then
+    echo ""
+    echo "→ Starting session via jfl openclaw..."
+    jfl openclaw session-start --agent "$agent_name" --gtm "$workspace" --json 2>/dev/null | {
+      if command -v jq &>/dev/null; then
+        jq -r '
+          if .error then "❌ " + .message
+          else "✅ Session: " + .session_id +
+               "\n   Branch: " + .branch +
+               "\n   Context Hub: " + (if .context_hub.healthy then "healthy" else "unreachable" end) +
+               "\n   Auto-commit: " + (if .auto_commit.running then "running" else "off" end)
+          end
+        ' 2>/dev/null || cat
       else
-        echo "✅ Health check passed"
+        cat
       fi
-    else
-      echo "✅ No doctor script (skipping)"
-    fi
+    }
   else
-    echo "✅ Fresh project, skipping doctor"
+    echo ""
+    echo "⚠️  jfl not installed — running standalone"
+    standalone_start "$workspace"
   fi
 
-  # 3. Ensure Context Hub
-  echo ""
-  echo "3️⃣ Starting Context Hub..."
-
-  local context_hub_url="${CONTEXT_HUB_URL:-http://localhost:4242}"
-
-  if command -v jfl &> /dev/null; then
-    jfl context-hub ensure 2>&1 | tail -3
-
-    # Wait for health check
-    if timeout 5 bash -c "until curl -sf $context_hub_url/health &>/dev/null; do sleep 0.5; done" 2>/dev/null; then
-      echo "✅ Context Hub running"
-    else
-      echo "⚠️  Context Hub not responding"
-      echo "    Try: jfl context-hub start"
-    fi
-  else
-    echo "⚠️  jfl command not found"
-    echo "    Install: npm install -g just-fucking-launch"
+  # Sync repos if script exists
+  if [[ -x "$workspace/scripts/session/session-sync.sh" ]]; then
+    echo ""
+    echo "→ Syncing repos..."
+    "$workspace/scripts/session/session-sync.sh" 2>&1 | tail -3 || true
   fi
 
-  # 4. Load context
+  # Context Hub
   echo ""
-  echo "4️⃣ Loading context..."
-
-  if curl -sf "$context_hub_url/api/context" &>/dev/null; then
-    echo "✅ Context Hub accessible"
-
-    # Get recent journal entries
-    local journal_count=$(curl -s "$context_hub_url/api/context" 2>/dev/null | jq '.journal | length' 2>/dev/null || echo 0)
-    echo "   Journal entries: $journal_count"
+  echo "→ Context Hub..."
+  local hub_url="${CONTEXT_HUB_URL:-http://localhost:4242}"
+  if command -v jfl &>/dev/null; then
+    jfl context-hub ensure 2>&1 | tail -2 || true
+  fi
+  if curl -sf "$hub_url/health" &>/dev/null; then
+    echo "  ✅ Context Hub healthy ($hub_url)"
   else
-    echo "⚠️  Context Hub not accessible"
+    echo "  ⚠️  Context Hub not responding"
   fi
 
-  # 5. Show dashboard
+  # Dashboard
   echo ""
-  echo "5️⃣ Project Dashboard"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "  Dashboard"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo ""
-  echo "📊 $project_name"
 
-  # Ship date
-  local ship_date=$(grep -E "Ship:|Launch:" knowledge/ROADMAP.md 2>/dev/null | head -1 | sed 's/.*:\s*//' || echo "Not set")
-  echo "🚀 Ship Date: $ship_date"
-
-  # Phase
-  local phase=$(grep -E "Phase:|Stage:" knowledge/ROADMAP.md 2>/dev/null | head -1 | sed 's/.*:\s*//' || echo "Foundation")
-  echo "📍 Phase: $phase"
-
-  echo ""
-  echo "Recent work:"
-
-  if command -v jfl &> /dev/null; then
-    jfl synopsis 24 2>/dev/null | tail -10 || echo "  (No recent activity)"
-  else
-    # Fallback to journal
-    if [[ -d ".jfl/journal" ]]; then
-      cat .jfl/journal/*.jsonl 2>/dev/null | jq -r '.title' 2>/dev/null | tail -5 || echo "  (No journal entries)"
-    else
-      echo "  (No journal yet)"
+  local roadmap="$workspace/knowledge/ROADMAP.md"
+  if [[ -f "$roadmap" ]]; then
+    local date_match=$(grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' "$roadmap" | head -1)
+    if [[ -n "$date_match" ]]; then
+      local days=$(( ( $(date -d "$date_match" +%s 2>/dev/null || date -jf "%Y-%m-%d" "$date_match" +%s 2>/dev/null) - $(date +%s) ) / 86400 ))
+      if [[ $days -gt 0 ]]; then
+        echo "  🚀 ${days}d to launch ($date_match)"
+      else
+        echo "  🚀 $(( -days ))d past launch ($date_match)"
+      fi
     fi
   fi
 
+  if command -v jfl &>/dev/null; then
+    echo ""
+    echo "  Recent work:"
+    jfl synopsis 24 2>/dev/null | head -8 | sed 's/^/  /' || echo "  (none)"
+  fi
+
   echo ""
-  echo "✅ GTM session active"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "  ✅ Session ready — following CLAUDE.md"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
   echo ""
-  echo "Following CLAUDE.md protocols:"
-  echo "  • Journal entries (after features/decisions/fixes)"
-  echo "  • Decision capture (update docs + journal)"
-  echo "  • Context loading (via Context Hub)"
-  echo "  • File headers (@purpose tags)"
-  echo ""
-  echo "Session ready. What's next?"
 }
 
-# Main command
+standalone_start() {
+  local workspace="$1"
+  cd "$workspace"
+
+  local branch="session-openclaw-$(date +%Y%m%d-%H%M)-$(openssl rand -hex 3 2>/dev/null || printf '%06x' $RANDOM)"
+  git checkout -b "$branch" 2>/dev/null || true
+  mkdir -p .jfl/journal
+  echo "$branch" > .jfl/current-session-branch.txt
+
+  echo "  ✅ Session branch: $branch"
+}
+
+# --- session end ---
+
+end_session() {
+  local workspace="${1:-$(pwd)}"
+  workspace="${workspace/#\~/$HOME}"
+
+  [[ ! -d "$workspace/.jfl" ]] && workspace="$(pwd)"
+  [[ ! -d "$workspace/.jfl" ]] && echo "❌ Not in a GTM workspace" && exit 1
+
+  cd "$workspace"
+  local project_name=$(jq -r '.name // empty' .jfl/config.json 2>/dev/null || basename "$workspace")
+
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "  Ending session: $project_name"
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+  # Check journal
+  local branch=$(git branch --show-current 2>/dev/null || echo "unknown")
+  local journal=".jfl/journal/${branch}.jsonl"
+
+  if [[ ! -s "$journal" ]]; then
+    echo ""
+    echo "⚠️  No journal entry for this session!"
+    echo "   Write one: $SCRIPT_DIR/journal write session-end \"Summary\" \"What I worked on\""
+    echo ""
+    read -p "End anyway? [y/N]: " confirm
+    [[ ! "$confirm" =~ ^[Yy]$ ]] && echo "Aborted." && exit 1
+  else
+    local count=$(wc -l < "$journal" | tr -d ' ')
+    echo "  ✅ Journal: $count entries"
+  fi
+
+  # Commit outstanding work
+  echo "  → Committing..."
+  git add -A 2>/dev/null || true
+  git diff --cached --quiet 2>/dev/null || git commit -m "session: end $(date +%Y-%m-%d)" 2>/dev/null || true
+
+  # Delegate to jfl openclaw if available
+  if command -v jfl &>/dev/null; then
+    jfl openclaw session-end --json 2>/dev/null | {
+      if command -v jq &>/dev/null; then
+        jq -r 'if .error then "  ⚠️  " + .message else "  ✅ Session ended" end' 2>/dev/null || echo "  ✅ Session ended"
+      else
+        echo "  ✅ Session ended"
+      fi
+    }
+  fi
+
+  # Push
+  echo "  → Pushing..."
+  git push origin "$branch" 2>/dev/null && echo "  ✅ Pushed" || echo "  ⚠️  Push failed (no remote?)"
+
+  echo ""
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo "  ✅ Done. Context preserved for next session."
+  echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  echo ""
+}
+
+# --- session status ---
+
+show_status() {
+  if command -v jfl &>/dev/null; then
+    jfl openclaw status
+  else
+    echo "Install jfl for full status: npm i -g just-fucking-launch"
+  fi
+}
+
+# --- main ---
+
 COMMAND="${1:-start}"
 shift || true
 
@@ -232,18 +258,25 @@ case "$COMMAND" in
   start|init)
     workspace=$(get_workspace "$@")
     verify_workspace "$workspace"
-    init_session "$workspace"
+    start_session "$workspace"
+    ;;
+  end|stop|done)
+    end_session "$@"
+    ;;
+  status)
+    show_status
     ;;
   *)
     echo "JFL GTM Session Management"
     echo ""
     echo "Usage:"
-    echo "  session start [/path/to/workspace]  - Start GTM session"
-    echo "  session init [/path/to/workspace]   - Same as start"
+    echo "  session start [/path/to/workspace]  Start GTM session"
+    echo "  session end [/path/to/workspace]    End session (commit, push)"
+    echo "  session status                      Show session state"
     echo ""
-    echo "If no path provided:"
-    echo "  1. Uses default workspace (if set)"
-    echo "  2. Discovers and prompts for selection"
+    echo "Environment:"
+    echo "  OPENCLAW_AGENT   Agent name (default: openclaw)"
+    echo "  CONTEXT_HUB_URL  Context Hub URL (default: http://localhost:4242)"
     exit 1
     ;;
 esac

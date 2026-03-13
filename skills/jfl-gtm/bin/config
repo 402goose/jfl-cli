@@ -9,8 +9,8 @@ CONFIG_FILE="${HOME}/.openclaw/openclaw.json"
 # Ensure config file exists with proper structure
 ensure_config() {
   if [[ ! -f "$CONFIG_FILE" ]]; then
-    echo "❌ Config file not found: $CONFIG_FILE"
-    exit 1
+    mkdir -p "$(dirname "$CONFIG_FILE")"
+    echo '{"skills":{"entries":{}}}' > "$CONFIG_FILE"
   fi
 
   # Ensure skills.entries.jfl-gtm exists

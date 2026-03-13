@@ -70,7 +70,7 @@ function buildHudLines(root: string): string[] {
   const lines = [
     `◆ ${projectName} [${projectType}]`,
     days ? `  ${days}` : "",
-    `  Phase: ${phase}`,
+    phase !== "unknown" ? `  Phase: ${phase}` : "",
   ].filter(Boolean)
 
   try {

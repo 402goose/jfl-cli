@@ -880,6 +880,23 @@ export async function servicesCommand(
         });
         break;
 
+      case "migrate-agents": {
+        const { migrateAgentFiles } = await import("../lib/agent-generator.js");
+        const chalk = (await import("chalk")).default;
+        const cwd = process.cwd();
+        const agentsDir = path.join(cwd, ".claude", "agents");
+        const { renamed } = migrateAgentFiles(agentsDir);
+        if (renamed.length === 0) {
+          console.log(chalk.green("✓ No agent files need migration"));
+        } else {
+          console.log(chalk.green(`✓ Migrated ${renamed.length} agent file(s):`));
+          for (const r of renamed) {
+            console.log(`  ${chalk.red(r.from)} → ${chalk.green(r.to)}`);
+          }
+        }
+        break;
+      }
+
       case "validate":
         await serviceValidate({ fix: options.fix, json: options.json });
         break;
@@ -940,6 +957,7 @@ export async function servicesCommand(
         console.log("  deploy-skill <skill> [svc]   Deploy skill to registered services");
         console.log("  sync [service]               Sync service to GTM manually");
         console.log("  sync-agents [service]        Sync peer agent definitions (--current for current service)");
+        console.log("  migrate-agents               Rename service-*.md → *.md for clean @-mentions");
         console.log("  phone-home <gtm> <branch>    Comprehensive sync with session metadata");
         console.log("  validate [--fix] [--json]    Validate service configuration (run from service dir)");
         break;

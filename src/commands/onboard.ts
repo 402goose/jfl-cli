@@ -26,6 +26,7 @@ import {
 import {
   generateAgentDefinition,
   writeAgentDefinition,
+  migrateAgentFiles,
 } from "../lib/agent-generator.js"
 import { writeSkillFiles } from "../lib/skill-generator.js"
 import { syncPeerAgents, getRegisteredServices } from "../lib/peer-agent-generator.js"
@@ -949,6 +950,16 @@ export async function onboardCommand(
   console.log(chalk.cyan("  Step 2: GTM Agent Integration"))
   console.log(chalk.cyan("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"))
 
+  // Migrate any old-style agent files first
+  const agentsDir = join(gtmPath, ".claude", "agents")
+  const migration = migrateAgentFiles(agentsDir)
+  if (migration.renamed.length > 0) {
+    console.log(chalk.yellow(`  Migrated ${migration.renamed.length} agent file(s) to clean names`))
+    for (const r of migration.renamed) {
+      console.log(chalk.dim(`    ${r.from} → ${r.to}`))
+    }
+  }
+
   const agentDef = generateAgentDefinition(metadata, servicePath, gtmPath)
   const agentFile = writeAgentDefinition(agentDef, gtmPath)
   console.log(chalk.green(`✓ Created agent definition: ${agentFile}`))
@@ -1046,7 +1057,7 @@ export async function onboardCommand(
     `  ${chalk.gray(`${servicePath}/.jfl/`)}\n` +
     `  ${chalk.gray(`${servicePath}/.claude/`)}\n` +
     `  ${chalk.gray(`${servicePath}/knowledge/`)}\n` +
-    `  ${chalk.gray(`${gtmPath}/.claude/agents/service-${metadata.name}.md`)}\n` +
+    `  ${chalk.gray(`${gtmPath}/.claude/agents/${metadata.name}.md`)}\n` +
     `  ${chalk.gray(`${gtmPath}/.claude/skills/${metadata.name}/`)}\n\n` +
     `Next steps:\n` +
     `  1. Fill in service knowledge docs:\n` +
