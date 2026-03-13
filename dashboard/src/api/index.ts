@@ -366,4 +366,49 @@ export const api = {
   autoresearchStatus: () => apiFetch<AutoresearchStatus>("/api/v1/autoresearch/status"),
 
   evalEntries: (limit = 100) => apiFetch<{ entries: EvalEntry[] }>(`/api/eval/entries?limit=${limit}`),
+
+  // Autoresearch / RL Agent APIs
+  rlAgents: () => apiFetch<{ agents: RLAgentConfig[] }>("/api/v1/agents"),
+  rlExperiments: (agent?: string) => apiFetch<{ experiments: RLExperiment[]; total: number }>(agent ? `/api/v1/experiments?agent=${agent}` : "/api/v1/experiments"),
+  rlSessions: () => apiFetch<{ sessions: RLSession[] }>("/api/v1/sessions"),
+  productContext: () => apiFetch<{ context: string | null; updatedAt: string | null }>("/api/v1/product-context"),
+}
+
+// RL Agent types
+export interface RLAgentConfig {
+  name: string
+  scope: string
+  metric: string
+  direction: "maximize" | "minimize"
+  time_budget_seconds: number
+  target_repo?: string
+  eval: { script: string; data: string }
+  constraints: { files_in_scope: string[]; files_readonly: string[]; max_file_changes: number }
+  context_scope: { produces: string[]; consumes: string[] }
+}
+
+export interface RLExperiment {
+  agent: string
+  session_id?: string
+  state?: Record<string, unknown>
+  action?: { type: string; description: string; scope?: string }
+  reward?: number | Record<string, unknown>
+  metadata?: Record<string, unknown>
+  ts?: string
+}
+
+export interface RLSession {
+  id: string
+  agent: string
+  rounds: Array<{
+    round: number
+    task: string
+    baseline: number
+    metric: number
+    delta: number
+    kept: boolean
+    duration_ms: number
+    error?: string
+    timestamp: string
+  }>
 }
