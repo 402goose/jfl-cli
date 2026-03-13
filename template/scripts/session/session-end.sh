@@ -12,6 +12,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(pwd)"
 LOG_DIR="$PROJECT_ROOT/.jfl/logs"
 SESSION_FILE="$PROJECT_ROOT/.jfl/current-session.json"
+LOCK_SCRIPT="$SCRIPT_DIR/session-lock.sh"
 
 # Colors
 RED='\033[0;31m'
@@ -56,9 +57,31 @@ if [ -f "$SESSION_FILE" ]; then
     fi
 fi
 
+SESSION_ID=""
+if [ -f "$PROJECT_ROOT/.jfl/current-session-branch.txt" ]; then
+    SESSION_ID=$(cat "$PROJECT_ROOT/.jfl/current-session-branch.txt" 2>/dev/null || echo "")
+fi
+
+# Stop heartbeat daemon
+stop_heartbeat() {
+    local pid_file="$1"
+    if [ -f "$pid_file" ]; then
+        local hb_pid
+        hb_pid=$(cat "$pid_file" 2>/dev/null || echo "")
+        if [ -n "$hb_pid" ]; then
+            kill "$hb_pid" 2>/dev/null || true
+        fi
+        rm -f "$pid_file"
+    fi
+}
+
 if $IS_WORKTREE && [ -n "$SESSION_NAME" ] && [ "$SESSION_NAME" != "main" ] && [ "$SESSION_NAME" != "null" ]; then
     echo -e "${BLUE}→${NC} Ending worktree session: $SESSION_NAME"
     echo ""
+
+    # Stop heartbeat
+    stop_heartbeat "$WORKTREE_PATH/.jfl/heartbeat.pid"
+    stop_heartbeat "$PROJECT_ROOT/.jfl/heartbeat.pid"
 
     # Use worktree-session.sh to properly end (merge + cleanup)
     if [ -f "$SCRIPT_DIR/worktree-session.sh" ]; then
@@ -72,12 +95,21 @@ if $IS_WORKTREE && [ -n "$SESSION_NAME" ] && [ "$SESSION_NAME" != "main" ] && [ 
         exit 1
     fi
 
+    # Unregister from lock registry
+    if [ -x "$LOCK_SCRIPT" ] && [ -n "$SESSION_ID" ]; then
+        "$LOCK_SCRIPT" unregister "$SESSION_ID" >/dev/null 2>&1 || true
+        echo -e "${GREEN}✓${NC} Session unregistered from lock registry"
+    fi
+
     # Clean up session file
     rm -f "$SESSION_FILE"
 
 else
-    # Main branch session - just commit and push
+    # Main branch session - commit, merge, push
     echo -e "${BLUE}→${NC} Ending main branch session..."
+
+    # Step 0: Stop heartbeat
+    stop_heartbeat "$PROJECT_ROOT/.jfl/heartbeat.pid"
 
     # Step 1: Stop auto-commit
     echo -e "${BLUE}→${NC} Stopping auto-commit..."
@@ -124,13 +156,38 @@ else
         echo -e "${GREEN}✓${NC} No uncommitted changes"
     fi
 
-    # Step 4: Push to remote
-    echo -e "${BLUE}→${NC} Pushing to remote..."
+    # Step 4: Merge session branch to working branch (sequenced)
     CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-    if git push origin "$CURRENT_BRANCH" 2>/dev/null; then
-        echo -e "${GREEN}✓${NC} Pushed to origin/$CURRENT_BRANCH"
+    WORKING_BRANCH=$(jq -r '.working_branch // empty' .jfl/config.json 2>/dev/null)
+    if [ -z "$WORKING_BRANCH" ]; then WORKING_BRANCH="main"; fi
+
+    if [ "$CURRENT_BRANCH" != "$WORKING_BRANCH" ] && [[ "$CURRENT_BRANCH" == session-* ]]; then
+        echo -e "${BLUE}→${NC} Merging $CURRENT_BRANCH → $WORKING_BRANCH (sequenced)..."
+
+        if [ -x "$LOCK_SCRIPT" ] && [ -n "$SESSION_ID" ]; then
+            if "$LOCK_SCRIPT" merge "$CURRENT_BRANCH" "$WORKING_BRANCH" "$SESSION_ID" "$PROJECT_ROOT" 2>&1; then
+                echo -e "${GREEN}✓${NC} Merged and pushed via sequencer"
+            else
+                echo -e "${YELLOW}⚠${NC} Sequenced merge failed — pushing branch for manual merge"
+                git push origin "$CURRENT_BRANCH" 2>/dev/null || true
+            fi
+        else
+            # Fallback: direct push
+            echo -e "${BLUE}→${NC} Pushing to remote..."
+            if git push origin "$CURRENT_BRANCH" 2>/dev/null; then
+                echo -e "${GREEN}✓${NC} Pushed to origin/$CURRENT_BRANCH"
+            else
+                echo -e "${YELLOW}⚠${NC} Push failed (will retry on next session)"
+            fi
+        fi
     else
-        echo -e "${YELLOW}⚠${NC} Push failed (will retry on next session)"
+        # Already on working branch — just push
+        echo -e "${BLUE}→${NC} Pushing to remote..."
+        if git push origin "$CURRENT_BRANCH" 2>/dev/null; then
+            echo -e "${GREEN}✓${NC} Pushed to origin/$CURRENT_BRANCH"
+        else
+            echo -e "${YELLOW}⚠${NC} Push failed (will retry on next session)"
+        fi
     fi
 
     # Step 5: Sync product repo if symlink/submodule
@@ -187,6 +244,12 @@ else
 
     # Clean up session file
     rm -f "$SESSION_FILE"
+
+    # Unregister from lock registry
+    if [ -x "$LOCK_SCRIPT" ] && [ -n "$SESSION_ID" ]; then
+        "$LOCK_SCRIPT" unregister "$SESSION_ID" >/dev/null 2>&1 || true
+        echo -e "${GREEN}✓${NC} Session unregistered from lock registry"
+    fi
 
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
