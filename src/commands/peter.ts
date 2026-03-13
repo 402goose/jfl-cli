@@ -1585,6 +1585,104 @@ async function runDailyLoop(projectRoot: string): Promise<void> {
 
   console.log()
 
+  // ── Pre-flight: Mine tuples + Synthesize product context ──
+  console.log(chalk.cyan("  Pre-flight: Mining tuples from journals...\n"))
+  try {
+    const { mineAll } = await import("../lib/tuple-miner.js")
+    const { tuples: minedTuples, stats: mineStats } = mineAll({ all: true })
+    if (minedTuples.length > 0) {
+      const existing = new Set(entries.map(e => e.id))
+      let newCount = 0
+      for (const tuple of minedTuples) {
+        const id = `tb_${Buffer.from(JSON.stringify(tuple.state) + JSON.stringify(tuple.action)).toString("base64").slice(0, 12)}`
+        if (!existing.has(id)) {
+          tb.append({ ...tuple, id, v: "1", ts: new Date().toISOString() } as any)
+          newCount++
+        }
+      }
+      console.log(chalk.gray(`    Mined ${mineStats.totalMined} tuples, ${newCount} new → buffer total: ${entries.length + newCount}`))
+    }
+  } catch (err: any) {
+    console.log(chalk.yellow(`    Tuple mining failed: ${err.message}`))
+  }
+
+  console.log(chalk.cyan("\n  Pre-flight: Synthesizing product context...\n"))
+  try {
+    await runSynthesis(projectRoot)
+  } catch (err: any) {
+    console.log(chalk.yellow(`    Synthesis failed: ${err.message}`))
+  }
+
+  // ── Layer 3: Strategic reasoning ──
+  console.log(chalk.cyan("\n  Layer 3: Strategic reasoning...\n"))
+  try {
+    const { StratusClient } = await import("../lib/stratus-client.js")
+    const stratus = new StratusClient()
+
+    const productContextPath = path.join(projectRoot, ".jfl", "product-context.md")
+    const productCtx = fs.existsSync(productContextPath) ? fs.readFileSync(productContextPath, "utf-8").slice(0, 2000) : "No product context yet."
+
+    // Get recent results per agent
+    const agentSummaries = agents.map(a => {
+      const agentEntries = entries.filter(e => e.agent === a.name).slice(-5)
+      const improved = agentEntries.filter(e => e.reward?.improved).length
+      return `${a.name} (${a.metric}, ${a.direction}): ${agentEntries.length} recent tuples, ${improved} improved`
+    }).join("\n")
+
+    const strategicPrompt = `You are Peter Parker, a strategic agent orchestrator. Based on the product context and agent performance, decide:
+1. Which agents should run tonight (and why)
+2. Which agents to skip (and why)  
+3. Any priority shifts or new metric suggestions
+
+Product context:
+${productCtx}
+
+Agent performance:
+${agentSummaries}
+
+Stale agents (haven't run in 24h): ${staleAgents.join(", ") || "none"}
+
+Be concise. Output a JSON object: { "run": ["agent1", "agent2"], "skip": ["agent3"], "reasoning": "brief explanation", "suggestions": "any new metrics or priority changes" }`
+
+    const response = await stratus.reason(strategicPrompt, { maxTokens: 500, temperature: 0.3 })
+    const strategicText = response?.choices?.[0]?.message?.content || ""
+    console.log(chalk.gray(`    Strategic reasoning:\n    ${strategicText.slice(0, 500)}`))
+
+    // Try to parse JSON from response
+    try {
+      const jsonMatch = strategicText.match(/\{[\s\S]*\}/)
+      if (jsonMatch) {
+        const strategic = JSON.parse(jsonMatch[0])
+        if (strategic.reasoning) {
+          console.log(chalk.cyan(`\n    Reasoning: ${strategic.reasoning}`))
+        }
+        if (strategic.suggestions) {
+          console.log(chalk.gray(`    Suggestions: ${strategic.suggestions}`))
+        }
+        // Write strategic decision to journal
+        const journalPath = path.join(projectRoot, ".jfl", "journal")
+        if (fs.existsSync(journalPath)) {
+          const entry = {
+            v: 2, ts: new Date().toISOString(), session: "peter-parker",
+            type: "decision", status: "complete",
+            title: "Layer 3: Strategic reasoning",
+            summary: strategic.reasoning || strategicText.slice(0, 200),
+            detail: strategicText,
+          }
+          const files = fs.readdirSync(journalPath).filter(f => f.endsWith(".jsonl")).sort()
+          const latestJournal = files[files.length - 1]
+          if (latestJournal) {
+            fs.appendFileSync(path.join(journalPath, latestJournal), "\n" + JSON.stringify(entry))
+          }
+        }
+      }
+    } catch { /* non-JSON response, that's fine */ }
+  } catch (err: any) {
+    console.log(chalk.yellow(`    Strategic reasoning failed: ${err.message}`))
+  }
+
+  console.log()
+
   // Check for scope:impact events that should trigger downstream agents
   const impactTriggered = orchestrator.getImpactTriggeredAgents()
   if (impactTriggered.length > 0) {

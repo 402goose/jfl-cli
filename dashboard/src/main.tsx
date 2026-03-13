@@ -1,6 +1,32 @@
 import { render } from "preact"
-import { useState } from "preact/hooks"
+import { useState, useEffect, useRef } from "preact/hooks"
 import { api, WorkspaceStatus } from "./api"
+
+// Dashboard telemetry — fire-and-forget event tracking
+const telemetry = {
+  _startTime: Date.now(),
+  _lastPage: "",
+  pageView(page: string) {
+    const timeOnPrev = this._lastPage ? Date.now() - this._startTime : 0
+    if (this._lastPage && timeOnPrev > 1000) {
+      this._emit("dashboard:page-dwell", { page: this._lastPage, durationMs: timeOnPrev })
+    }
+    this._emit("dashboard:page-view", { page })
+    this._startTime = Date.now()
+    this._lastPage = page
+  },
+  click(target: string, context?: Record<string, unknown>) {
+    this._emit("dashboard:click", { target, ...context })
+  },
+  _emit(type: string, data: Record<string, unknown>) {
+    // Fire and forget — don't block UI
+    fetch("/api/hooks", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("jfl-token") || ""}` },
+      body: JSON.stringify({ type, source: "dashboard", data, ts: new Date().toISOString() }),
+    }).catch(() => {}) // swallow errors
+  },
+}
 import { Sidebar } from "./components/Sidebar"
 import {
   OverviewPage,
@@ -34,6 +60,13 @@ function App() {
   const status = usePolling(() => api.status(), 10000)
   const hashPage = (location.hash.replace("#/", "") || "overview") as PageId
   const [page, setPage] = useState<PageId>(hashPage in pageMap ? hashPage : "overview")
+  const firstRender = useRef(true)
+
+  useEffect(() => {
+    telemetry.pageView(page)
+    if (!firstRender.current) location.hash = `#/${page}`
+    firstRender.current = false
+  }, [page])
 
   if (status.loading) {
     return (
