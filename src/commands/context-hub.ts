@@ -1569,11 +1569,10 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus,
         }
 
         // System agents (always present in a JFL installation)
+        // Only Peter Parker is a real system agent — others come from .jfl/agents/*.toml configs
+        // Stratus, eval-engine, telemetry-agent are either external infra or RL agents now
         const systemAgents = [
-          { id: "peter-parker", label: "Peter Parker", type: "orchestrator" as const, status: "running" as const, produces: ["peter:task-completed", "peter:rollout-request", "peter:experiment-start"], consumes: ["telemetry:insight", "eval:scored"] },
-          { id: "telemetry-agent", label: "Telemetry Agent", type: "agent" as const, status: "running" as const, produces: ["telemetry:insight", "telemetry:anomaly"], consumes: ["hook:*", "eval:*"] },
-          { id: "eval-engine", label: "Eval Engine", type: "eval" as const, status: "running" as const, produces: ["eval:scored", "eval:baseline"], consumes: ["peter:task-completed"] },
-          { id: "stratus", label: "Stratus API", type: "service" as const, status: "running" as const, produces: ["stratus:prediction", "stratus:rollout-result"], consumes: ["peter:rollout-request"] },
+          { id: "peter-parker", label: "Peter Parker", type: "orchestrator" as const, status: "running" as const, produces: ["peter:task-completed", "peter:rollout-request", "peter:experiment-start"], consumes: ["telemetry:insight", "telemetry:metric-alert", "eval:scored", "sentinel:recommendation"] },
         ]
 
         // Build nodes from registered services + system agents

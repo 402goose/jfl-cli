@@ -1,10 +1,5 @@
 /**
- * IDE Layout Types
- *
- * Declarative workspace layout for jfl ide. Maps to tmux-ide's ide.yml format
- * with JFL-specific extensions for agent resolution and built-in pane types.
- *
- * @purpose Type definitions for jfl ide workspace layouts
+ * @purpose Type definitions for jfl ide workspace layouts and per-user customization
  */
 
 export interface IdePane {
@@ -22,6 +17,7 @@ export type IdePaneType =
   | "shell"
   | "welcome"
   | "agent"
+  | "agents"
   | "events"
   | "eval"
   | "training"
@@ -31,6 +27,7 @@ export type IdePaneType =
   | "flows"
   | "telemetry"
   | "portfolio"
+  | "dashboard"
   | "custom"
 
 export interface IdeRow {
@@ -52,8 +49,25 @@ export interface IdeLayout {
   theme?: IdeTheme
 }
 
+export interface IdeLayoutPrefs {
+  defaultSurfaces?: string[]
+  sidebarSections?: string[]
+  agentDetail?: "expanded" | "compact" | "hidden"
+}
+
+export interface IdeNotificationPrefs {
+  agentRoundComplete?: boolean
+  agentPrCreated?: boolean
+  evalRegression?: boolean
+  serviceUnhealthy?: boolean
+  flowNeedsApproval?: boolean
+}
+
 export interface IdeConfig {
   primary?: "claude" | "pi" | "auto"
   piAsked?: boolean
   backend?: "cmux" | "tmux" | "auto"
+  layout?: IdeLayoutPrefs
+  notifications?: IdeNotificationPrefs
+  theme?: IdeTheme
 }

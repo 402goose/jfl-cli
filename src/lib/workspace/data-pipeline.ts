@@ -1,12 +1,24 @@
 /**
- * @purpose Data pipeline — SSE + polling + file watching to keep surfaces live
+ * @purpose Data pipeline — SSE + polling + file watching + agent session tracking to keep surfaces live
  */
 
-import { existsSync, readFileSync, watch as fsWatch, FSWatcher } from "fs"
+import { existsSync, readFileSync, readdirSync, watch as fsWatch, FSWatcher } from "fs"
 import { join } from "path"
 import { getHubConfig, hubFetch } from "../hub-client.js"
-import type { SurfaceType, LiveData, HubEventSnapshot, EvalSnapshot, FlowSnapshot } from "./surface-type.js"
+import type {
+  SurfaceType,
+  LiveData,
+  HubEventSnapshot,
+  EvalSnapshot,
+  FlowSnapshot,
+  AgentSessionSnapshot,
+  AgentRoundSnapshot,
+  TrainingSnapshot,
+  ProjectConfigSnapshot,
+  ChildProjectSnapshot,
+} from "./surface-type.js"
 import type { StatusEntry, WorkspaceBackend } from "./backend.js"
+import { readProjectConfig } from "./surface-registry.js"
 
 interface RegisteredSurface {
   id: string
@@ -50,6 +62,8 @@ export class DataPipeline {
   async start(): Promise<void> {
     const hub = getHubConfig(this.projectRoot)
     this.hubAvailable = hub !== null
+
+    this.liveData.projectConfig = readProjectConfig(this.projectRoot)
 
     if (this.hubAvailable) {
       this.startSSE()
@@ -115,7 +129,6 @@ export class DataPipeline {
           }
         })
         .catch(() => {
-          // Reconnect after delay if not aborted
           if (this.sseAbort && !this.sseAbort.signal.aborted) {
             setTimeout(connect, 5000)
           }
@@ -160,6 +173,9 @@ export class DataPipeline {
       }
 
       this.pollFileData()
+      this.pollAgentSessions()
+      this.pollTrainingBuffer()
+      this.pollChildProjects()
       this.pushUpdates()
     }
 
@@ -228,6 +244,186 @@ export class DataPipeline {
     }
   }
 
+  private pollAgentSessions(): void {
+    const sessionsDir = join(this.projectRoot, ".jfl", "sessions")
+    if (!existsSync(sessionsDir)) {
+      this.liveData.agentSessions = []
+      return
+    }
+
+    const sessions: AgentSessionSnapshot[] = []
+
+    try {
+      const dirs = readdirSync(sessionsDir, { withFileTypes: true })
+        .filter((d) => d.isDirectory())
+
+      for (const dir of dirs) {
+        const statePath = join(sessionsDir, dir.name, "state.json")
+        if (!existsSync(statePath)) continue
+
+        try {
+          const state = JSON.parse(readFileSync(statePath, "utf-8"))
+          const snapshot: AgentSessionSnapshot = {
+            agentName: state.agentName || dir.name.split("-")[0],
+            sessionId: state.id || dir.name,
+            metric: state.config?.metric || "unknown",
+            direction: state.config?.direction || "maximize",
+            baseline: state.baselineMetric || 0,
+            currentScore: state.baselineMetric || 0,
+            delta: 0,
+            round: state.round || 0,
+            explorationRate: state.config?.policy?.exploration_rate || 0.2,
+            status: state.status || "active",
+            rounds: [],
+            produces: state.config?.context_scope?.produces || [],
+            consumes: state.config?.context_scope?.consumes || [],
+            branch: state.branch,
+            startedAt: state.startedAt,
+          }
+
+          const resultsPath = join(sessionsDir, dir.name, "results.tsv")
+          if (existsSync(resultsPath)) {
+            snapshot.rounds = parseResultsTsv(resultsPath)
+            if (snapshot.rounds.length > 0) {
+              const keptRounds = snapshot.rounds.filter((r) => r.kept)
+              const totalDelta = keptRounds.reduce((sum, r) => sum + r.delta, 0)
+              snapshot.delta = totalDelta
+              snapshot.currentScore = snapshot.baseline + totalDelta
+              snapshot.round = snapshot.rounds.length
+            }
+          }
+
+          // Decay exploration rate based on rounds
+          if (state.config?.policy) {
+            const decay = state.config.policy.decay_per_round || 0.01
+            const minExplore = state.config.policy.min_exploration || 0.05
+            const initial = state.config.policy.exploration_rate || 0.2
+            snapshot.explorationRate = Math.max(minExplore, initial - (decay * snapshot.round))
+          }
+
+          sessions.push(snapshot)
+        } catch {}
+      }
+    } catch {}
+
+    this.liveData.agentSessions = sessions
+  }
+
+  private pollTrainingBuffer(): void {
+    const bufferPath = join(this.projectRoot, ".jfl", "training-buffer.jsonl")
+    if (!existsSync(bufferPath)) {
+      this.liveData.trainingData = undefined
+      return
+    }
+
+    try {
+      const content = readFileSync(bufferPath, "utf-8")
+      const lines = content.trim().split("\n").filter(Boolean)
+      const entries = lines.map((l) => {
+        try { return JSON.parse(l) } catch { return null }
+      }).filter(Boolean)
+
+      const byAgent: Record<string, number> = {}
+      const bySource: Record<string, number> = {}
+      let totalReward = 0
+      let improvedCount = 0
+
+      for (const e of entries) {
+        const agent = e.agent || "unknown"
+        byAgent[agent] = (byAgent[agent] || 0) + 1
+
+        const source = e.metadata?.source || "unknown"
+        bySource[source] = (bySource[source] || 0) + 1
+
+        const reward = e.reward?.composite_delta ?? 0
+        totalReward += reward
+        if (e.reward?.improved) improvedCount++
+      }
+
+      this.liveData.trainingData = {
+        totalTuples: entries.length,
+        positiveReward: improvedCount,
+        byAgent,
+        bySource,
+        avgReward: entries.length > 0 ? totalReward / entries.length : 0,
+        improvedRate: entries.length > 0 ? improvedCount / entries.length : 0,
+        lastWritten: entries.length > 0 ? entries[entries.length - 1].ts : undefined,
+      }
+    } catch {
+      this.liveData.trainingData = undefined
+    }
+  }
+
+  private pollChildProjects(): void {
+    const config = this.liveData.projectConfig
+    if (!config || config.type === "service") {
+      this.liveData.childProjects = undefined
+      return
+    }
+
+    const children: ChildProjectSnapshot[] = []
+
+    for (const svc of config.registeredServices) {
+      const child: ChildProjectSnapshot = {
+        name: svc.name,
+        type: svc.type,
+        path: svc.path,
+        health: "unknown",
+      }
+
+      if (svc.path && existsSync(svc.path)) {
+        const childConfigPath = join(svc.path, ".jfl", "config.json")
+        if (existsSync(childConfigPath)) {
+          try {
+            const childConfig = JSON.parse(readFileSync(childConfigPath, "utf-8"))
+            child.contextScope = childConfig.context_scope
+          } catch {}
+        }
+
+        const childEvalPath = join(svc.path, ".jfl", "eval", "eval.jsonl")
+        if (existsSync(childEvalPath)) {
+          try {
+            const content = readFileSync(childEvalPath, "utf-8")
+            const lines = content.trim().split("\n").filter(Boolean)
+            if (lines.length >= 1) {
+              const latest = JSON.parse(lines[lines.length - 1])
+              const previous = lines.length >= 2 ? JSON.parse(lines[lines.length - 2]) : null
+              const score = latest.composite ?? 0
+              child.evalScore = score
+              const prevScore = previous?.composite ?? score
+              const delta = score - prevScore
+              child.evalTrend = delta > 0.001 ? "up" : delta < -0.001 ? "down" : "flat"
+            }
+          } catch {}
+        }
+
+        const childAgentsDir = join(svc.path, ".jfl", "agents")
+        if (existsSync(childAgentsDir)) {
+          try {
+            const agentFiles = readdirSync(childAgentsDir).filter((f) => f.endsWith(".toml"))
+            child.activeAgents = agentFiles.length
+          } catch {}
+        }
+
+        const childFlowsDir = join(svc.path, ".jfl", "flows")
+        if (existsSync(childFlowsDir)) {
+          try {
+            const flowFiles = readdirSync(childFlowsDir).filter((f) => f.endsWith(".yaml") || f.endsWith(".yml"))
+            child.activeFlows = flowFiles.length
+          } catch {}
+        }
+
+        child.health = "healthy"
+      } else {
+        child.health = svc.status === "active" ? "unknown" : "unhealthy"
+      }
+
+      children.push(child)
+    }
+
+    this.liveData.childProjects = children
+  }
+
   private startFileWatching(): void {
     const evalDir = join(this.projectRoot, ".jfl", "eval")
     if (existsSync(evalDir)) {
@@ -245,6 +441,31 @@ export class DataPipeline {
       try {
         const w = fsWatch(journalDir, { persistent: false }, () => {
           this.pushUpdates()
+        })
+        this.watchers.push(w)
+      } catch {}
+    }
+
+    const sessionsDir = join(this.projectRoot, ".jfl", "sessions")
+    if (existsSync(sessionsDir)) {
+      try {
+        const w = fsWatch(sessionsDir, { persistent: false, recursive: true }, () => {
+          this.pollAgentSessions()
+          this.pushUpdates()
+        })
+        this.watchers.push(w)
+      } catch {}
+    }
+
+    const bufferPath = join(this.projectRoot, ".jfl", "training-buffer.jsonl")
+    if (existsSync(bufferPath)) {
+      try {
+        const dir = join(this.projectRoot, ".jfl")
+        const w = fsWatch(dir, { persistent: false }, (_, filename) => {
+          if (filename === "training-buffer.jsonl") {
+            this.pollTrainingBuffer()
+            this.pushUpdates()
+          }
         })
         this.watchers.push(w)
       } catch {}
@@ -267,5 +488,33 @@ export class DataPipeline {
         this.backend.setStatus(surface.id, entries).catch(() => {})
       }
     }
+  }
+}
+
+function parseResultsTsv(path: string): AgentRoundSnapshot[] {
+  try {
+    const content = readFileSync(path, "utf-8")
+    const lines = content.trim().split("\n")
+    if (lines.length <= 1) return []
+
+    const rounds: AgentRoundSnapshot[] = []
+    for (let i = 1; i < lines.length; i++) {
+      const parts = lines[i].split("\t")
+      if (parts.length < 7) continue
+
+      rounds.push({
+        round: parseInt(parts[0], 10) || i,
+        task: parts[1] || "",
+        metricBefore: parseFloat(parts[2]) || 0,
+        metricAfter: parseFloat(parts[3]) || 0,
+        delta: parseFloat(parts[4]) || 0,
+        kept: parts[5] === "1",
+        durationMs: parseInt(parts[6], 10) || 0,
+      })
+    }
+
+    return rounds
+  } catch {
+    return []
   }
 }

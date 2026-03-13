@@ -1,5 +1,5 @@
 /**
- * @purpose WorkspaceEngine controller — stays running, manages surfaces, pushes live data
+ * @purpose WorkspaceEngine controller — stays running, manages surfaces, pushes live data, adapts to project type
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from "fs"
@@ -10,10 +10,10 @@ import { CmuxAdapter } from "./cmux-adapter.js"
 import { TmuxAdapter } from "./tmux-adapter.js"
 import { DataPipeline } from "./data-pipeline.js"
 import { NotificationDispatcher } from "./notifications.js"
-import { getSurfaceType, scanProject, getAvailableItems } from "./surface-registry.js"
+import { getSurfaceType, scanProject, getAvailableItems, getDefaultLayout, readProjectConfig } from "./surface-registry.js"
 import { AgentSurface } from "./surfaces/agent.js"
 import { ServiceSurface } from "./surfaces/service.js"
-import type { SurfaceType, SurfaceContext } from "./surface-type.js"
+import type { SurfaceType, SurfaceContext, ProjectConfigSnapshot } from "./surface-type.js"
 
 export interface ActiveSurface {
   id: string
@@ -26,7 +26,11 @@ export interface ActiveSurface {
 export interface EngineState {
   workspaceId: string
   backend: string
+  projectType: string
+  projectName: string
   surfaces: Array<{ name: string; type: string; agentName?: string; serviceName?: string }>
+  parentProject?: string
+  childCount?: number
 }
 
 interface LayoutEntry {
@@ -44,6 +48,7 @@ export class WorkspaceEngine {
   private pipeline: DataPipeline
   private notifications: NotificationDispatcher
   private projectRoot: string
+  private projectConfig: ProjectConfigSnapshot
   private workspaceId = ""
   private surfaces = new Map<string, ActiveSurface>()
   private running = false
@@ -51,6 +56,7 @@ export class WorkspaceEngine {
 
   constructor(projectRoot: string, backendOverride?: "cmux" | "tmux") {
     this.projectRoot = projectRoot
+    this.projectConfig = readProjectConfig(projectRoot)
     const backendType = backendOverride || detectBackend()
 
     if (backendType === "cmux") {
@@ -75,22 +81,24 @@ export class WorkspaceEngine {
     return this.backend.capabilities()
   }
 
+  getProjectConfig(): ProjectConfigSnapshot {
+    return this.projectConfig
+  }
+
   async launch(): Promise<void> {
     if (this.running) return
 
     await this.backend.connect()
 
-    const projectName = this.projectRoot.split("/").pop() || "workspace"
+    const projectName = this.projectConfig.name || this.projectRoot.split("/").pop() || "workspace"
     this.workspaceId = await this.backend.createWorkspace(projectName)
     this.running = true
 
-    const layout = this.loadLayout()
+    let layout = this.loadLayout()
     if (layout.length === 0) {
-      layout.push({ name: "claude", type: "claude", size: "50%", focus: true, row: 0 })
-      layout.push({ name: "shell", type: "shell", size: "50%", row: 0 })
+      layout = getDefaultLayout(this.projectRoot)
     }
 
-    // Create surfaces from layout
     let firstSurfaceId: string | null = null
     for (const entry of layout) {
       const id = await this.createSurfaceFromEntry(entry, firstSurfaceId)
@@ -117,7 +125,6 @@ export class WorkspaceEngine {
     } else if (!surfaceType && serviceName) {
       surfaceType = new ServiceSurface()
     } else if (!surfaceType) {
-      // Check if it's an agent or service by name
       const scan = scanProject(this.projectRoot)
       if (scan.agents.includes(name)) {
         surfaceType = new AgentSurface()
@@ -143,7 +150,6 @@ export class WorkspaceEngine {
       command: surfaceType.getCommand(ctx),
     }
 
-    // If running, do a live split from the last surface
     if (this.running && this.surfaces.size > 0) {
       const lastSurface = [...this.surfaces.values()].pop()
       if (lastSurface) {
@@ -184,6 +190,49 @@ export class WorkspaceEngine {
     return false
   }
 
+  async openChild(name: string): Promise<boolean> {
+    const config = this.projectConfig
+    const service = config.registeredServices.find((s) => s.name === name)
+    if (!service?.path || !existsSync(service.path)) return false
+
+    const ctx: SurfaceContext = {
+      projectRoot: this.projectRoot,
+      surfaceId: "",
+    }
+
+    const cmd = `cd "${service.path}" && jfl ide 2>/dev/null || $SHELL`
+    const createOpts: CreateSurfaceOpts = {
+      workspaceId: this.workspaceId,
+      title: name,
+      command: cmd,
+    }
+
+    if (this.surfaces.size > 0) {
+      const lastSurface = [...this.surfaces.values()].pop()
+      if (lastSurface) {
+        createOpts.splitFrom = lastSurface.id
+        createOpts.splitDirection = "horizontal"
+      }
+    }
+
+    const id = await this.backend.createSurface(createOpts)
+    const { ShellSurface } = await import("./surfaces/shell.js")
+
+    this.surfaces.set(id, {
+      id,
+      name,
+      surfaceType: new ShellSurface(),
+      serviceName: name,
+    })
+
+    this.persistLayout()
+    return true
+  }
+
+  getParentPath(): string | null {
+    return this.projectConfig.portfolioParent || this.projectConfig.gtmParent || null
+  }
+
   async stop(): Promise<void> {
     if (!this.running) return
 
@@ -207,12 +256,16 @@ export class WorkspaceEngine {
     return {
       workspaceId: this.workspaceId,
       backend: this.backend.name,
+      projectType: this.projectConfig.type,
+      projectName: this.projectConfig.name,
       surfaces: [...this.surfaces.values()].map((s) => ({
         name: s.name,
         type: s.surfaceType.type,
         agentName: s.agentName,
         serviceName: s.serviceName,
       })),
+      parentProject: this.projectConfig.portfolioParent || this.projectConfig.gtmParent,
+      childCount: this.projectConfig.registeredServices.length,
     }
   }
 
@@ -240,7 +293,6 @@ export class WorkspaceEngine {
       else if (entry.serviceName) surfaceType = new ServiceSurface()
     }
     if (!surfaceType) {
-      // Default to shell
       const { ShellSurface } = await import("./surfaces/shell.js")
       surfaceType = new ShellSurface()
     }
@@ -377,7 +429,7 @@ export class WorkspaceEngine {
     const dir = join(this.projectRoot, ".jfl")
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
 
-    const projectName = this.projectRoot.split("/").pop() || "workspace"
+    const projectName = this.projectConfig.name || this.projectRoot.split("/").pop() || "workspace"
     const lines: string[] = [
       `name: ${projectName}`,
       "before: jfl context-hub ensure 2>/dev/null",
@@ -421,7 +473,6 @@ export class WorkspaceEngine {
     const layoutPath = join(this.projectRoot, ".jfl", "ide.yml")
     writeFileSync(layoutPath, lines.join("\n"))
 
-    // Sync to root
     const rootPath = join(this.projectRoot, "ide.yml")
     writeFileSync(rootPath, lines.join("\n"))
   }

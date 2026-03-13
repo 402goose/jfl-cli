@@ -1,11 +1,5 @@
 /**
- * IDE Command v2
- *
- * Terminal workspace powered by WorkspaceEngine. Detects cmux (native macOS terminal
- * with sidebar + notifications) or falls back to tmux. Controller stays running to
- * push live data into surfaces.
- *
- * @purpose Launch, configure, and manage the jfl ide terminal workspace
+ * @purpose Launch, configure, and manage the jfl ide terminal workspace with config-aware layouts and navigation
  */
 
 import chalk from "chalk"
@@ -36,18 +30,27 @@ export async function ideLaunchCommand(_options: { json?: boolean } = {}): Promi
     process.exit(1)
   }
 
-  console.log()
-  console.log(chalk.gray(`  Backend: ${backendType}`))
-
   const engine = new WorkspaceEngine(root)
   activeEngine = engine
 
+  const config = engine.getProjectConfig()
   const caps = engine.getCapabilities()
-  if (caps.sidebar) {
-    console.log(chalk.green("  Sidebar: enabled"))
+
+  console.log()
+  console.log(chalk.bold(`  ${config.name}`) + chalk.gray(` [${config.type}]`))
+  console.log(chalk.gray(`  Backend: ${engine.getBackendName()}`))
+  if (caps.sidebar) console.log(chalk.green("  Sidebar: enabled"))
+  if (caps.notifications) console.log(chalk.green("  Notifications: enabled"))
+
+  if (config.portfolioParent) {
+    const parentName = config.portfolioParent.split("/").pop()
+    console.log(chalk.gray(`  Parent: ${parentName}`))
   }
-  if (caps.notifications) {
-    console.log(chalk.green("  Notifications: enabled"))
+  if (config.registeredServices.length > 0) {
+    console.log(chalk.gray(`  Services: ${config.registeredServices.length} registered`))
+  }
+  if (config.agents.length > 0) {
+    console.log(chalk.gray(`  Agents: ${config.agents.length} configured`))
   }
 
   const scan = engine.getScanResults()
@@ -55,7 +58,6 @@ export async function ideLaunchCommand(_options: { json?: boolean } = {}): Promi
     console.log()
     console.log(chalk.cyan("  Scanning project..."))
     console.log()
-    console.log(chalk.gray("  Found:"))
     for (const suggestion of scan.suggestions) {
       console.log(chalk.gray(`    ${suggestion}`))
     }
@@ -68,7 +70,6 @@ export async function ideLaunchCommand(_options: { json?: boolean } = {}): Promi
   try {
     await engine.launch()
 
-    // Keep the process running as controller
     const shutdown = async () => {
       console.log(chalk.gray("\n  Stopping workspace..."))
       await engine.stop()
@@ -78,7 +79,6 @@ export async function ideLaunchCommand(_options: { json?: boolean } = {}): Promi
     process.on("SIGINT", shutdown)
     process.on("SIGTERM", shutdown)
 
-    // Stay alive until workspace closes
     await new Promise<void>((resolve) => {
       const check = setInterval(() => {
         if (!engine.isRunning()) {
@@ -91,7 +91,6 @@ export async function ideLaunchCommand(_options: { json?: boolean } = {}): Promi
     const message = err instanceof Error ? err.message : String(err)
     console.error(chalk.red(`  Failed to launch workspace: ${message}`))
 
-    // Fallback: try v1 tmux-ide approach
     if (backendType === "tmux") {
       console.log(chalk.gray("  Falling back to tmux-ide..."))
       await fallbackTmuxIde(root)
@@ -114,7 +113,6 @@ export async function ideAddCommand(
   }
 
   if (activeEngine && activeEngine.isRunning()) {
-    // Hot-add: engine is running, add surface live
     const surfaceName = name || options.title || "custom"
     const id = await activeEngine.addSurface(surfaceName, {
       agentName: name ? undefined : undefined,
@@ -130,7 +128,6 @@ export async function ideAddCommand(
     return
   }
 
-  // Cold-add: modify layout file
   const {
     loadIdeLayout: load,
     saveIdeLayout: save,
@@ -255,6 +252,49 @@ export async function ideRemoveCommand(name: string): Promise<void> {
   console.log(chalk.gray("  Restart workspace to apply: jfl ide restart"))
 }
 
+export async function ideOpenCommand(name: string): Promise<void> {
+  if (!activeEngine || !activeEngine.isRunning()) {
+    console.error(chalk.red("  No running workspace. Run: jfl ide"))
+    process.exit(1)
+  }
+
+  const opened = await activeEngine.openChild(name)
+  if (opened) {
+    console.log(chalk.green(`  Opened "${name}" in workspace`))
+  } else {
+    console.error(chalk.red(`  "${name}" not found in registered services/products`))
+    const state = activeEngine.getState()
+    if (state.childCount && state.childCount > 0) {
+      console.log(chalk.gray("  Available: jfl ide available"))
+    }
+  }
+}
+
+export async function ideUpCommand(): Promise<void> {
+  if (!activeEngine) {
+    const root = getProjectRoot()
+    const engine = new WorkspaceEngine(root)
+    const parentPath = engine.getParentPath()
+    if (parentPath && existsSync(parentPath)) {
+      console.log(chalk.cyan(`  Parent: ${parentPath}`))
+      console.log(chalk.gray(`  cd "${parentPath}" && jfl ide`))
+    } else {
+      console.log(chalk.gray("  No parent project configured"))
+    }
+    return
+  }
+
+  const parentPath = activeEngine.getParentPath()
+  if (!parentPath || !existsSync(parentPath)) {
+    console.log(chalk.gray("  No parent project configured"))
+    return
+  }
+
+  const parentName = parentPath.split("/").pop() || "parent"
+  console.log(chalk.cyan(`  Parent: ${parentName} (${parentPath})`))
+  console.log(chalk.gray(`  To navigate: cd "${parentPath}" && jfl ide`))
+}
+
 export async function ideAvailableCommand(): Promise<void> {
   const root = getProjectRoot()
 
@@ -264,7 +304,6 @@ export async function ideAvailableCommand(): Promise<void> {
     return
   }
 
-  // Use the new surface registry for the full list (includes flows, telemetry, portfolio)
   const { getAvailableItems: getNewItems } = await import("../lib/workspace/surface-registry.js")
   const items = getNewItems(root, [])
   printAvailableItems(items)
@@ -316,8 +355,11 @@ export async function ideStatusCommand(options: { json?: boolean } = {}): Promis
     }
 
     console.log()
-    console.log(chalk.bold(`  Workspace: ${state.workspaceId}`))
+    console.log(chalk.bold(`  ${state.projectName}`) + chalk.gray(` [${state.projectType}]`))
     console.log(chalk.gray(`  Backend: ${state.backend}`))
+    if (state.parentProject) {
+      console.log(chalk.gray(`  Parent: ${state.parentProject.split("/").pop()}`))
+    }
     console.log()
 
     for (const s of state.surfaces) {
@@ -327,6 +369,9 @@ export async function ideStatusCommand(options: { json?: boolean } = {}): Promis
 
     console.log()
     console.log(chalk.green(`  ${state.surfaces.length} surfaces running`))
+    if (state.childCount) {
+      console.log(chalk.gray(`  ${state.childCount} child projects`))
+    }
     console.log()
     return
   }
@@ -384,8 +429,10 @@ export async function ideSurfacesCommand(options: { json?: boolean } = {}): Prom
     return
   }
 
+  const config = activeEngine.getProjectConfig()
+
   console.log()
-  console.log(chalk.bold("  Active Surfaces"))
+  console.log(chalk.bold(`  ${config.name}`) + chalk.gray(` [${config.type}]`))
   console.log()
 
   for (const surface of surfaces) {
@@ -405,6 +452,39 @@ export async function ideSurfacesCommand(options: { json?: boolean } = {}): Prom
       console.log(`    ${entry.label}: ${color(entry.value)}`)
     }
   }
+
+  if (liveData.agentSessions && liveData.agentSessions.length > 0) {
+    console.log()
+    console.log(chalk.bold("  Agent Sessions"))
+    for (const s of liveData.agentSessions) {
+      const statusColor = s.status === "active" ? chalk.green : s.status === "failed" ? chalk.red : chalk.gray
+      const trendIcon = s.delta > 0 ? chalk.green(`+${s.delta.toFixed(4)}`) : s.delta < 0 ? chalk.red(s.delta.toFixed(4)) : chalk.gray("=0")
+      console.log(`    ${statusColor(s.agentName)} R${s.round} ${s.metric}:${s.currentScore.toFixed(4)} ${trendIcon}`)
+    }
+  }
+
+  if (liveData.trainingData && liveData.trainingData.totalTuples > 0) {
+    console.log()
+    console.log(chalk.bold("  Training Buffer"))
+    const td = liveData.trainingData
+    console.log(chalk.gray(`    ${td.totalTuples} tuples | ${td.positiveReward} positive | ${(td.improvedRate * 100).toFixed(0)}% win rate`))
+  }
+
+  if (liveData.childProjects && liveData.childProjects.length > 0) {
+    console.log()
+    console.log(chalk.bold("  Child Projects"))
+    for (const c of liveData.childProjects) {
+      const icon = c.health === "healthy" ? chalk.green("●")
+        : c.health === "degraded" ? chalk.yellow("◐")
+        : c.health === "unhealthy" ? chalk.red("○")
+        : chalk.gray("?")
+      let detail = c.type
+      if (c.evalScore !== undefined) detail += ` eval:${c.evalScore.toFixed(2)}`
+      if (c.activeAgents) detail += ` ${c.activeAgents}ag`
+      console.log(`    ${icon} ${c.name.padEnd(20)} ${chalk.gray(detail)}`)
+    }
+  }
+
   console.log()
 }
 
@@ -416,7 +496,6 @@ export async function ideStopCommand(): Promise<void> {
     return
   }
 
-  // Fallback: try tmux-ide stop
   const root = getProjectRoot()
   const layout = loadIdeLayout(root)
   const name = layout?.name || root.split("/").pop() || "workspace"
@@ -490,14 +569,26 @@ export async function ideConfigCommand(key?: string, value?: string): Promise<vo
   }
 
   const config = getIdeConfig(root)
+  const engine = new WorkspaceEngine(root)
+  const projectConfig = engine.getProjectConfig()
+  const caps = engine.getCapabilities()
+
   console.log()
   console.log(chalk.bold("  IDE Config"))
+  console.log(`  project:  ${projectConfig.name} [${projectConfig.type}]`)
   console.log(`  primary:  ${config.primary || "claude"}`)
   console.log(`  backend:  ${detectBackend()}`)
-
-  const caps = new WorkspaceEngine(root).getCapabilities()
   console.log(`  sidebar:  ${caps.sidebar ? chalk.green("yes") : chalk.gray("no")}`)
   console.log(`  notify:   ${caps.notifications ? chalk.green("yes") : chalk.gray("no")}`)
+  if (projectConfig.agents.length > 0) {
+    console.log(`  agents:   ${projectConfig.agents.join(", ")}`)
+  }
+  if (projectConfig.registeredServices.length > 0) {
+    console.log(`  services: ${projectConfig.registeredServices.map((s) => s.name).join(", ")}`)
+  }
+  if (projectConfig.portfolioParent) {
+    console.log(`  parent:   ${projectConfig.portfolioParent.split("/").pop()}`)
+  }
   console.log()
 }
 

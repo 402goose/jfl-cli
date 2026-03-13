@@ -18,6 +18,10 @@ export interface LiveData {
   serviceData?: ServiceSnapshot
   agentData?: AgentSnapshot
   telemetryData?: TelemetrySnapshot
+  agentSessions?: AgentSessionSnapshot[]
+  trainingData?: TrainingSnapshot
+  projectConfig?: ProjectConfigSnapshot
+  childProjects?: ChildProjectSnapshot[]
 }
 
 export interface HubEventSnapshot {
@@ -61,6 +65,67 @@ export interface TelemetrySnapshot {
   costToday: number
   commandCount: number
   anomalies: string[]
+}
+
+export interface AgentSessionSnapshot {
+  agentName: string
+  sessionId: string
+  metric: string
+  direction: "maximize" | "minimize"
+  baseline: number
+  currentScore: number
+  delta: number
+  round: number
+  explorationRate: number
+  status: "active" | "completed" | "failed"
+  rounds: AgentRoundSnapshot[]
+  produces: string[]
+  consumes: string[]
+  branch?: string
+  startedAt?: string
+}
+
+export interface AgentRoundSnapshot {
+  round: number
+  task: string
+  metricBefore: number
+  metricAfter: number
+  delta: number
+  kept: boolean
+  durationMs: number
+}
+
+export interface TrainingSnapshot {
+  totalTuples: number
+  positiveReward: number
+  byAgent: Record<string, number>
+  bySource: Record<string, number>
+  avgReward: number
+  improvedRate: number
+  lastWritten?: string
+}
+
+export interface ProjectConfigSnapshot {
+  name: string
+  type: "gtm" | "service" | "portfolio"
+  registeredServices: Array<{ name: string; path: string; type: string; status: string }>
+  agents: string[]
+  portfolioParent?: string
+  gtmParent?: string
+  contextScope?: { produces: string[]; consumes: string[] }
+}
+
+export interface ChildProjectSnapshot {
+  name: string
+  type: string
+  path: string
+  health?: "healthy" | "degraded" | "unhealthy" | "unknown"
+  evalScore?: number
+  evalTrend?: "up" | "down" | "flat"
+  activeAgents?: number
+  activeFlows?: number
+  costToday?: number
+  contextScope?: { produces: string[]; consumes: string[] }
 }
 
 export interface NotificationRule {

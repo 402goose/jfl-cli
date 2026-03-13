@@ -244,6 +244,8 @@ ide.command("surfaces").description("List active surfaces with live sidebar data
 ide.command("stop").description("Stop the running workspace session").action(async () => { const m = await import("./commands/ide.js"); await m.ideStopCommand() })
 ide.command("restart").description("Restart the workspace session").action(async () => { const m = await import("./commands/ide.js"); await m.ideRestartCommand() })
 ide.command("reset").description("Reset workspace to welcome state").action(async () => { const m = await import("./commands/ide.js"); await m.ideResetCommand() })
+ide.command("open").description("Open a child project/service in the workspace").argument("<name>", "Service or product name to open").action(async (name) => { const m = await import("./commands/ide.js"); await m.ideOpenCommand(name) })
+ide.command("up").description("Navigate to parent project (portfolio or GTM)").action(async () => { const m = await import("./commands/ide.js"); await m.ideUpCommand() })
 ide.command("config").description("View or set IDE configuration").argument("[key]", "Config key (e.g., primary, backend)").argument("[value]", "Config value").action(async (key, value) => { const m = await import("./commands/ide.js"); await m.ideConfigCommand(key, value) })
 
 program
