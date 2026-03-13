@@ -26,7 +26,8 @@ export interface AgentSession {
   id: string                    // Unique session identifier
   agentName: string             // Agent name from config
   config: AgentConfig           // Full agent config
-  projectRoot: string           // Project root path
+  projectRoot: string           // Original repo — never mutated, used for persistent files
+  worktreePath: string          // Isolated worktree in /tmp — all work happens here
   branch: string                // Session branch name
   baseBranch: string            // Base branch (usually main)
   evalSnapshot: EvalSnapshot    // Frozen eval snapshot
@@ -186,30 +187,31 @@ export function startSession(
   // Create session branch
   const branch = `session/${config.name}-${hashPart}-${timestamp.slice(0, 10)}`
 
-  // Stash any uncommitted changes
-  gitExec(["stash", "--include-untracked"], projectRoot)
+  // Create isolated worktree in /tmp — never touch the main working directory
+  const worktreePath = join("/tmp", `jfl-agent-${config.name}-${hashPart}`)
 
-  // Fetch and checkout base branch
+  // Fetch latest base branch
   gitExec(["fetch", "origin", baseBranch], projectRoot)
 
-  // Create session branch from base
-  let checkout = gitExec(["checkout", "-b", branch, `origin/${baseBranch}`], projectRoot)
-  if (!checkout.ok) {
-    checkout = gitExec(["checkout", "-b", branch, baseBranch], projectRoot)
+  // Create worktree with new branch from origin/baseBranch
+  let wt = gitExec(["worktree", "add", worktreePath, "-b", branch, `origin/${baseBranch}`], projectRoot)
+  if (!wt.ok) {
+    // Fallback: try local baseBranch
+    wt = gitExec(["worktree", "add", worktreePath, "-b", branch, baseBranch], projectRoot)
   }
-  if (!checkout.ok) {
-    throw new Error(`Failed to create session branch ${branch}: ${checkout.output}`)
+  if (!wt.ok) {
+    throw new Error(`Failed to create worktree for ${branch}: ${wt.output}`)
   }
 
-  // Create eval snapshot (content-addressed, immutable)
+  // Create eval snapshot in the worktree (content-addressed, immutable)
   const evalSnapshot = createEvalSnapshot(
-    projectRoot,
+    worktreePath,
     config.eval.script,
     config.eval.data
   )
   freezeEvalSnapshot(evalSnapshot)
 
-  // Create results.tsv path (NOT committed)
+  // Results persist in main repo (survives worktree cleanup)
   const resultsDir = join(projectRoot, ".jfl", "sessions", sessionId)
   mkdirSync(resultsDir, { recursive: true })
   const resultsPath = join(resultsDir, "results.tsv")
@@ -226,6 +228,7 @@ export function startSession(
     agentName: config.name,
     config,
     projectRoot,
+    worktreePath,
     branch,
     baseBranch,
     evalSnapshot,
@@ -242,7 +245,7 @@ export function startSession(
 export async function runBaseline(session: AgentSession): Promise<number> {
   const result = await runEvalSnapshot(
     session.evalSnapshot,
-    session.projectRoot,
+    session.worktreePath,
     session.config.time_budget_seconds * 1000
   )
 
@@ -281,8 +284,8 @@ export async function runRound(
   // Run Claude Code with fixed time budget
   await runClaudeCode(session, task)
 
-  // Check if any changes were made
-  const hasChanges = hasUncommittedChanges(session.projectRoot)
+  // Check if any changes were made (in the worktree)
+  const hasChanges = hasUncommittedChanges(session.worktreePath)
 
   if (!hasChanges) {
     const noChangeResult: RoundResult = {
@@ -320,11 +323,11 @@ export async function runRound(
   }
 
   // Capture the diff before committing
-  const diff = getGitDiff(session.projectRoot)
+  const diff = getGitDiff(session.worktreePath)
 
   // Get changed files
   const changedFilesResult = spawnSync("git", ["diff", "--name-only", "HEAD"], {
-    cwd: session.projectRoot,
+    cwd: session.worktreePath,
     encoding: "utf-8",
     stdio: "pipe",
   })
@@ -333,14 +336,14 @@ export async function runRound(
     .split("\n")
     .filter(Boolean)
 
-  // Commit changes
-  gitExec(["add", "-A"], session.projectRoot)
-  gitExec(["commit", "-m", `agent(${session.agentName}): round ${round} - ${task.slice(0, 50)}`], session.projectRoot)
+  // Commit changes in worktree
+  gitExec(["add", "-A"], session.worktreePath)
+  gitExec(["commit", "-m", `agent(${session.agentName}): round ${round} - ${task.slice(0, 50)}`], session.worktreePath)
 
-  // Run frozen eval
+  // Run frozen eval in worktree
   const evalResult = await runEvalSnapshot(
     session.evalSnapshot,
-    session.projectRoot,
+    session.worktreePath,
     session.config.time_budget_seconds * 1000
   )
 
@@ -358,8 +361,8 @@ export async function runRound(
     // Keep: advance baseline
     session.baselineMetric = metricAfter
   } else {
-    // Discard: git reset --hard HEAD~1
-    gitExec(["reset", "--hard", "HEAD~1"], session.projectRoot)
+    // Discard: git reset --hard HEAD~1 (in worktree only)
+    gitExec(["reset", "--hard", "HEAD~1"], session.worktreePath)
   }
 
   const result: RoundResult = {
@@ -407,7 +410,7 @@ async function runClaudeCode(session: AgentSession, task: string): Promise<void>
       "-p", task,
       "--output-format", "text",
     ], {
-      cwd: session.projectRoot,
+      cwd: session.worktreePath,
       stdio: "inherit",
       env: {
         ...process.env,
@@ -495,18 +498,16 @@ export async function endSession(
     }
   }
 
-  // Return to base branch
-  gitExec(["checkout", session.baseBranch], session.projectRoot)
-
-  // Pop stash if exists
-  gitExec(["stash", "pop"], session.projectRoot)
+  // Clean up worktree — main repo is untouched
+  gitExec(["worktree", "remove", session.worktreePath, "--force"], session.projectRoot)
+  gitExec(["worktree", "prune"], session.projectRoot)
 
   return summary
 }
 
 async function createPR(session: AgentSession, summary: SessionSummary): Promise<string | undefined> {
-  // Push branch
-  const push = gitExec(["push", "-u", "origin", session.branch], session.projectRoot)
+  // Push branch from worktree
+  const push = gitExec(["push", "-u", "origin", session.branch], session.worktreePath)
   if (!push.ok) {
     return undefined
   }
@@ -539,7 +540,7 @@ async function createPR(session: AgentSession, summary: SessionSummary): Promise
     "--head", session.branch,
     "--label", "agent-generated",
   ], {
-    cwd: session.projectRoot,
+    cwd: session.worktreePath,
     encoding: "utf-8",
     stdio: "pipe",
   })
@@ -556,7 +557,7 @@ async function createPR(session: AgentSession, summary: SessionSummary): Promise
     "--base", session.baseBranch,
     "--head", session.branch,
   ], {
-    cwd: session.projectRoot,
+    cwd: session.worktreePath,
     encoding: "utf-8",
     stdio: "pipe",
   })
