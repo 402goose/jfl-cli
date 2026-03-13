@@ -29,14 +29,15 @@ if [[ -f "$CONFIG_FILE" ]]; then
   done < <(jq -r '.skills.entries["jfl-gtm"].config.workspace_paths[]?' "$CONFIG_FILE" 2>/dev/null)
 fi
 
-# Deduplicate
-declare -A seen_paths
+# Deduplicate (bash 3.x compatible — no associative arrays)
 UNIQUE_PATHS=()
 for p in "${SEARCH_PATHS[@]}"; do
   [[ -z "$p" ]] && continue
-  [[ ${seen_paths["$p"]+_} ]] && continue
-  seen_paths["$p"]=1
-  UNIQUE_PATHS+=("$p")
+  _dup=0
+  for u in "${UNIQUE_PATHS[@]}"; do
+    [[ "$u" == "$p" ]] && _dup=1 && break
+  done
+  [[ $_dup -eq 0 ]] && UNIQUE_PATHS+=("$p")
 done
 
 discover() {
@@ -108,10 +109,10 @@ case "$FORMAT" in
     ;;
   json)
     echo "["
-    local first=1
+    _first=1
     discover | sort -t'|' -k3 -n | while IFS='|' read -r path name age age_str; do
-      [[ $first -eq 0 ]] && echo ","
-      first=0
+      [[ $_first -eq 0 ]] && echo ","
+      _first=0
       printf '{"path":"%s","name":"%s","age_days":%s,"age_string":"%s"}' "$path" "$name" "$age" "$age_str"
     done
     echo ""
