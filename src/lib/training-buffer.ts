@@ -22,6 +22,7 @@ export interface RLAction {
   files_affected: string[]
   scope: "small" | "medium" | "large"
   branch: string
+  code_diff?: string  // Actual git diff for code-policy training (AutoHarness pattern)
 }
 
 export interface RLReward {
@@ -52,6 +53,9 @@ export interface TrainingBufferEntry {
     mine_source?: string
     scopes?: string[]
     changed_files?: string[]
+    session_id?: string
+    round?: number
+    hypothesis?: string
   }
 }
 

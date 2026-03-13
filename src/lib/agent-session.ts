@@ -19,6 +19,134 @@ import { createEvalSnapshot, freezeEvalSnapshot, runEvalSnapshot, type EvalSnaps
 import type { RLState, RLAction, RLReward } from "./training-buffer.js"
 
 // ============================================================================
+// Experiment History — Karpathy's program.md pattern
+// ============================================================================
+
+export interface ExperimentEntry {
+  round: number
+  task: string
+  metricBefore: number
+  metricAfter: number
+  delta: number
+  kept: boolean
+  files: string[]
+  timestamp: string
+}
+
+/**
+ * Build experiment history markdown for the agent to read.
+ * This is the KEY missing piece — agents need memory of past experiments.
+ *
+ * Following Karpathy's autoresearch pattern: agent sees program.md with
+ * instructions + history of past experiments so it knows what to try next.
+ */
+export function buildExperimentHistory(
+  session: AgentSession,
+  transitions: Transition[],
+  currentMetric: number
+): string {
+  const config = session.config
+  const direction = config.direction === "minimize" ? "lower is better" : "higher is better"
+
+  // Get scope_files from constraints if available
+  const scopeFiles = (config.constraints as any)?.scope_files || config.constraints.files_in_scope || []
+
+  const lines: string[] = [
+    `# Experiment History — ${session.agentName}`,
+    "",
+    `## Goal`,
+    `Optimize metric: **${config.metric}** (${direction})`,
+    `Current value: **${currentMetric.toFixed(4)}**`,
+    `Baseline: ${session.baselineMetric.toFixed(4)}`,
+    "",
+    `## Files to Modify`,
+    `Focus your changes on these specific files:`,
+    ...scopeFiles.map((f: string) => `- ${f}`),
+    "",
+    `## Constraints`,
+    `- Max files per change: ${config.constraints.max_file_changes}`,
+    `- Read-only: ${config.constraints.files_readonly.join(", ")}`,
+    "",
+    `## Past Experiments`,
+    ""
+  ]
+
+  if (transitions.length === 0) {
+    lines.push("No experiments yet. This is round 1.")
+    lines.push("")
+    lines.push("Make ONE small, focused change to improve the metric.")
+  } else {
+    // Group by kept/rejected
+    const kept = transitions.filter(t => t.reward > 0)
+    const rejected = transitions.filter(t => t.reward <= 0)
+
+    lines.push(`### Kept (${kept.length} experiments that improved the metric):`)
+    if (kept.length === 0) {
+      lines.push("None yet.")
+    } else {
+      for (const t of kept.slice(-10)) { // Last 10 kept
+        const files = t.action.files_affected.join(", ") || "unknown"
+        lines.push(`- R${t.state.trajectory_length}: "${t.action.description.slice(0, 60)}" → +${t.reward.toFixed(4)} (files: ${files})`)
+      }
+    }
+    lines.push("")
+
+    lines.push(`### Rejected (${rejected.length} experiments that did NOT improve):`)
+    if (rejected.length === 0) {
+      lines.push("None yet.")
+    } else {
+      for (const t of rejected.slice(-10)) { // Last 10 rejected
+        lines.push(`- R${t.state.trajectory_length}: "${t.action.description.slice(0, 60)}" → ${t.reward.toFixed(4)}`)
+      }
+    }
+    lines.push("")
+
+    lines.push(`## What to Do`)
+    lines.push(`1. DO NOT repeat rejected experiments`)
+    lines.push(`2. BUILD on kept experiments — they worked`)
+    lines.push(`3. Make ONE small, focused change`)
+    lines.push(`4. Prefer modifying existing code over adding new files`)
+  }
+
+  return lines.join("\n")
+}
+
+/**
+ * Write experiment history to the worktree as EXPERIMENTS.md.
+ * Claude Code will read this file to understand what has been tried.
+ */
+export function writeExperimentHistory(
+  session: AgentSession,
+  transitions: Transition[],
+  currentMetric: number
+): void {
+  const content = buildExperimentHistory(session, transitions, currentMetric)
+  const historyPath = join(session.worktreePath, "EXPERIMENTS.md")
+
+  try {
+    writeFileSync(historyPath, content)
+  } catch (err) {
+    console.error(`  Warning: Could not write experiment history: ${err}`)
+  }
+}
+
+/**
+ * Read experiment history from the worktree.
+ * Returns empty string if file doesn't exist.
+ */
+export function readExperimentHistory(session: AgentSession): string {
+  const historyPath = join(session.worktreePath, "EXPERIMENTS.md")
+
+  try {
+    if (existsSync(historyPath)) {
+      return readFileSync(historyPath, "utf-8")
+    }
+  } catch {}
+
+  return ""
+}
+
+// ============================================================================
 // Types
 // ============================================================================
 
@@ -272,7 +400,8 @@ export async function runRound(
   session: AgentSession,
   round: number,
   task: string,
-  hypothesis: string
+  hypothesis: string,
+  previousTransitions: Transition[] = []
 ): Promise<{ result: RoundResult; transition: Transition }> {
   const startTime = Date.now()
   session.round = round
@@ -284,13 +413,17 @@ export async function runRound(
     tests_passing: 0,
     tests_total: 1,
     trajectory_length: round,
-    recent_deltas: [],
+    recent_deltas: previousTransitions.slice(-5).map(t => t.reward),
     agent: session.agentName,
   }
   const stateHash = createHash("sha256")
     .update(JSON.stringify(stateBefore))
     .digest("hex")
     .slice(0, 12)
+
+  // Write experiment history BEFORE running Claude Code
+  // This is the Karpathy pattern: agent sees history + instructions
+  writeExperimentHistory(session, previousTransitions, session.baselineMetric)
 
   // Run Claude Code with fixed time budget
   await runClaudeCode(session, task)
@@ -415,17 +548,33 @@ export async function runRound(
 async function runClaudeCode(session: AgentSession, task: string): Promise<void> {
   const timeout = session.config.time_budget_seconds * 1000
 
+  // Build enhanced task with experiment history reference
+  // This is the Karpathy pattern: agent sees program.md (EXPERIMENTS.md) with history
+  const scopeFiles = (session.config.constraints as any)?.scope_files || session.config.constraints.files_in_scope || []
+  const scopeFilesStr = scopeFiles.slice(0, 5).join(", ")
+
+  const enhancedTask = `${task}
+
+IMPORTANT: Read EXPERIMENTS.md first — it contains the history of past experiments for this agent.
+- DO NOT repeat experiments that failed (rejected section)
+- BUILD on experiments that worked (kept section)
+- Focus changes on these files: ${scopeFilesStr}
+- Make ONE small, focused change
+- Do not add new files unless absolutely necessary`
+
+  // Use claude CLI directly — relies on OAuth from macOS keychain
+  // Must run from a context with keychain access (terminal/tmux, NOT background daemon)
   return new Promise((resolve) => {
+    console.log("  Spawning claude CLI...")
     const child = spawn("claude", [
       "--dangerously-skip-permissions",
-      "-p", task,
+      "-p", enhancedTask,
       "--output-format", "text",
     ], {
       cwd: session.worktreePath,
       stdio: "inherit",
       env: {
         ...process.env,
-        // Remove any env vars that might interfere
         CLAUDECODE: undefined,
         CLAUDE_CODE: undefined,
       },
@@ -438,12 +587,14 @@ async function runClaudeCode(session: AgentSession, task: string): Promise<void>
       }, 5000)
     }, timeout)
 
-    child.on("error", () => {
+    child.on("error", (err) => {
+      console.error(`  Claude CLI error: ${err.message}`)
       clearTimeout(timeoutId)
       resolve()
     })
 
-    child.on("exit", () => {
+    child.on("exit", (code, signal) => {
+      console.error(`  Claude CLI exit: code=${code} signal=${signal}`)
       clearTimeout(timeoutId)
       resolve()
     })
@@ -464,6 +615,13 @@ function logResult(session: AgentSession, result: RoundResult): void {
   ].join("\t")
 
   appendFileSync(session.resultsPath, line + "\n")
+
+  // Remove EXPERIMENTS.md from git tracking (it's ephemeral, regenerated each round)
+  const experimentsPath = join(session.worktreePath, "EXPERIMENTS.md")
+  if (existsSync(experimentsPath)) {
+    gitExec(["reset", "HEAD", "EXPERIMENTS.md"], session.worktreePath)
+    // Don't delete — keep it for reference, just don't commit
+  }
 }
 
 export async function endSession(
@@ -494,6 +652,37 @@ export async function endSession(
     improvedRounds,
     transitions,
   }
+
+  // Write transitions to training buffer WITH diffs (for code-policy training)
+  try {
+    const { TrainingBuffer } = await import("./training-buffer.js")
+    const tb = new TrainingBuffer(session.projectRoot)
+    for (const t of transitions) {
+      tb.append({
+        agent: t.agent,
+        state: t.state,
+        action: {
+          ...t.action,
+          // Include the actual code diff for code-policy training (AutoHarness pattern)
+          code_diff: t.action_diff?.slice(0, 10000) || "", // Cap at 10KB
+        },
+        reward: {
+          composite_delta: t.reward,
+          dimension_deltas: {},
+          tests_added: 0,
+          quality_score: t.reward > 0 ? 1 : 0,
+          improved: t.reward > 0,
+        },
+        metadata: {
+          branch: session.branch,
+          source: "autoresearch",
+          session_id: session.id,
+          round: t.state?.trajectory_length || 0,
+          hypothesis: t.hypothesis,
+        },
+      })
+    }
+  } catch {}
 
   // If we improved, push the branch (but do NOT create a PR or auto-merge)
   // Following Karpathy's autoresearch pattern: branches grow overnight,

@@ -191,13 +191,17 @@ export async function runEvalSnapshot(
     // Detect eval script type: .sh = bash, .ts/.js = TypeScript/Node module
     const isShellScript = snapshot.scriptSnapshot.endsWith(".sh")
 
+    console.error(`  [eval-debug] script=${snapshot.scriptSnapshot} cwd=${projectRoot} timeout=${timeout}ms`)
+
     let child
     if (isShellScript) {
       // Shell scripts: exec directly, expect JSON output with metric-name fields
+      // Use 'ignore' for stdin to prevent hanging, pipe stdout/stderr for output
       child = spawn("bash", [snapshot.scriptSnapshot], {
         cwd: projectRoot,
-        stdio: ["pipe", "pipe", "pipe"],
+        stdio: ["ignore", "pipe", "pipe"],
         timeout,
+        detached: false,
         env: { ...process.env, EVAL_DATA_PATH: snapshot.dataSnapshot },
       })
     } else {
@@ -229,9 +233,11 @@ export async function runEvalSnapshot(
       child.kill("SIGKILL")
     }, timeout)
 
-    child.on("close", (code) => {
+    child.on("exit", (code, signal) => {
       clearTimeout(timeoutId)
       const duration_ms = Date.now() - startTime
+      console.error(`  [eval-debug] exit: code=${code} signal=${signal} duration=${duration_ms}ms stdout=${stdout.length}b stderr=${stderr.length}b`)
+      if (stderr) console.error(`  [eval-debug] stderr: ${stderr.slice(0, 200)}`)
 
       if (code !== 0) {
         resolve({
