@@ -138,7 +138,7 @@ export class TelemetryAgentV2 {
   async fetchDigest(hours: number = 24): Promise<PlatformDigest | null> {
     try {
       const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(), 15000)
+      const timer = setTimeout(() => controller.abort(), 45000) // Fly.io cold starts can be slow
 
       const response = await fetch(`${this.platformUrl}/api/v1/telemetry/digest`, {
         method: 'POST',
@@ -157,7 +157,93 @@ export class TelemetryAgentV2 {
         return null
       }
 
-      return await response.json() as PlatformDigest
+      const raw = await response.json() as any
+
+      // Normalize API field names to our PlatformDigest interface
+      // API returns: commandUsage, toolFrequency, flowActivity, hookUsage
+      // Our types expect: commands, toolStats, flowStats, hookStats
+      const normalized: PlatformDigest = {
+        periodHours: raw.periodHours,
+        generatedAt: raw.generatedAt,
+        activeInstalls: raw.activeInstalls || 0,
+        totalEvents: raw.totalEvents || 0,
+        totalSessions: raw.sessionCosts?.length || raw.totalSessions || 0,
+
+        // Commands: normalize commandUsage → commands
+        commands: (raw.commandUsage || raw.commands || []).map((c: any) => ({
+          command: c.command,
+          count: c.count,
+          avgDurationMs: c.avgDurationMs || 0,
+          p90DurationMs: c.p90DurationMs || 0,
+          p99DurationMs: c.p99DurationMs || 0,
+          successRate: c.successRate ?? 1,
+          errorCount: c.errorCount || 0,
+        })),
+        commandSuccessRate: raw.commandSuccessRate ?? 1,
+        worstP90Command: raw.worstP90Command,
+
+        // Errors
+        errorClusters: raw.errorClusters || [],
+        totalErrors: raw.totalErrors || 0,
+
+        // Session health
+        sessionHealth: raw.sessionHealth || { started: 0, ended: 0, crashed: 0, avgDurationS: 0, crashRate: 0 },
+
+        // Hub health
+        hubHealth: raw.hubHealth || { starts: 0, stops: 0, crashes: 0, mcpCalls: 0, avgMcpLatencyMs: 0, p90McpLatencyMs: 0, p99McpLatencyMs: 0 },
+
+        // Hooks: normalize hookUsage → hookStats
+        hookStats: raw.hookStats || {
+          totalReceived: (raw.hookUsage || []).reduce((s: number, h: any) => s + (h.count || 0), 0),
+          byEvent: Object.fromEntries((raw.hookUsage || []).map((h: any) => [h.hookEventName, h.count])),
+          byTool: {},
+          fileHotspots: (raw.fileHotspots || []).map((f: any) => ({ file: f.file || f.path, edits: f.edits || f.count || 0 })),
+        },
+
+        // Tools: normalize toolFrequency → toolStats
+        toolStats: (raw.toolFrequency || raw.toolStats || []).map((t: any) => ({
+          toolName: t.toolName,
+          callCount: t.callCount || t.count || 0,
+          avgLatencyMs: t.avgLatencyMs || t.avgDurationMs || 0,
+          p90LatencyMs: t.p90LatencyMs || 0,
+          errorRate: t.errorRate || 0,
+        })),
+
+        // Flows: normalize flowActivity → flowStats
+        flowStats: raw.flowStats || {
+          triggered: (raw.flowActivity || []).reduce((s: number, f: any) => s + (f.triggerCount || 0), 0),
+          completed: (raw.flowActivity || []).reduce((s: number, f: any) => s + (f.completedCount || 0), 0),
+          failed: (raw.flowActivity || []).reduce((s: number, f: any) => s + (f.failedActions || 0), 0),
+          byFlow: Object.fromEntries((raw.flowActivity || []).map((f: any) => [f.flowName, {
+            triggered: f.triggerCount || 0,
+            completed: f.completedCount || 0,
+            failed: f.failedActions || 0,
+          }])),
+          completionRate: (() => {
+            const t = (raw.flowActivity || []).reduce((s: number, f: any) => s + (f.triggerCount || 0), 0)
+            const c = (raw.flowActivity || []).reduce((s: number, f: any) => s + (f.completedCount || 0), 0)
+            return t > 0 ? c / t : 1
+          })(),
+        },
+
+        // Latency
+        latencyPercentiles: raw.latencyPercentiles || [],
+
+        // Costs
+        modelCosts: raw.modelCosts || [],
+        sessionCosts: (raw.sessionCosts || []).map((s: any) => ({
+          sessionId: s.sessionId,
+          installId: s.installId,
+          totalTokens: s.totalTokens || 0,
+          estimatedCostUsd: s.estimatedCostUsd || 0,
+          durationS: s.durationS || 0,
+          modelBreakdown: s.modelBreakdown || [],
+        })),
+        totalCostUsd: raw.totalCostUsd || 0,
+        costPerSessionUsd: raw.costPerSessionUsd || 0,
+      }
+
+      return normalized
     } catch (err: any) {
       console.error(`Failed to fetch digest: ${err.message}`)
       return null
