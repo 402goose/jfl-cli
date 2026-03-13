@@ -6,6 +6,7 @@ import {
   OverviewPage,
   ActivityPage,
   LoopPage,
+  ExperimentsPage,
   SystemPage,
   TopologyPage,
   ReviewsPage,
@@ -15,12 +16,13 @@ import {
 import { usePolling } from "./lib/hooks"
 import "./index.css"
 
-type PageId = "overview" | "activity" | "loop" | "reviews" | "chat" | "synopsis" | "topology" | "system"
+type PageId = "overview" | "activity" | "loop" | "experiments" | "reviews" | "chat" | "synopsis" | "topology" | "system"
 
 const pageMap: Record<PageId, (props: { status: WorkspaceStatus | null }) => preact.JSX.Element> = {
   overview: OverviewPage,
   activity: () => <ActivityPage />,
   loop: () => <LoopPage />,
+  experiments: () => <ExperimentsPage />,
   reviews: () => <ReviewsPage />,
   chat: () => <ChatPage />,
   synopsis: SynopsisPage,
@@ -30,7 +32,8 @@ const pageMap: Record<PageId, (props: { status: WorkspaceStatus | null }) => pre
 
 function App() {
   const status = usePolling(() => api.status(), 10000)
-  const [page, setPage] = useState<PageId>("overview")
+  const hashPage = (location.hash.replace("#/", "") || "overview") as PageId
+  const [page, setPage] = useState<PageId>(hashPage in pageMap ? hashPage : "overview")
 
   if (status.loading) {
     return (

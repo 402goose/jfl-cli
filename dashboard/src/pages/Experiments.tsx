@@ -1,10 +1,14 @@
 import { api, RLAgentConfig, RLSession } from "@/api"
-import { usePolling, cn, timeAgo } from "@/lib/hooks"
+import { usePolling, timeAgo } from "@/lib/hooks"
 
-export default function Experiments() {
-  const agents = usePolling(() => api.rlAgents().then(r => r.agents), [], 15000)
-  const sessions = usePolling(() => api.rlSessions().then(r => r.sessions), [], 10000)
-  const context = usePolling(() => api.productContext(), { context: null, updatedAt: null }, 30000)
+export function ExperimentsPage() {
+  const agentsResult = usePolling(() => api.rlAgents().then(r => r.agents), 15000)
+  const sessionsResult = usePolling(() => api.rlSessions().then(r => r.sessions), 10000)
+  const contextResult = usePolling(() => api.productContext(), 30000)
+
+  const agents: RLAgentConfig[] = agentsResult.data || []
+  const sessions: RLSession[] = sessionsResult.data || []
+  const context = contextResult.data || { context: null, updatedAt: null }
 
   // Group sessions by agent
   const sessionsByAgent: Record<string, RLSession[]> = {}

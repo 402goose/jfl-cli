@@ -99,6 +99,7 @@ const navItems: NavItemDef[] = [
   { id: "overview", label: "Overview", icon: "dashboard" },
   { id: "activity", label: "Activity", icon: "events" },
   { id: "loop", label: "Loop", icon: "loop" },
+  { id: "experiments", label: "Experiments", icon: "system" },
   { id: "reviews", label: "Reviews", icon: "reviews" },
   { id: "chat", label: "Chat", icon: "chat" },
   { id: "synopsis", label: "Synopsis", icon: "synopsis" },
