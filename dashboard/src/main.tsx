@@ -19,12 +19,29 @@ const telemetry = {
     this._emit("dashboard:click", { target, ...context })
   },
   _emit(type: string, data: Record<string, unknown>) {
-    // Fire and forget — don't block UI
+    const ts = new Date().toISOString()
+    const token = localStorage.getItem("jfl-token") || ""
+
+    // 1. Hub events (local context pipeline)
     fetch("/api/hooks", {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("jfl-token") || ""}` },
-      body: JSON.stringify({ type, source: "dashboard", data, ts: new Date().toISOString() }),
-    }).catch(() => {}) // swallow errors
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ type, source: "dashboard", data, ts }),
+    }).catch(() => {})
+
+    // 2. Platform telemetry table (persistent, queryable)
+    fetch("https://jfl-platform.fly.dev/api/v1/telemetry/ingest", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-jfl-install-id": "jfl-dashboard" },
+      body: JSON.stringify({ events: [{
+        event_id: crypto.randomUUID(),
+        ts,
+        category: "dashboard",
+        event: type,
+        install_id: "jfl-dashboard",
+        ...data,
+      }]}),
+    }).catch(() => {})
   },
 }
 import { Sidebar } from "./components/Sidebar"
