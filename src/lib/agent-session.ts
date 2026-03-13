@@ -402,7 +402,7 @@ export async function runRound(
     action_diff: diff,
     action,
     hypothesis,
-    reward: delta,
+    reward: improved ? Math.abs(delta) : -Math.abs(delta),  // Positive reward = improvement, regardless of direction
     timestamp: new Date().toISOString(),
   }
 
@@ -494,7 +494,8 @@ export async function endSession(
   }
 
   // If we improved, optionally create PR and emit scope:impact events
-  if (totalDelta > 0) {
+  // For minimize metrics, improvement means negative delta (lower is better)
+  if (improvedRounds > 0) {
     const prUrl = await createPR(session, summary)
     if (prUrl) {
       summary.prUrl = prUrl
