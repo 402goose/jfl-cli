@@ -2076,53 +2076,22 @@ async function ensureForProject(
   port: number,
   quiet = false
 ): Promise<{ status: "running" | "started" | "failed"; message: string }> {
+  // Rule: ensure ONLY starts hubs, NEVER kills them.
+  // If something is on the port, leave it alone.
+
   const status = isRunning(projectRoot)
   if (status.running) {
-    try {
-      const response = await fetch(`http://localhost:${port}/health`, {
-        signal: AbortSignal.timeout(2000)
-      })
-      if (response.ok) {
-        return { status: "running", message: `Already running (PID: ${status.pid})` }
-      }
-    } catch {
-      // Process exists but not responding, fall through
-    }
+    return { status: "running", message: `Already running (PID: ${status.pid})` }
   }
 
   const portInUse = await isPortInUse(port)
   if (portInUse) {
-    // Try health check with generous timeout — hub may be busy processing events
-    for (const attempt of [1, 2, 3]) {
-      try {
-        const response = await fetch(`http://localhost:${port}/health`, {
-          signal: AbortSignal.timeout(5000)
-        })
-        if (response.ok) {
-          return { status: "running", message: "Running (PID file missing but healthy)" }
-        }
-      } catch {
-        if (attempt < 3) {
-          await new Promise(resolve => setTimeout(resolve, 1000))
-        }
-      }
-    }
-
-    // Only kill if health check failed 3 times AND process doesn't match known PID
-    try {
-      const lsofOutput = execSync(`lsof -ti :${port}`, { encoding: 'utf-8' }).trim()
-      if (lsofOutput) {
-        const orphanedPid = parseInt(lsofOutput.split('\n')[0], 10)
-        if (!status.pid || orphanedPid !== status.pid) {
-          process.kill(orphanedPid, 'SIGTERM')
-          await new Promise(resolve => setTimeout(resolve, 500))
-        }
-      }
-    } catch {
-      // lsof failed or process already gone
-    }
+    // Something is on this port. Don't kill it — could be a healthy hub
+    // whose PID file was lost, or a hub started by another process.
+    return { status: "running", message: `Port ${port} in use (assuming healthy)` }
   }
 
+  // Nothing running, nothing on port — safe to start
   const result = await startDaemon(projectRoot, port)
   if (result.success) {
     return { status: "started", message: result.message }
