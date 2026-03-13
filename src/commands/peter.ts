@@ -1290,9 +1290,21 @@ async function agentRun(projectRoot: string, agentName: string, rounds: number):
       historyContext = `\n\nPast experiments for this agent:\nKept (worked): ${kept.map((r: any) => `"${r.action}" (reward: ${r.reward})`).join(", ") || "none yet"}\nDiscarded (failed): ${discarded.map((r: any) => `"${r.action}"`).join(", ") || "none yet"}\n\nDo NOT repeat failed approaches. Build on what worked. Try something NEW.`
     }
 
+    // Read product context (Layer 2) if available
+    let productContext = ""
+    const productContextPath = path.join(projectRoot, ".jfl", "product-context.md")
+    if (fs.existsSync(productContextPath)) {
+      const pc = fs.readFileSync(productContextPath, "utf-8")
+      // Extract agent-specific guidance if present
+      const agentSection = pc.match(new RegExp(`${config.name}[:\\s].*?(?=\\n[A-Z#]|$)`, "s"))
+      productContext = agentSection
+        ? `\n\nProduct context for this agent:\n${agentSection[0].slice(0, 500)}`
+        : `\n\nProduct context (summary):\n${pc.slice(0, 500)}`
+    }
+
     if (stratus) {
       try {
-        const prompt = `Suggest ONE specific code change to improve the ${config.metric} metric (${config.direction}). Scope: ${config.scope}. Files: ${config.constraints.files_in_scope.join(", ")}. Be concrete and actionable. Return just the task description.${historyContext}`
+        const prompt = `Suggest ONE specific code change to improve the ${config.metric} metric (${config.direction}). Scope: ${config.scope}. Files: ${config.constraints.files_in_scope.join(", ")}. Be concrete and actionable. Return just the task description.${historyContext}${productContext}`
         const response = await stratus.reason(prompt, { maxTokens: 200, temperature: 0.7 + round * 0.05 })
         task = response.choices[0]?.message?.content || task
       } catch {}
@@ -1665,6 +1677,143 @@ async function agentSwarm(projectRoot: string, rounds: number): Promise<void> {
   console.log()
 }
 
+// ============================================================================
+// Synthesis — distill journals + events into product context for agents
+// ============================================================================
+
+async function runSynthesis(projectRoot: string) {
+  console.log(chalk.bold("\n  Peter Parker - Product Context Synthesis\n"))
+
+  const { StratusClient } = await import("../lib/stratus-client.js")
+  const stratus = process.env.STRATUS_API_KEY
+    ? new StratusClient({ apiKey: process.env.STRATUS_API_KEY })
+    : null
+
+  if (!stratus) {
+    console.log(chalk.red("  STRATUS_API_KEY required for synthesis"))
+    return
+  }
+
+  // 1. Read recent journals (last 7 days)
+  const journalDir = path.join(projectRoot, ".jfl", "journal")
+  let journalEntries: string[] = []
+  if (fs.existsSync(journalDir)) {
+    const files = fs.readdirSync(journalDir).filter(f => f.endsWith(".jsonl"))
+    for (const file of files.slice(-10)) { // Last 10 journal files
+      const content = fs.readFileSync(path.join(journalDir, file), "utf-8").trim()
+      if (content) journalEntries.push(...content.split("\n").slice(-20)) // Last 20 entries per file
+    }
+  }
+  console.log(chalk.gray(`  Read ${journalEntries.length} journal entries`))
+
+  // 2. Read recent events
+  const eventsPath = path.join(projectRoot, ".jfl", "service-events.jsonl")
+  let events: string[] = []
+  if (fs.existsSync(eventsPath)) {
+    events = fs.readFileSync(eventsPath, "utf-8").trim().split("\n").slice(-30) // Last 30 events
+  }
+  console.log(chalk.gray(`  Read ${events.length} events`))
+
+  // 3. Read agent results from training buffer
+  const bufferPath = path.join(projectRoot, ".jfl", "training-buffer.jsonl")
+  let tuples: string[] = []
+  if (fs.existsSync(bufferPath)) {
+    tuples = fs.readFileSync(bufferPath, "utf-8").trim().split("\n").slice(-20)
+  }
+  console.log(chalk.gray(`  Read ${tuples.length} training tuples`))
+
+  // 4. Read current agent configs
+  const { listAgentConfigs, loadAgentConfig } = await import("../lib/agent-config.js")
+  const agentNames = listAgentConfigs(projectRoot)
+  const configs = agentNames.map(name => { try { return loadAgentConfig(projectRoot, name) } catch { return null } }).filter(Boolean)
+  const agentSummary = configs.map((c: any) => `${c.name}: ${c.metric} (${c.direction}), target: ${c.target_repo || "self"}`).join("\n")
+
+  // 5. Send to Stratus for synthesis
+  console.log(chalk.gray("\n  Synthesizing with Stratus...\n"))
+
+  const prompt = `You are Peter Parker, the orchestrator for a software product portfolio.
+
+Your job: read the recent activity (journals, events, experiment results) and produce a PRODUCT CONTEXT document that tells scoped RL agents what the product is, what's been happening, and what to focus on.
+
+## Current Agents
+${agentSummary}
+
+## Recent Journal Entries (last 7 days)
+${journalEntries.slice(-30).join("\n")}
+
+## Recent Events
+${events.slice(-15).join("\n")}
+
+## Recent Experiment Results
+${tuples.slice(-10).join("\n")}
+
+---
+
+Produce a concise product-context.md with these sections:
+1. **Product State** — what is this product, what's working, what's broken
+2. **Recent Activity** — what the team has been building/fixing (distilled from journals)
+3. **Agent Guidance** — for each active agent, specific guidance based on recent context (e.g. "cli-speed: startup is already fast, focus on subcommand latency")
+4. **Priority Shifts** — any metrics that should be deprioritized or new metrics to consider
+5. **Open Questions** — things that need human input
+
+Be concise. This document is consumed by agents, not humans. Skip fluff.`
+
+  try {
+    const response = await stratus.reason(prompt, { maxTokens: 2000, temperature: 0.3 })
+    const synthesis = response.choices[0]?.message?.content || ""
+
+    if (synthesis) {
+      const outputPath = path.join(projectRoot, ".jfl", "product-context.md")
+      fs.writeFileSync(outputPath, `# Product Context\n\n_Synthesized by Peter Parker at ${new Date().toISOString()}_\n\n${synthesis}\n`)
+      console.log(chalk.green(`  ✓ Product context written to .jfl/product-context.md`))
+      console.log(chalk.gray(`  (${synthesis.length} chars)\n`))
+    }
+  } catch (err: any) {
+    console.log(chalk.red(`  Synthesis failed: ${err.message}`))
+  }
+}
+
+// ============================================================================
+// Review — check autoresearch branches, audit with Stratus, prepare PRs
+// ============================================================================
+
+async function runReview(projectRoot: string) {
+  console.log(chalk.bold("\n  Peter Parker - Autoresearch Review\n"))
+
+  const { spawnSync } = await import("child_process")
+
+  // Find session branches on remote
+  const result = spawnSync("git", ["branch", "-r", "--list", "origin/session/*"], { cwd: projectRoot, encoding: "utf-8" })
+  const branches = (result.stdout || "").trim().split("\n").map(b => b.trim()).filter(Boolean)
+
+  if (branches.length === 0) {
+    console.log(chalk.yellow("  No autoresearch branches found.\n"))
+    return
+  }
+
+  console.log(chalk.gray(`  Found ${branches.length} session branch(es):\n`))
+
+  for (const branch of branches) {
+    const shortBranch = branch.replace("origin/", "")
+
+    // Get diff stats
+    const diffStat = spawnSync("git", ["diff", "--stat", `origin/main...${branch}`], { cwd: projectRoot, encoding: "utf-8" })
+    const logResult = spawnSync("git", ["log", "--oneline", `origin/main..${branch}`], { cwd: projectRoot, encoding: "utf-8" })
+    const commits = (logResult.stdout || "").trim().split("\n").filter(Boolean)
+
+    console.log(chalk.cyan(`  ${shortBranch}`))
+    console.log(chalk.gray(`    ${commits.length} commits`))
+    if (diffStat.stdout) {
+      const lastLine = diffStat.stdout.trim().split("\n").pop() || ""
+      console.log(chalk.gray(`    ${lastLine.trim()}`))
+    }
+    console.log()
+  }
+
+  console.log(chalk.gray("  To create PRs from these branches:"))
+  console.log(chalk.gray("    gh pr create --base main --head <branch> --title '...'\n"))
+}
+
 export async function peterCommand(
   action?: string,
   options: { cost?: boolean; quality?: boolean; balanced?: boolean; task?: string; rounds?: string; mode?: string; name?: string } = {}
@@ -1777,6 +1926,16 @@ export async function peterCommand(
     case "nightly": {
       // Alias for daily
       await runDailyLoop(projectRoot)
+      break
+    }
+
+    case "synthesize": {
+      await runSynthesis(projectRoot)
+      break
+    }
+
+    case "review": {
+      await runReview(projectRoot)
       break
     }
 
