@@ -1,8 +1,47 @@
+/**
+ * @purpose Show campaign dashboard (HUD)
+ * @perf Uses cached file reads and batched existence checks
+ */
 import chalk from "chalk"
 import { existsSync, readFileSync, readdirSync } from "fs"
 import { join } from "path"
 import { isAuthenticated, getAuthMethod, getUser } from "./login.js"
 import { ensureInProject } from "../utils/ensure-project.js"
+
+// File content cache with TTL
+const fileCache = new Map<string, { content: string; ts: number }>()
+const FILE_CACHE_TTL_MS = 2000
+
+function cachedReadFile(path: string): string | null {
+  const cached = fileCache.get(path)
+  const now = Date.now()
+  if (cached && (now - cached.ts) < FILE_CACHE_TTL_MS) {
+    return cached.content
+  }
+  if (!existsSync(path)) return null
+  try {
+    const content = readFileSync(path, "utf-8")
+    fileCache.set(path, { content, ts: now })
+    return content
+  } catch {
+    return null
+  }
+}
+
+// Existence cache with TTL
+const existsCache = new Map<string, { exists: boolean; ts: number }>()
+const EXISTS_CACHE_TTL_MS = 2000
+
+function cachedExists(path: string): boolean {
+  const cached = existsCache.get(path)
+  const now = Date.now()
+  if (cached && (now - cached.ts) < EXISTS_CACHE_TTL_MS) {
+    return cached.exists
+  }
+  const exists = existsSync(path)
+  existsCache.set(path, { exists, ts: now })
+  return exists
+}
 
 interface RoadmapPhase {
   name: string
@@ -142,9 +181,9 @@ async function showFullHud(cwd: string) {
 function getProjectName(cwd: string): string {
   // Try VISION.md for project name
   const visionPath = join(cwd, "knowledge", "VISION.md")
-  if (existsSync(visionPath)) {
-    const content = readFileSync(visionPath, "utf-8")
-    const titleMatch = content.match(/^#\s+(.+)$/m)
+  const visionContent = cachedReadFile(visionPath)
+  if (visionContent) {
+    const titleMatch = visionContent.match(/^#\s+(.+)$/m)
     if (titleMatch) {
       return titleMatch[1].trim()
     }
@@ -152,9 +191,10 @@ function getProjectName(cwd: string): string {
 
   // Try package.json
   const pkgPath = join(cwd, "package.json")
-  if (existsSync(pkgPath)) {
+  const pkgContent = cachedReadFile(pkgPath)
+  if (pkgContent) {
     try {
-      const pkg = JSON.parse(readFileSync(pkgPath, "utf-8"))
+      const pkg = JSON.parse(pkgContent)
       if (pkg.name) return pkg.name
     } catch {
       // ignore
@@ -168,9 +208,8 @@ function getProjectName(cwd: string): string {
 function getCountdown(cwd: string): { days: number; date: Date } | null {
   // Try to parse launch date from ROADMAP.md
   const roadmapPath = join(cwd, "knowledge", "ROADMAP.md")
-  if (!existsSync(roadmapPath)) return null
-
-  const content = readFileSync(roadmapPath, "utf-8")
+  const content = cachedReadFile(roadmapPath)
+  if (!content) return null
 
   // Look for date patterns
   const datePatterns = [
@@ -197,9 +236,9 @@ function getCountdown(cwd: string): { days: number; date: Date } | null {
 
 function getPhases(cwd: string): RoadmapPhase[] {
   const roadmapPath = join(cwd, "knowledge", "ROADMAP.md")
-  if (!existsSync(roadmapPath)) return []
+  const content = cachedReadFile(roadmapPath)
+  if (!content) return []
 
-  const content = readFileSync(roadmapPath, "utf-8")
   const phases: RoadmapPhase[] = []
 
   // Look for phase headers

@@ -190,14 +190,19 @@ export function startSession(
   // Create isolated worktree in /tmp — never touch the main working directory
   const worktreePath = join("/tmp", `jfl-agent-${config.name}-${hashPart}`)
 
-  // Fetch latest base branch
-  gitExec(["fetch", "origin", baseBranch], projectRoot)
+  // Resolve target repo — agents can target a different service repo than the GTM root
+  const repoRoot = config.target_repo
+    ? require("path").resolve(projectRoot, config.target_repo)
+    : projectRoot
 
-  // Create worktree with new branch from origin/baseBranch
-  let wt = gitExec(["worktree", "add", worktreePath, "-b", branch, `origin/${baseBranch}`], projectRoot)
+  // Fetch latest base branch
+  gitExec(["fetch", "origin", baseBranch], repoRoot)
+
+  // Create worktree with new branch from origin/baseBranch (in the target repo, not GTM)
+  let wt = gitExec(["worktree", "add", worktreePath, "-b", branch, `origin/${baseBranch}`], repoRoot)
   if (!wt.ok) {
     // Fallback: try local baseBranch
-    wt = gitExec(["worktree", "add", worktreePath, "-b", branch, baseBranch], projectRoot)
+    wt = gitExec(["worktree", "add", worktreePath, "-b", branch, baseBranch], repoRoot)
   }
   if (!wt.ok) {
     throw new Error(`Failed to create worktree for ${branch}: ${wt.output}`)

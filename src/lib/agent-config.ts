@@ -43,6 +43,7 @@ export interface AgentConfig {
   metric: string               // ONE metric, scalar, higher is better (e.g., "ndcg@10")
   direction: "maximize" | "minimize"  // Optimization direction
   time_budget_seconds: number  // Fixed time budget per round
+  target_repo?: string         // Path to target service repo (if different from GTM root)
   eval: EvalConfig
   constraints: ConstraintConfig
   policy: PolicyConfig
@@ -163,6 +164,7 @@ export function parseAgentConfig(tomlContent: string): AgentConfig {
     metric: agent.metric as string,
     direction: (agent.direction as "maximize" | "minimize") || "maximize",
     time_budget_seconds: (agent.time_budget_seconds as number) || 300,
+    target_repo: (agent.target_repo as string) || undefined,
     eval: {
       script: evalSection.script as string,
       data: evalSection.data as string,
@@ -223,6 +225,7 @@ export function generateAgentToml(config: Partial<AgentConfig>): string {
     `metric = "${config.metric || "composite_score"}"`,
     `direction = "${config.direction || "maximize"}"`,
     `time_budget_seconds = ${config.time_budget_seconds || 300}`,
+    ...(config.target_repo ? [`target_repo = "${config.target_repo}"`] : []),
     "",
     "[eval]",
     `# Eval script is READ-ONLY during a session`,

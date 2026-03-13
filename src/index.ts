@@ -8,73 +8,41 @@
 
 import { Command } from "commander"
 import chalk from "chalk"
-import { spawn, execSync } from "child_process"
-import { existsSync, readFileSync, symlinkSync, mkdirSync, unlinkSync } from "fs"
+import { spawn } from "child_process"
+import { existsSync, readFileSync } from "fs"
 import { homedir } from "os"
 import { join } from "path"
 import * as path from "path"
 import { fileURLToPath } from "url"
-import { doctorCommand } from "./commands/doctor.js"
-import { agentCommand } from "./commands/agent.js"
-import { initCommand } from "./commands/init.js"
-import { repairCommand } from "./commands/repair.js"
-import { validateSettingsCommand } from "./commands/validate-settings.js"
-import { loginCommand, logout, getX402Address } from "./commands/login.js"
-import { statusCommand } from "./commands/status.js"
-import { deployCommand } from "./commands/deploy.js"
-import { agentsCommand } from "./commands/agents.js"
-import { hudCommand } from "./commands/hud.js"
-import { sessionCommand } from "./commands/session.js"
-import { feedbackCommand } from "./commands/feedback.js"
-import { updateCommand } from "./commands/update.js"
-import { contextHubCommand } from "./commands/context-hub.js"
-import { hooksCommand } from "./commands/hooks.js"
-import { flowsCommand } from "./commands/flows.js"
-import { scopeCommand } from "./commands/scope.js"
-import { voiceCommand } from "./commands/voice.js"
-import { synopsisCommand } from "./commands/synopsis.js"
-import { onboardCommand } from "./commands/onboard.js"
-import { profileCommand } from "./commands/profile.js"
-import { migrateServices } from "./commands/migrate-services.js"
-import {
-  memoryInitCommand,
-  memoryStatusCommand,
-  memorySearchCommand,
-  memoryIndexCommand
-} from "./commands/memory.js"
-import {
-  listSkillsCommand,
-  installSkillCommand,
-  removeSkillCommand,
-  updateSkillsCommand,
-  searchSkillsCommand,
-} from "./commands/skills.js"
-import { ralphCommand, showRalphHelp } from "./commands/ralph.js"
-import { peterCommand } from "./commands/peter.js"
-import { clawdbotSetupCommand, clawdbotStatusCommand } from "./commands/clawdbot.js"
-import {
-  showDayPassStatus,
-  requiresPayment,
-  hasWallet,
-  getWalletAddress,
-} from "./utils/auth-guard.js"
-import { getDayPassTimeRemaining } from "./utils/x402-client.js"
-import { checkAndMigrate } from "./utils/jfl-migration.js"
-import { JFL_PATHS } from "./utils/jfl-paths.js"
-import { telemetry } from "./lib/telemetry.js"
 
-// Auto-migrate from ~/.jfl/ to XDG directories if needed
-await checkAndMigrate({ silent: true })
+// Lazy imports - only load when needed to reduce startup latency
+// All commands use dynamic import() to defer loading until invoked
+import { JFL_PATHS } from "./utils/jfl-paths.js"
+
+// Telemetry loaded lazily on first track() call
+let _telemetry: typeof import("./lib/telemetry.js")["telemetry"] | undefined
+async function getTelemetry() {
+  if (!_telemetry) {
+    const mod = await import("./lib/telemetry.js")
+    _telemetry = mod.telemetry
+  }
+  return _telemetry
+}
+
+// Migration check runs in background, doesn't block startup
+import("./utils/jfl-migration.js").then(mod => mod.checkAndMigrate({ silent: true })).catch(() => {})
 
 const program = new Command()
 
-// Telemetry hooks — auto-track all commands
+// Telemetry hooks — auto-track all commands (lazy load telemetry)
 program.hook('preAction', (_thisCommand, actionCommand) => {
   ;(actionCommand as any).__telemetryStart = Date.now()
 })
 
-program.hook('postAction', (_thisCommand, actionCommand) => {
+program.hook('postAction', async (_thisCommand, actionCommand) => {
   const start = (actionCommand as any).__telemetryStart
+  // Lazy load telemetry only when actually tracking
+  const telemetry = await getTelemetry()
   telemetry.track({
     category: 'command',
     event: `command:${actionCommand.name()}`,
@@ -194,9 +162,11 @@ program
   .action(async (options) => {
     // Always update on session start (unless --no-update flag)
     if (options.update !== false) {
+      const { updateCommand } = await import("./commands/update.js")
       await updateCommand({ autoUpdate: true })
       console.log() // Add spacing before session starts
     }
+    const { sessionCommand } = await import("./commands/session.js")
     await sessionCommand({})
   })
 
@@ -208,30 +178,45 @@ program
   .command("init")
   .description("Initialize a new JFL project")
   .option("-n, --name <name>", "Project name")
-  .action(initCommand)
+  .action(async (options) => {
+    const { initCommand } = await import("./commands/init.js")
+    await initCommand(options)
+  })
 
 program
   .command("repair")
   .description("Repair a JFL project missing .jfl directory")
-  .action(repairCommand)
+  .action(async () => {
+    const { repairCommand } = await import("./commands/repair.js")
+    await repairCommand()
+  })
 
 program
   .command("validate-settings")
   .description("Validate and repair .claude/settings.json")
   .option("--fix", "Attempt to auto-repair common issues")
   .option("--json", "Output in JSON format")
-  .action(validateSettingsCommand)
+  .action(async (options) => {
+    const { validateSettingsCommand } = await import("./commands/validate-settings.js")
+    await validateSettingsCommand(options)
+  })
 
 program
   .command("hud")
   .description("Show campaign dashboard")
   .option("-c, --compact", "Show compact one-line status")
-  .action(hudCommand)
+  .action(async (options) => {
+    const { hudCommand } = await import("./commands/hud.js")
+    await hudCommand(options)
+  })
 
 program
   .command("status")
   .description("Show project status")
-  .action(statusCommand)
+  .action(async () => {
+    const { statusCommand } = await import("./commands/status.js")
+    await statusCommand()
+  })
 
 // IDE workspace command — uses dynamic imports to avoid linter stripping
 const ide = program.command("ide").description("Terminal workspace — cmux/tmux with live sidebar data and notifications")
@@ -259,6 +244,7 @@ program
   .option("--purge", "Also delete token file (for stop)")
   .allowUnknownOption()
   .action(async (action, options) => {
+    const { contextHubCommand } = await import("./commands/context-hub.js")
     await contextHubCommand(action, {
       port: options.port ? parseInt(options.port, 10) : undefined,
       global: options.global || false,
@@ -271,6 +257,7 @@ program
   .description("Manage Claude Code HTTP hooks for Context Hub")
   .argument("[action]", "init, status, remove")
   .action(async (action) => {
+    const { hooksCommand } = await import("./commands/hooks.js")
     await hooksCommand(action)
   })
 
@@ -282,6 +269,7 @@ program
   .option("--flow <name>", "Filter approvals to a specific flow")
   .option("--all", "Approve all pending gated executions")
   .action(async (action, name, options) => {
+    const { flowsCommand } = await import("./commands/flows.js")
     await flowsCommand(action, name, options)
   })
 
@@ -291,6 +279,7 @@ program
   .argument("[action]", "list, set, test, viz")
   .argument("[args...]", "Arguments for the action")
   .action(async (action, args) => {
+    const { scopeCommand } = await import("./commands/scope.js")
     await scopeCommand(action, ...args)
   })
 
@@ -300,6 +289,7 @@ program
   .argument("[hours]", "Hours to look back (default: 24)", "24")
   .argument("[author]", "Filter by author name")
   .action(async (hours, author) => {
+    const { synopsisCommand } = await import("./commands/synopsis.js")
     await synopsisCommand(hours, author)
   })
 
@@ -399,6 +389,7 @@ program
   .option("-d, --description <desc>", "Override service description")
   .option("--skip-git", "Skip git clone (treat URL as local path)")
   .action(async (pathOrUrl, options) => {
+    const { onboardCommand } = await import("./commands/onboard.js")
     await onboardCommand(pathOrUrl, options)
   })
 
@@ -484,6 +475,7 @@ program
   .argument("[action]", "show, edit, export, import, generate")
   .option("-f, --file <path>", "File path for export/import/generate output")
   .action(async (action, options) => {
+    const { profileCommand } = await import("./commands/profile.js")
     await profileCommand(action, options)
   })
 
@@ -492,6 +484,7 @@ program
   .description("Migrate services from references/ to service manager")
   .argument("[gtm-path]", "Path to GTM project (default: current directory)")
   .action(async (gtmPath) => {
+    const { migrateServices } = await import("./commands/migrate-services.js")
     await migrateServices(gtmPath)
   })
 
@@ -508,12 +501,16 @@ program
   .option("--team", "Use Team plan ($199/mo)")
   .option("--free", "Stay on trial")
   .option("--force", "Force re-authentication")
-  .action(loginCommand)
+  .action(async (options) => {
+    const { loginCommand } = await import("./commands/login.js")
+    await loginCommand(options)
+  })
 
 program
   .command("logout")
   .description("Logout from JFL platform")
-  .action(() => {
+  .action(async () => {
+    const { logout } = await import("./commands/login.js")
     logout()
     console.log(chalk.green("Logged out successfully."))
   })
@@ -526,7 +523,7 @@ program
   .option("--telemetry", "Enable anonymous telemetry")
   .option("--show", "Show current preferences")
   .action(async (options) => {
-    const { getConfigValue, deleteConfigKey, getConfig } = await import("./utils/jfl-config.js")
+    const { getConfigValue, deleteConfigKey } = await import("./utils/jfl-config.js")
 
     if (options.clearAi) {
       deleteConfigKey("aiCLI")
@@ -536,6 +533,7 @@ program
     }
 
     if (options.telemetry === false) {
+      const telemetry = await getTelemetry()
       telemetry.disable()
       console.log(chalk.green("\n✓ Telemetry disabled"))
       console.log(chalk.gray("  No data will be collected\n"))
@@ -543,6 +541,7 @@ program
     }
 
     if (options.telemetry === true) {
+      const telemetry = await getTelemetry()
       telemetry.enable()
       console.log(chalk.green("\n✓ Telemetry enabled"))
       console.log(chalk.gray("  Anonymous usage data helps improve JFL\n"))
@@ -550,6 +549,7 @@ program
     }
 
     if (options.show || (!options.clearAi && options.telemetry === undefined)) {
+      const telemetry = await getTelemetry()
       console.log(chalk.bold("\n  JFL Preferences\n"))
       console.log(chalk.gray("  AI CLI:") + " " + (getConfigValue("aiCLI") || chalk.gray("none")))
       console.log(chalk.gray("  Projects tracked:") + " " + ((getConfigValue("projects") as string[] || []).length))
@@ -564,7 +564,8 @@ program
 program
   .command("wallet")
   .description("Show wallet and day pass status")
-  .action(() => {
+  .action(async () => {
+    const { showDayPassStatus, hasWallet, getWalletAddress } = await import("./utils/auth-guard.js")
     const address = getWalletAddress()
     if (!address) {
       console.log(chalk.yellow("\n⚠️  No wallet configured"))
@@ -591,7 +592,10 @@ program
   .command("deploy")
   .description("Deploy project to JFL platform")
   .option("-f, --force", "Force deploy even if no changes")
-  .action(deployCommand)
+  .action(async (options) => {
+    const { deployCommand } = await import("./commands/deploy.js")
+    await deployCommand(options)
+  })
 
 program
   .command("agents")
@@ -599,20 +603,29 @@ program
   .argument("[action]", "Action: list, create, start, stop, destroy")
   .option("-n, --name <name>", "Agent name")
   .option("-t, --task <task>", "Task for agent")
-  .action(agentsCommand)
+  .action(async (action, options) => {
+    const { agentsCommand } = await import("./commands/agents.js")
+    await agentsCommand(action, options)
+  })
 
 program
   .command("feedback")
   .description("Rate your JFL session")
   .argument("[action]", "view or sync")
-  .action(feedbackCommand)
+  .action(async (action) => {
+    const { feedbackCommand } = await import("./commands/feedback.js")
+    await feedbackCommand(action)
+  })
 
 program
   .command("update")
   .description("Pull latest JFL product updates")
   .option("--dry", "Show what would be updated without making changes")
   .option("--auto", "Auto mode: check once per 24h, skip if recently updated")
-  .action((options) => updateCommand({ dry: options.dry, autoUpdate: options.auto }))
+  .action(async (options) => {
+    const { updateCommand } = await import("./commands/update.js")
+    await updateCommand({ dry: options.dry, autoUpdate: options.auto })
+  })
 
 // ============================================================================
 // SKILL MANAGEMENT (work offline)
@@ -626,32 +639,47 @@ skills
   .option("-a, --available", "Show all available skills")
   .option("-c, --category <category>", "Filter by category (core or catalog)")
   .option("-t, --tag <tag>", "Filter by tag")
-  .action(listSkillsCommand)
+  .action(async (options) => {
+    const { listSkillsCommand } = await import("./commands/skills.js")
+    await listSkillsCommand(options)
+  })
 
 skills
   .command("install")
   .description("Install skill(s)")
   .argument("<skills...>", "Skill name(s) to install")
-  .action(installSkillCommand)
+  .action(async (skills) => {
+    const { installSkillCommand } = await import("./commands/skills.js")
+    await installSkillCommand(skills)
+  })
 
 skills
   .command("remove")
   .description("Remove skill(s)")
   .argument("<skills...>", "Skill name(s) to remove")
-  .action(removeSkillCommand)
+  .action(async (skills) => {
+    const { removeSkillCommand } = await import("./commands/skills.js")
+    await removeSkillCommand(skills)
+  })
 
 skills
   .command("update")
   .description("Update installed skill(s)")
   .argument("[skill]", "Skill name to update (omit to update all)")
   .option("--dry", "Show what would be updated without making changes")
-  .action((skill, options) => updateSkillsCommand({ ...options, skillName: skill }))
+  .action(async (skill, options) => {
+    const { updateSkillsCommand } = await import("./commands/skills.js")
+    await updateSkillsCommand({ ...options, skillName: skill })
+  })
 
 skills
   .command("search")
   .description("Search for skills")
   .argument("<query>", "Search query")
-  .action(searchSkillsCommand)
+  .action(async (query) => {
+    const { searchSkillsCommand } = await import("./commands/skills.js")
+    await searchSkillsCommand(query)
+  })
 
 // ============================================================================
 // VOICE INPUT (work offline)
@@ -666,6 +694,7 @@ voice
   .argument("[name]", "Model name (tiny, base, small, etc.)")
   .option("-f, --force", "Force re-download")
   .action(async (action, name, options) => {
+    const { voiceCommand } = await import("./commands/voice.js")
     await voiceCommand("model", action, name, options)
   })
 
@@ -673,6 +702,7 @@ voice
   .command("devices")
   .description("List audio input devices")
   .action(async () => {
+    const { voiceCommand } = await import("./commands/voice.js")
     await voiceCommand("devices")
   })
 
@@ -681,6 +711,7 @@ voice
   .description("Test voice input (record 3s and transcribe)")
   .option("-d, --device <id>", "Device ID to use")
   .action(async (options) => {
+    const { voiceCommand } = await import("./commands/voice.js")
     await voiceCommand("test", undefined, undefined, {
       device: options.device,
     })
@@ -692,6 +723,7 @@ voice
   .option("-d, --device <id>", "Device ID to use")
   .option("-t, --duration <seconds>", "Recording duration in seconds", "5")
   .action(async (options) => {
+    const { voiceCommand } = await import("./commands/voice.js")
     await voiceCommand("recording", undefined, undefined, {
       device: options.device,
       duration: parseInt(options.duration, 10),
@@ -702,6 +734,7 @@ voice
   .command("setup")
   .description("First-time setup wizard for voice input")
   .action(async () => {
+    const { voiceCommand } = await import("./commands/voice.js")
     await voiceCommand("setup")
   })
 
@@ -710,6 +743,7 @@ voice
   .description("Record voice with VAD (same as running jfl voice)")
   .option("-d, --device <id>", "Device ID to use")
   .action(async (options) => {
+    const { voiceCommand } = await import("./commands/voice.js")
     await voiceCommand("record", undefined, undefined, {
       device: options.device,
     })
@@ -719,6 +753,7 @@ voice
   .command("help")
   .description("Show voice command help")
   .action(async () => {
+    const { voiceCommand } = await import("./commands/voice.js")
     await voiceCommand("help")
   })
 
@@ -728,6 +763,7 @@ voice
   .option("-d, --device <id>", "Device ID to use")
   .option("-m, --mode <mode>", "Hotkey mode: auto, tap, or hold (default: auto)")
   .action(async (options) => {
+    const { voiceCommand } = await import("./commands/voice.js")
     await voiceCommand("hotkey", undefined, undefined, {
       device: options.device,
       mode: options.mode,
@@ -744,6 +780,7 @@ daemon
   .description("Start hotkey listener in background")
   .option("-m, --mode <mode>", "Hotkey mode: auto, tap, or hold (default: auto)")
   .action(async (options) => {
+    const { voiceCommand } = await import("./commands/voice.js")
     await voiceCommand("daemon", "start", undefined, {
       mode: options.mode,
     })
@@ -753,6 +790,7 @@ daemon
   .command("stop")
   .description("Stop the background daemon")
   .action(async () => {
+    const { voiceCommand } = await import("./commands/voice.js")
     await voiceCommand("daemon", "stop")
   })
 
@@ -760,11 +798,13 @@ daemon
   .command("status")
   .description("Show daemon status and uptime")
   .action(async () => {
+    const { voiceCommand } = await import("./commands/voice.js")
     await voiceCommand("daemon", "status")
   })
 
 // Default daemon action (show status)
 daemon.action(async () => {
+  const { voiceCommand } = await import("./commands/voice.js")
   await voiceCommand("daemon", "status")
 })
 
@@ -772,6 +812,7 @@ daemon.action(async () => {
 voice
   .option("-d, --device <id>", "Device ID to use")
   .action(async (options) => {
+    const { voiceCommand } = await import("./commands/voice.js")
     await voiceCommand(undefined, undefined, undefined, {
       device: options.device,
     })
@@ -786,12 +827,18 @@ const memory = program.command("memory").description("Memory system management")
 memory
   .command("init")
   .description("Initialize memory database")
-  .action(memoryInitCommand)
+  .action(async () => {
+    const { memoryInitCommand } = await import("./commands/memory.js")
+    await memoryInitCommand()
+  })
 
 memory
   .command("status")
   .description("Show memory statistics")
-  .action(memoryStatusCommand)
+  .action(async () => {
+    const { memoryStatusCommand } = await import("./commands/memory.js")
+    await memoryStatusCommand()
+  })
 
 memory
   .command("search")
@@ -799,13 +846,19 @@ memory
   .argument("<query>", "Search query")
   .option("-t, --type <type>", "Filter by type (feature, fix, decision, etc.)")
   .option("-n, --max <n>", "Maximum results", "10")
-  .action(memorySearchCommand)
+  .action(async (query, options) => {
+    const { memorySearchCommand } = await import("./commands/memory.js")
+    await memorySearchCommand(query, options)
+  })
 
 memory
   .command("index")
   .description("Reindex journal entries")
   .option("-f, --force", "Force full reindex")
-  .action(memoryIndexCommand)
+  .action(async (options) => {
+    const { memoryIndexCommand } = await import("./commands/memory.js")
+    await memoryIndexCommand(options)
+  })
 
 // Alias: jfl ask <question> → jfl memory search <question>
 program
@@ -815,6 +868,7 @@ program
   .option("-t, --type <type>", "Filter by type (feature, fix, decision, etc.)")
   .option("-n, --max <n>", "Maximum results", "5")
   .action(async (question, options) => {
+    const { memorySearchCommand } = await import("./commands/memory.js")
     await memorySearchCommand(question, options)
   })
 
@@ -854,6 +908,7 @@ program
   .option("-h, --help", "Show ralph-tui help")
   .allowUnknownOption()
   .action(async (args, options) => {
+    const { ralphCommand, showRalphHelp } = await import("./commands/ralph.js")
     if (options.help || args.length === 0) {
       showRalphHelp()
       return
@@ -881,6 +936,7 @@ program
   .option("-r, --rounds <n>", "Number of autoresearch rounds (default: 5)")
   .option("--mode <mode>", "Experiment mode: default or autoresearch")
   .action(async (action, options) => {
+    const { peterCommand } = await import("./commands/peter.js")
     await peterCommand(action, options)
   })
 
@@ -915,15 +971,24 @@ const clawdbot = program.command("clawdbot").description("Manage JFL plugin for 
 clawdbot
   .command("setup")
   .description("Install JFL plugin into Clawdbot and configure it")
-  .action(clawdbotSetupCommand)
+  .action(async () => {
+    const { clawdbotSetupCommand } = await import("./commands/clawdbot.js")
+    await clawdbotSetupCommand()
+  })
 
 clawdbot
   .command("status")
   .description("Show JFL Clawdbot plugin installation status")
-  .action(clawdbotStatusCommand)
+  .action(async () => {
+    const { clawdbotStatusCommand } = await import("./commands/clawdbot.js")
+    await clawdbotStatusCommand()
+  })
 
 // Default action: show status
-clawdbot.action(clawdbotStatusCommand)
+clawdbot.action(async () => {
+  const { clawdbotStatusCommand } = await import("./commands/clawdbot.js")
+  await clawdbotStatusCommand()
+})
 
 // ============================================================================
 // OPENCLAW (runtime-agnostic agent protocol)
@@ -1091,6 +1156,7 @@ telemetryCmd
   .command("status")
   .description("Show telemetry status")
   .action(async () => {
+    const telemetry = await getTelemetry()
     const enabled = telemetry.isEnabled()
     const installId = telemetry.getInstallId()
     const queueSize = telemetry.getQueueSize()
@@ -1111,6 +1177,7 @@ telemetryCmd
   .command("show")
   .description("Show recent telemetry events from spillover queue")
   .action(async () => {
+    const telemetry = await getTelemetry()
     const spillover = telemetry.getSpilloverEvents()
     if (spillover.length === 0) {
       console.log(chalk.gray("\n  No events in spillover queue.\n"))
@@ -1128,6 +1195,7 @@ telemetryCmd
   .command("reset")
   .description("Reset install ID (generates new anonymous ID)")
   .action(async () => {
+    const telemetry = await getTelemetry()
     telemetry.resetInstallId()
     console.log(chalk.green("\n  Install ID reset. New ID: ") + chalk.cyan(telemetry.getInstallId()) + "\n")
   })
@@ -1144,6 +1212,7 @@ telemetryCmd
   .option("--error-code <code>", "Error code")
   .allowUnknownOption()
   .action(async (options) => {
+    const telemetry = await getTelemetry()
     telemetry.track({
       category: options.category as any,
       event: options.event,
@@ -1159,6 +1228,7 @@ telemetryCmd
 // Default telemetry action
 telemetryCmd.action(async () => {
   // Show status by default
+  const telemetry = await getTelemetry()
   const enabled = telemetry.isEnabled()
   const installId = telemetry.getInstallId()
   console.log(chalk.bold("\n  Telemetry Status\n"))
@@ -1198,6 +1268,7 @@ program
   .description("Check project health and auto-repair")
   .option("--fix", "Auto-repair fixable issues")
   .action(async (options) => {
+    const { doctorCommand } = await import("./commands/doctor.js")
     await doctorCommand({ fix: options.fix })
   })
 
@@ -1213,6 +1284,7 @@ agent
   .argument("<name>", "Agent name (lowercase, hyphens allowed)")
   .option("-d, --description <desc>", "Agent description")
   .action(async (name, options) => {
+    const { agentCommand } = await import("./commands/agent.js")
     await agentCommand("init", name, { description: options.description })
   })
 
@@ -1220,6 +1292,7 @@ agent
   .command("list")
   .description("List registered agents")
   .action(async () => {
+    const { agentCommand } = await import("./commands/agent.js")
     await agentCommand("list")
   })
 
@@ -1228,10 +1301,12 @@ agent
   .description("Show agent health and config")
   .argument("<name>", "Agent name")
   .action(async (name) => {
+    const { agentCommand } = await import("./commands/agent.js")
     await agentCommand("status", name)
   })
 
 agent.action(async () => {
+  const { agentCommand } = await import("./commands/agent.js")
   await agentCommand()
 })
 

@@ -5,6 +5,7 @@
  * Replaces Conf library to keep all state in JFL's namespace.
  *
  * @purpose Global JFL configuration management in XDG directories
+ * @perf Config cached in memory, invalidated on write
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from "fs"
@@ -18,26 +19,41 @@ import { JFL_PATHS, JFL_FILES, ensureJflDirs } from "./jfl-paths.js"
 // Use XDG-compliant config path
 const CONFIG_FILE = JFL_FILES.config
 
+// In-memory config cache - invalidated on write
+let _configCache: Record<string, any> | undefined
+let _dirEnsured = false
+
 // ============================================================================
 // Config Operations
 // ============================================================================
 
 export function ensureJFLDir(): void {
+  if (_dirEnsured) return
   ensureJflDirs()
+  _dirEnsured = true
 }
 
 export function getConfig(): Record<string, any> {
+  // Return cached config if available
+  if (_configCache !== undefined) {
+    return _configCache
+  }
+
   ensureJFLDir()
 
   if (!existsSync(CONFIG_FILE)) {
     writeFileSync(CONFIG_FILE, JSON.stringify({}, null, 2))
+    _configCache = {}
     return {}
   }
 
   try {
-    return JSON.parse(readFileSync(CONFIG_FILE, "utf-8"))
+    const parsed = JSON.parse(readFileSync(CONFIG_FILE, "utf-8"))
+    _configCache = parsed
+    return parsed
   } catch (error) {
     console.warn(chalk.yellow(`Failed to parse ${CONFIG_FILE}, starting fresh`))
+    _configCache = {}
     return {}
   }
 }
@@ -46,6 +62,7 @@ export function setConfig(key: string, value: any): void {
   const config = getConfig()
   config[key] = value
   writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2) + "\n")
+  // Update cache in place (already points to _configCache)
 }
 
 export function getConfigValue(key: string, defaultValue?: any): any {
@@ -57,10 +74,12 @@ export function deleteConfigKey(key: string): void {
   const config = getConfig()
   delete config[key]
   writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2) + "\n")
+  // Cache already updated since config points to _configCache
 }
 
 export function clearConfig(): void {
   writeFileSync(CONFIG_FILE, JSON.stringify({}, null, 2) + "\n")
+  _configCache = {} // Clear cache
 }
 
 // ============================================================================

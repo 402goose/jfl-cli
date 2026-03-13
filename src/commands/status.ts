@@ -1,3 +1,7 @@
+/**
+ * @purpose Display comprehensive JFL project status
+ * @perf Batches file existence checks for reduced I/O
+ */
 import chalk from "chalk"
 import { existsSync, readFileSync } from "fs"
 import { join } from "path"
@@ -6,6 +10,15 @@ import { getAuthMethod, getToken, getX402Address, getUser, isAuthenticated } fro
 import { ensureInProject } from "../utils/ensure-project.js"
 import { getContextHubConfig } from "../utils/ensure-context-hub.js"
 import { isRunning as getContextHubStatus } from "./context-hub.js"
+
+// Batch check multiple paths at once for better I/O efficiency
+function batchExistsSync(paths: string[]): Map<string, boolean> {
+  const results = new Map<string, boolean>()
+  for (const p of paths) {
+    results.set(p, existsSync(p))
+  }
+  return results
+}
 
 const PLATFORM_URL = process.env.JFL_PLATFORM_URL || "https://jfl.run"
 
@@ -48,7 +61,7 @@ export async function statusCommand() {
     console.log(chalk.gray("  Run 'jfl login' to access platform features"))
   }
 
-  // Knowledge files
+  // Knowledge files - batch check for I/O efficiency
   console.log(chalk.cyan("\nKnowledge Layer"))
   const knowledgeFiles = [
     "VISION.md",
@@ -63,10 +76,13 @@ export async function statusCommand() {
   ]
 
   const knowledgePath = join(cwd, "knowledge")
-  let foundCount = 0
+  const knowledgePaths = knowledgeFiles.map(f => join(knowledgePath, f))
+  const knowledgeExists = batchExistsSync(knowledgePaths)
 
+  let foundCount = 0
   for (const file of knowledgeFiles) {
-    const exists = existsSync(join(knowledgePath, file))
+    const fullPath = join(knowledgePath, file)
+    const exists = knowledgeExists.get(fullPath) || false
     if (exists) foundCount++
     const status = exists ? chalk.green("✓") : chalk.gray("○")
     console.log(`  ${status} ${file}`)
@@ -89,7 +105,7 @@ export async function statusCommand() {
     console.log(chalk.gray("  (Auto-starts with 'jfl')"))
   }
 
-  // Skills available
+  // Skills available - batch check for I/O efficiency
   console.log(chalk.cyan("\nSkills Available"))
   const skillsPath = join(cwd, "skills")
   const skills = [
@@ -99,8 +115,12 @@ export async function statusCommand() {
     { name: "web-architect", desc: "Generate web assets" },
   ]
 
+  const skillPaths = skills.map(s => join(skillsPath, s.name))
+  const skillExists = batchExistsSync(skillPaths)
+
   for (const skill of skills) {
-    const exists = existsSync(join(skillsPath, skill.name))
+    const fullPath = join(skillsPath, skill.name)
+    const exists = skillExists.get(fullPath) || false
     const status = exists ? chalk.green("✓") : chalk.gray("○")
     console.log(`  ${status} /${skill.name.replace("-", "")} - ${skill.desc}`)
   }

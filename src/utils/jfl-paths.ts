@@ -3,11 +3,27 @@
  *
  * @purpose Single source of truth for all JFL paths (global and project-local)
  * @spec Implements XDG Base Directory Specification
+ * @perf Paths computed once at module load, existence checks cached for 5s
  */
 
 import { homedir, platform } from 'os'
 import { join } from 'path'
 import * as fs from 'fs'
+
+// Cache for existsSync calls to avoid repeated filesystem access
+const existsCache = new Map<string, { exists: boolean; ts: number }>()
+const CACHE_TTL_MS = 5000 // 5 second cache
+
+function cachedExists(path: string): boolean {
+  const cached = existsCache.get(path)
+  const now = Date.now()
+  if (cached && (now - cached.ts) < CACHE_TTL_MS) {
+    return cached.exists
+  }
+  const exists = fs.existsSync(path)
+  existsCache.set(path, { exists, ts: now })
+  return exists
+}
 
 /**
  * Get XDG config home directory (cross-platform)
@@ -80,18 +96,20 @@ export const JFL_FILES = {
 
 /**
  * Check if legacy ~/.jfl/ exists (needs migration)
+ * Uses cached existsSync to avoid repeated filesystem access
  */
 export function hasLegacyJflDir(): boolean {
-  return fs.existsSync(JFL_PATHS.legacy)
+  return cachedExists(JFL_PATHS.legacy)
 }
 
 /**
  * Get migration status
  * Returns: 'none' | 'needed' | 'complete'
+ * Uses cached existsSync to avoid repeated filesystem access
  */
 export function getMigrationStatus(): 'none' | 'needed' | 'complete' {
   const hasLegacy = hasLegacyJflDir()
-  const hasNew = fs.existsSync(JFL_PATHS.config)
+  const hasNew = cachedExists(JFL_PATHS.config)
 
   if (!hasLegacy && !hasNew) return 'none'
   if (hasLegacy && !hasNew) return 'needed'
@@ -101,6 +119,7 @@ export function getMigrationStatus(): 'none' | 'needed' | 'complete' {
 /**
  * Ensure JFL directories exist
  * Creates XDG-compliant directory structure
+ * Uses cached existsSync and invalidates cache after creation
  */
 export function ensureJflDirs(): void {
   const dirs = [
@@ -113,8 +132,10 @@ export function ensureJflDirs(): void {
   ]
 
   for (const dir of dirs) {
-    if (!fs.existsSync(dir)) {
+    if (!cachedExists(dir)) {
       fs.mkdirSync(dir, { recursive: true })
+      // Invalidate cache after creation
+      existsCache.set(dir, { exists: true, ts: Date.now() })
     }
   }
 }
