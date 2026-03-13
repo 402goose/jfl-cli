@@ -35,6 +35,7 @@ import { transformHookPayload } from "../lib/hook-transformer.js"
 import type { HookPayload } from "../types/map.js"
 import { loadAllAgentConfigs } from "../lib/agent-config.js"
 import { TrainingBuffer } from "../lib/training-buffer.js"
+import { FindingsEngine } from "../lib/findings-engine.js"
 
 const PID_FILE = ".jfl/context-hub.pid"
 const LOG_FILE = ".jfl/logs/context-hub.log"
@@ -2071,6 +2072,140 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus,
           res.end(JSON.stringify({ error: err.message }))
         }
       })
+      return
+    }
+
+    // ── Findings API ──────────────────────────────────────────────────
+
+    // GET /api/v1/findings — list current findings
+    if (url.pathname === "/api/v1/findings" && req.method === "GET") {
+      try {
+        const engine = new FindingsEngine(projectRoot)
+        const refresh = url.searchParams.get("refresh") === "true"
+
+        let findings
+        if (refresh) {
+          findings = await engine.analyze()
+        } else {
+          findings = engine.getFindings()
+          // Auto-analyze if no findings exist
+          if (findings.length === 0) {
+            findings = await engine.analyze()
+          }
+        }
+
+        // Filter out dismissed unless ?include_dismissed=true
+        const includeDismissed = url.searchParams.get("include_dismissed") === "true"
+        if (!includeDismissed) {
+          findings = findings.filter(f => !f.dismissed)
+        }
+
+        res.writeHead(200, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ findings, total: findings.length }))
+      } catch (err: any) {
+        res.writeHead(500, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ error: err.message }))
+      }
+      return
+    }
+
+    // POST /api/v1/findings/:id/dismiss — dismiss a finding
+    if (url.pathname.match(/^\/api\/v1\/findings\/[^/]+\/dismiss$/) && req.method === "POST") {
+      try {
+        const findingId = decodeURIComponent(url.pathname.split("/")[4])
+        const engine = new FindingsEngine(projectRoot)
+        const success = engine.dismissFinding(findingId)
+
+        if (success) {
+          res.writeHead(200, { "Content-Type": "application/json" })
+          res.end(JSON.stringify({ ok: true, dismissed: findingId }))
+        } else {
+          res.writeHead(404, { "Content-Type": "application/json" })
+          res.end(JSON.stringify({ error: "Finding not found" }))
+        }
+      } catch (err: any) {
+        res.writeHead(500, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ error: err.message }))
+      }
+      return
+    }
+
+    // POST /api/v1/findings/:id/spawn — spawn an agent from a finding
+    if (url.pathname.match(/^\/api\/v1\/findings\/[^/]+\/spawn$/) && req.method === "POST") {
+      try {
+        const findingId = decodeURIComponent(url.pathname.split("/")[4])
+        const engine = new FindingsEngine(projectRoot)
+        const findings = engine.getFindings()
+        const finding = findings.find(f => f.id === findingId)
+
+        if (!finding) {
+          res.writeHead(404, { "Content-Type": "application/json" })
+          res.end(JSON.stringify({ error: "Finding not found" }))
+          return
+        }
+
+        if (!finding.agent_config) {
+          res.writeHead(400, { "Content-Type": "application/json" })
+          res.end(JSON.stringify({ error: "Finding has no agent config" }))
+          return
+        }
+
+        // Spawn peter-parker to fix the issue
+        const env = { ...process.env }
+        delete env.ANTHROPIC_API_KEY
+        delete env.CLAUDE_CODE_ENTRYPOINT
+
+        const agentConfig = finding.agent_config
+        const prompt = `Fix this issue: ${finding.title}\n\n${finding.description}\n\nTarget metric: ${agentConfig.metric} >= ${agentConfig.target}\nScope files: ${agentConfig.scope_files.join(", ")}`
+
+        const child = spawn("jfl", ["peter", "run", "--prompt", prompt], {
+          cwd: projectRoot,
+          detached: true,
+          stdio: "ignore",
+          env,
+        })
+        child.unref()
+
+        // Emit event for tracking
+        if (eventBus) {
+          eventBus.emit({
+            type: "findings:agent-spawned" as MAPEventType,
+            source: "findings-engine",
+            data: {
+              finding_id: findingId,
+              finding_type: finding.type,
+              finding_title: finding.title,
+              pid: child.pid,
+            },
+          })
+        }
+
+        res.writeHead(200, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({
+          ok: true,
+          pid: child.pid,
+          finding_id: findingId,
+          agent_config: agentConfig,
+        }))
+      } catch (err: any) {
+        res.writeHead(500, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ error: err.message }))
+      }
+      return
+    }
+
+    // POST /api/v1/findings/analyze — force re-analyze
+    if (url.pathname === "/api/v1/findings/analyze" && req.method === "POST") {
+      try {
+        const engine = new FindingsEngine(projectRoot)
+        const findings = await engine.analyze()
+
+        res.writeHead(200, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ findings, total: findings.length }))
+      } catch (err: any) {
+        res.writeHead(500, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ error: err.message }))
+      }
       return
     }
 

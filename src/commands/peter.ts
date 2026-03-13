@@ -1205,9 +1205,9 @@ async function agentList(projectRoot: string): Promise<void> {
   }
 }
 
-async function agentRun(projectRoot: string, agentName: string, rounds: number): Promise<void> {
+async function agentRun(projectRoot: string, agentName: string, roundsOverride?: number): Promise<void> {
   const { loadAgentConfig, validateAgentConfig } = await import("../lib/agent-config.js")
-  const { startSession, runBaseline, runRound, endSession, saveSessionState } = await import("../lib/agent-session.js")
+  const { startSession, runBaseline, runRound, endSession, saveSessionState, writeExperimentHistory } = await import("../lib/agent-session.js")
   const { ReplayBuffer } = await import("../lib/replay-buffer.js")
   const { StratusClient } = await import("../lib/stratus-client.js")
 
@@ -1231,9 +1231,18 @@ async function agentRun(projectRoot: string, agentName: string, rounds: number):
     return
   }
 
+  // Use config.rounds as default (Karpathy: ~50 experiments per session)
+  // Allow override via CLI for debugging/testing
+  const rounds = roundsOverride ?? config.rounds ?? 50
+
+  // Get scope_files for display
+  const displayScopeFiles = config.constraints.scope_files || config.constraints.files_in_scope
+  const scopeFilesDisplay = displayScopeFiles.slice(0, 3).join(", ") + (displayScopeFiles.length > 3 ? "..." : "")
+
   console.log(chalk.bold(`\n  Running Scoped Agent: ${agentName} (${rounds} rounds)\n`))
   console.log(chalk.gray(`  Metric: ${config.metric} (${config.direction})`))
   console.log(chalk.gray(`  Time budget: ${config.time_budget_seconds}s per round`))
+  console.log(chalk.gray(`  Focus files: ${scopeFilesDisplay}`))
   console.log(chalk.gray(`  Pattern: branch → change → eval → keep|revert → repeat\n`))
 
   // Start session
@@ -1263,31 +1272,53 @@ async function agentRun(projectRoot: string, agentName: string, rounds: number):
     ? new StratusClient({ apiKey: process.env.STRATUS_API_KEY })
     : null
 
+  // Get scope_files from config (Karpathy pattern: focused file list)
+  const scopeFiles = (config.constraints as any).scope_files || config.constraints.files_in_scope || []
+  const scopeFilesStr = scopeFiles.slice(0, 5).join(", ")
+
   for (let round = 1; round <= rounds; round++) {
     console.log(chalk.bold(`\n  ── Round ${round}/${rounds} ${"─".repeat(40)}\n`))
 
     // Generate task — informed by past experiment history
-    let task = `Improve ${config.metric} by modifying files matching ${config.constraints.files_in_scope.join(", ")}`
+    // Default task uses scope_files for focused changes (Karpathy pattern)
+    let task = `Improve ${config.metric} by modifying: ${scopeFilesStr}. Make ONE small, focused change.`
 
     // Build history context from replay buffer + current session transitions
     const pastTuples = replayBuffer.getForAgent(config.name).slice(-20) // Last 20 tuples
+    const keptExperiments: string[] = []
+    const rejectedExperiments: string[] = []
+
+    // From replay buffer (past sessions)
+    for (const t of pastTuples) {
+      const action = t.action?.description || "unknown"
+      const reward = t.reward ?? 0
+      if (reward > 0) {
+        keptExperiments.push(`"${action.slice(0, 50)}" (+${reward.toFixed(4)})`)
+      } else {
+        rejectedExperiments.push(`"${action.slice(0, 50)}"`)
+      }
+    }
+
+    // From current session transitions
+    for (const t of transitions) {
+      const action = t.action?.description || "unknown"
+      const reward = t.reward ?? 0
+      if (reward > 0) {
+        keptExperiments.push(`"${action.slice(0, 50)}" (+${reward.toFixed(4)})`)
+      } else {
+        rejectedExperiments.push(`"${action.slice(0, 50)}"`)
+      }
+    }
+
     let historyContext = ""
-    if (pastTuples.length > 0 || transitions.length > 0) {
-      const allResults = [
-        ...pastTuples.map((t: any) => ({
-          action: t.action?.description || "unknown",
-          reward: t.reward,
-          kept: (t.reward ?? 0) > 0,
-        })),
-        ...transitions.map((t: any) => ({
-          action: t.action?.description || "unknown",
-          reward: t.reward,
-          kept: (t.reward ?? 0) > 0,
-        })),
-      ]
-      const kept = allResults.filter((r: any) => r.kept)
-      const discarded = allResults.filter((r: any) => !r.kept)
-      historyContext = `\n\nPast experiments for this agent:\nKept (worked): ${kept.map((r: any) => `"${r.action}" (reward: ${r.reward})`).join(", ") || "none yet"}\nDiscarded (failed): ${discarded.map((r: any) => `"${r.action}"`).join(", ") || "none yet"}\n\nDo NOT repeat failed approaches. Build on what worked. Try something NEW.`
+    if (keptExperiments.length > 0 || rejectedExperiments.length > 0) {
+      historyContext = `
+
+Experiment history for ${config.name}:
+KEPT (these worked — build on them): ${keptExperiments.slice(-5).join(", ") || "none yet"}
+REJECTED (do NOT repeat these): ${rejectedExperiments.slice(-5).join(", ") || "none yet"}
+
+CRITICAL: Do NOT repeat rejected experiments. Try something NEW and DIFFERENT.`
     }
 
     // Read product context (Layer 2) if available
@@ -1304,8 +1335,16 @@ async function agentRun(projectRoot: string, agentName: string, rounds: number):
 
     if (stratus) {
       try {
-        const prompt = `Suggest ONE specific code change to improve the ${config.metric} metric (${config.direction}). Scope: ${config.scope}. Files: ${config.constraints.files_in_scope.join(", ")}. Be concrete and actionable. Return just the task description.${historyContext}${productContext}`
-        const response = await stratus.reason(prompt, { maxTokens: 200, temperature: 0.7 + round * 0.05 })
+        // Enhanced prompt with scope_files and history
+        const prompt = `Suggest ONE specific code change to improve the ${config.metric} metric (${config.direction}).
+
+FOCUS FILES (modify only these): ${scopeFilesStr}
+CURRENT METRIC: ${session.baselineMetric.toFixed(4)}
+ROUND: ${round}/${rounds}
+${historyContext}${productContext}
+
+Be concrete and actionable. Return just the task description (1-2 sentences).`
+        const response = await stratus.reason(prompt, { maxTokens: 200, temperature: 0.7 + round * 0.03 })
         task = response.choices[0]?.message?.content || task
       } catch {}
     }
@@ -1314,7 +1353,8 @@ async function agentRun(projectRoot: string, agentName: string, rounds: number):
 
     console.log(chalk.cyan(`  Task: ${task.slice(0, 80)}...`))
 
-    const { result, transition } = await runRound(session, round, task, hypothesis)
+    // Pass transitions to runRound so it can build experiment history (Karpathy pattern)
+    const { result, transition } = await runRound(session, round, task, hypothesis, transitions)
     transitions.push(transition)
 
     // Write to replay buffer
@@ -1716,7 +1756,7 @@ Be concise. Output a JSON object: { "run": ["agent1", "agent2"], "skip": ["agent
 
     for (const agentName of staleAgents) {
       console.log(chalk.bold(`\n  ── ${agentName} ${"─".repeat(45)}\n`))
-      await agentRun(projectRoot, agentName, 3) // 3 rounds per stale agent
+      await agentRun(projectRoot, agentName) // Use config.rounds (default 50)
     }
   }
 
@@ -1938,8 +1978,9 @@ export async function peterCommand(
       return
     } else if (subAction) {
       // Assume it's an agent name for "run"
-      const rounds = parseInt(options.rounds || "5", 10)
-      await agentRun(projectRoot, subAction, rounds)
+      // Use CLI override if provided, otherwise use config.rounds (default 50)
+      const roundsOverride = options.rounds ? parseInt(options.rounds, 10) : undefined
+      await agentRun(projectRoot, subAction, roundsOverride)
       return
     }
 

@@ -23,6 +23,7 @@ export interface ConstraintConfig {
   files_in_scope: string[]     // Glob patterns for files agent CAN modify
   files_readonly: string[]     // Glob patterns for files that are READ-ONLY
   max_file_changes: number     // Max files that can be changed per round
+  scope_files?: string[]       // Karpathy pattern: specific files to focus on (subset of files_in_scope)
 }
 
 export interface PolicyConfig {
@@ -43,6 +44,7 @@ export interface AgentConfig {
   metric: string               // ONE metric, scalar, higher is better (e.g., "ndcg@10")
   direction: "maximize" | "minimize"  // Optimization direction
   time_budget_seconds: number  // Fixed time budget per round
+  rounds: number               // Number of rounds per session (Karpathy: ~50-100)
   target_repo?: string         // Path to target service repo (if different from GTM root)
   eval: EvalConfig
   constraints: ConstraintConfig
@@ -163,7 +165,8 @@ export function parseAgentConfig(tomlContent: string): AgentConfig {
     scope: (agent.scope as string) || "general",
     metric: agent.metric as string,
     direction: (agent.direction as "maximize" | "minimize") || "maximize",
-    time_budget_seconds: (agent.time_budget_seconds as number) || 300,
+    time_budget_seconds: (agent.time_budget_seconds as number) || 180,  // Karpathy: 3-5 min per experiment
+    rounds: (agent.rounds as number) || 50,  // Karpathy: ~50-100 experiments per session
     target_repo: (agent.target_repo as string) || undefined,
     eval: {
       script: evalSection.script as string,
@@ -172,12 +175,13 @@ export function parseAgentConfig(tomlContent: string): AgentConfig {
     constraints: {
       files_in_scope: (constraints.files_in_scope as string[]) || ["**/*"],
       files_readonly: (constraints.files_readonly as string[]) || ["eval/**"],
-      max_file_changes: (constraints.max_file_changes as number) || 10,
+      max_file_changes: (constraints.max_file_changes as number) || 3,  // Karpathy: small changes
+      scope_files: (constraints.scope_files as string[]) || undefined,  // Optional focused file list
     },
     policy: {
       embedding_model: (policy.embedding_model as string) || "stratus-x1ac-base-claude-sonnet-4-6",
       exploration_rate: (policy.exploration_rate as number) || 0.2,
-      decay_per_round: (policy.decay_per_round as number) || 0.01,
+      decay_per_round: (policy.decay_per_round as number) || 0.004,  // Slower decay for more exploration
       min_exploration: (policy.min_exploration as number) || 0.05,
     },
     context_scope: {

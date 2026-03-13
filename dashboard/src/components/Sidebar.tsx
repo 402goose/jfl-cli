@@ -70,6 +70,13 @@ function NavIcon({ name }: { name: string }) {
         <path d="m21 21-4.3-4.3" />
       </>
     ),
+    findings: (
+      <>
+        <circle cx="12" cy="12" r="10" />
+        <path d="M12 8v4" />
+        <path d="M12 16h.01" />
+      </>
+    ),
   }
 
   return (
@@ -100,6 +107,7 @@ const navItems: NavItemDef[] = [
   { id: "activity", label: "Activity", icon: "events" },
   { id: "loop", label: "Loop", icon: "loop" },
   { id: "experiments", label: "Experiments", icon: "system" },
+  { id: "findings", label: "Findings", icon: "findings" },
   { id: "reviews", label: "Reviews", icon: "reviews" },
   { id: "chat", label: "Chat", icon: "chat" },
   { id: "synopsis", label: "Synopsis", icon: "synopsis" },

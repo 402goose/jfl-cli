@@ -372,6 +372,55 @@ export const api = {
   rlExperiments: (agent?: string) => apiFetch<{ experiments: RLExperiment[]; total: number }>(agent ? `/api/v1/experiments?agent=${agent}` : "/api/v1/experiments"),
   rlSessions: () => apiFetch<{ sessions: RLSession[] }>("/api/v1/sessions"),
   productContext: () => apiFetch<{ context: string | null; updatedAt: string | null }>("/api/v1/product-context"),
+
+  // Findings API
+  findings: (refresh = false, includeDismissed = false) => {
+    const params = new URLSearchParams()
+    if (refresh) params.set("refresh", "true")
+    if (includeDismissed) params.set("include_dismissed", "true")
+    const query = params.toString()
+    return apiFetch<{ findings: Finding[]; total: number }>(`/api/v1/findings${query ? `?${query}` : ""}`)
+  },
+  dismissFinding: (id: string) =>
+    apiFetch<{ ok: boolean; dismissed: string }>(`/api/v1/findings/${encodeURIComponent(id)}/dismiss`, { method: "POST" }),
+  spawnFindingAgent: (id: string) =>
+    apiFetch<{ ok: boolean; pid: number; finding_id: string }>(`/api/v1/findings/${encodeURIComponent(id)}/spawn`, { method: "POST" }),
+  analyzeFindings: () =>
+    apiFetch<{ findings: Finding[]; total: number }>("/api/v1/findings/analyze", { method: "POST" }),
+}
+
+// Finding types
+export type FindingType =
+  | "performance_regression"
+  | "test_failure"
+  | "error_spike"
+  | "coverage_gap"
+  | "stale_code"
+  | "eval_plateau"
+
+export type FindingSeverity = "critical" | "warning" | "info"
+export type SuggestedAction = "spawn_agent" | "alert" | "investigate"
+
+export interface AgentConfig {
+  metric: string
+  target: number
+  scope_files: string[]
+  rounds: number
+  eval_script: string
+}
+
+export interface Finding {
+  id: string
+  type: FindingType
+  severity: FindingSeverity
+  title: string
+  description: string
+  metric?: string
+  scope_files: string[]
+  suggested_action: SuggestedAction
+  agent_config?: AgentConfig
+  created_at: number
+  dismissed: boolean
 }
 
 // RL Agent types

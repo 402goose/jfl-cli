@@ -50,6 +50,7 @@ import {
   ActivityPage,
   LoopPage,
   ExperimentsPage,
+  FindingsPage,
   SystemPage,
   TopologyPage,
   ReviewsPage,
@@ -59,13 +60,14 @@ import {
 import { usePolling } from "./lib/hooks"
 import "./index.css"
 
-type PageId = "overview" | "activity" | "loop" | "experiments" | "reviews" | "chat" | "synopsis" | "topology" | "system"
+type PageId = "overview" | "activity" | "loop" | "experiments" | "findings" | "reviews" | "chat" | "synopsis" | "topology" | "system"
 
 const pageMap: Record<PageId, (props: { status: WorkspaceStatus | null }) => preact.JSX.Element> = {
   overview: OverviewPage,
   activity: () => <ActivityPage />,
   loop: () => <LoopPage />,
   experiments: () => <ExperimentsPage />,
+  findings: () => <FindingsPage />,
   reviews: () => <ReviewsPage />,
   chat: () => <ChatPage />,
   synopsis: SynopsisPage,

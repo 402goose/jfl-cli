@@ -55,7 +55,7 @@ program.hook('postAction', async (_thisCommand, actionCommand) => {
 const HELP_GROUPS: Record<string, string[]> = {
   "Getting Started": ["init", "status", "hud", "ide", "doctor"],
   "Daily Use": ["synopsis", "ask", "improve", "events", "voice"],
-  "Management": ["services", "portfolio", "flows", "hooks", "scope", "memory", "eval", "viz", "telemetry", "context-hub", "skills", "ci"],
+  "Management": ["services", "portfolio", "flows", "hooks", "scope", "memory", "eval", "findings", "viz", "telemetry", "context-hub", "skills", "ci"],
   "Platform": ["login", "deploy", "wallet", "preferences"],
   "Advanced": ["peter", "orchestrate", "openclaw", "ralph", "agent"],
 }
@@ -1138,6 +1138,7 @@ registerEvalCommand(program)
 registerPredictCommand(program)
 registerPortfolioCommand(program)
 registerVizCommand(program)
+registerFindingsCommand(program)
 
 // ============================================================================
 // TELEMETRY
@@ -1147,6 +1148,7 @@ const telemetryCmd = program.command("telemetry").description("Manage anonymous 
 
 import { registerDigestCommand } from "./commands/digest.js"
 import { registerEvalCommand } from "./commands/eval.js"
+import { registerFindingsCommand } from "./commands/findings.js"
 import { registerPortfolioCommand } from "./commands/portfolio.js"
 import { registerPredictCommand } from "./commands/predict.js"
 import { registerVizCommand } from "./commands/viz.js"
