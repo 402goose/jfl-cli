@@ -8,7 +8,7 @@
  * @purpose Real telemetry agent consuming platform digest API for metrics-driven RL
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'fs'
+import { readFileSync, writeFileSync, existsSync, mkdirSync, readdirSync, appendFileSync } from 'fs'
 import { join } from 'path'
 import { spawnSync } from 'child_process'
 import type {
@@ -25,6 +25,13 @@ import { TrainingBuffer } from './training-buffer.js'
 // ============================================================================
 
 type EventEmitter = (type: string, data: Record<string, unknown>, source?: string) => void
+
+interface ProductInsight {
+  type: 'training' | 'product' | 'system' | 'performance'
+  severity: 'info' | 'warning' | 'critical'
+  title: string
+  detail: string
+}
 
 interface TelemetryAgentV2Options {
   projectRoot: string
@@ -482,6 +489,217 @@ consumes = []
   }
 
   /**
+   * Analyze all local data sources for product improvement insights
+   */
+  async analyzeProduct(): Promise<{
+    insights: ProductInsight[]
+    claudeMdUpdates: string[]
+    staleDocs: string[]
+    trainingGaps: string[]
+  }> {
+    const insights: ProductInsight[] = []
+    const claudeMdUpdates: string[] = []
+    const staleDocs: string[] = []
+    const trainingGaps: string[] = []
+
+    // 1. Read MAP events — what's actually happening in the system
+    const eventsPath = join(this.projectRoot, '.jfl', 'map-events.jsonl')
+    let recentEvents: Array<{ type: string; source?: string; ts: string; data?: Record<string, unknown> }> = []
+    if (existsSync(eventsPath)) {
+      const lines = readFileSync(eventsPath, 'utf-8').trim().split('\n').slice(-200) // last 200 events
+      for (const line of lines) {
+        try { recentEvents.push(JSON.parse(line)) } catch {}
+      }
+    }
+
+    // Event type distribution — what's the system doing?
+    const eventTypes = new Map<string, number>()
+    for (const e of recentEvents) {
+      eventTypes.set(e.type, (eventTypes.get(e.type) || 0) + 1)
+    }
+
+    // 2. Read journals — what sessions are producing
+    const journalDir = join(this.projectRoot, '.jfl', 'journal')
+    let recentJournalEntries: Array<{ ts: string; type: string; title: string; summary: string; session?: string }> = []
+    if (existsSync(journalDir)) {
+      const files = readdirSync(journalDir).filter(f => f.endsWith('.jsonl')).sort().slice(-5) // last 5 journal files
+      for (const f of files) {
+        const lines = readFileSync(join(journalDir, f), 'utf-8').trim().split('\n')
+        for (const line of lines) {
+          try { recentJournalEntries.push(JSON.parse(line)) } catch {}
+        }
+      }
+    }
+
+    // 3. Training buffer analysis — how is RL learning?
+    const bufferPath = join(this.projectRoot, '.jfl', 'training-buffer.jsonl')
+    let tupleCount = 0
+    let improvedCount = 0
+    let agentDistribution = new Map<string, number>()
+    if (existsSync(bufferPath)) {
+      const lines = readFileSync(bufferPath, 'utf-8').trim().split('\n')
+      tupleCount = lines.length
+      for (const line of lines.slice(-100)) {
+        try {
+          const t = JSON.parse(line)
+          agentDistribution.set(t.agent || 'unknown', (agentDistribution.get(t.agent || 'unknown') || 0) + 1)
+          if (t.reward?.improved) improvedCount++
+        } catch {}
+      }
+    }
+
+    // 4. Agent configs — what agents exist and their health
+    const agentDir = join(this.projectRoot, '.jfl', 'agents')
+    const agentConfigs: string[] = []
+    if (existsSync(agentDir)) {
+      for (const f of readdirSync(agentDir).filter(f => f.endsWith('.toml'))) {
+        agentConfigs.push(f.replace('.toml', ''))
+      }
+    }
+
+    // 5. Product context — is it fresh?
+    const contextPath = join(this.projectRoot, '.jfl', 'product-context.md')
+    let contextAge = 999
+    if (existsSync(contextPath)) {
+      const stat = spawnSync('stat', ['-f', '%m', contextPath], { encoding: 'utf-8' })
+      if (stat.stdout) {
+        contextAge = Math.floor((Date.now() / 1000 - parseInt(stat.stdout.trim())) / 3600)
+      }
+    }
+
+    // 6. CLAUDE.md analysis — is it accurate?
+    const claudeMdPath = join(this.projectRoot, 'CLAUDE.md')
+    let claudeMdContent = ''
+    if (existsSync(claudeMdPath)) {
+      claudeMdContent = readFileSync(claudeMdPath, 'utf-8')
+    }
+
+    // 7. Dashboard telemetry from events
+    const dashboardEvents = recentEvents.filter(e => e.type.startsWith('dashboard:'))
+    const pageViews = new Map<string, number>()
+    for (const e of dashboardEvents) {
+      if (e.type === 'dashboard:page-view' && e.data?.page) {
+        const page = String(e.data.page)
+        pageViews.set(page, (pageViews.get(page) || 0) + 1)
+      }
+    }
+
+    // ── Generate insights ──
+
+    // Insight: Training data health
+    if (tupleCount < 100) {
+      insights.push({ type: 'training', severity: 'warning', title: 'Low training data', detail: `Only ${tupleCount} tuples in buffer. Need 500+ for meaningful policy head training. Run: jfl eval mine --all` })
+    }
+    if (tupleCount > 100 && improvedCount === 0) {
+      insights.push({ type: 'training', severity: 'critical', title: 'No improvements in recent tuples', detail: `Last 100 tuples have 0 improvements. Agents may be stuck or metrics are wrong.` })
+    }
+    trainingGaps.push(`Buffer: ${tupleCount} tuples, ${improvedCount}/100 recent improved`)
+    trainingGaps.push(`Agent distribution: ${[...agentDistribution].map(([k,v]) => `${k}=${v}`).join(', ')}`)
+
+    // Insight: Product context freshness
+    if (contextAge > 24) {
+      insights.push({ type: 'product', severity: 'warning', title: 'Product context stale', detail: `Product context is ${contextAge}h old. Run: jfl peter synthesize` })
+    }
+
+    // Insight: Event flow health
+    if (recentEvents.length < 10) {
+      insights.push({ type: 'system', severity: 'warning', title: 'Low event flow', detail: `Only ${recentEvents.length} recent events. Context hub may not be running.` })
+    }
+
+    // Insight: Journal activity
+    const recentJournals = recentJournalEntries.filter(j => {
+      const age = Date.now() - new Date(j.ts).getTime()
+      return age < 24 * 60 * 60 * 1000 // last 24h
+    })
+    if (recentJournals.length === 0) {
+      insights.push({ type: 'product', severity: 'info', title: 'No journal entries in 24h', detail: 'No sessions have produced journal entries recently. System may be idle.' })
+    }
+
+    // Insight: Agent coverage
+    const agentsWithTuples = new Set([...agentDistribution.keys()])
+    const agentsWithoutData = agentConfigs.filter(a => !agentsWithTuples.has(a))
+    if (agentsWithoutData.length > 0) {
+      insights.push({ type: 'training', severity: 'info', title: 'Agents with no training data', detail: `${agentsWithoutData.join(', ')} have never produced tuples. Run autoresearch for them.` })
+    }
+
+    // Insight: Dashboard usage patterns
+    if (pageViews.size > 0) {
+      const sorted = [...pageViews].sort((a, b) => b[1] - a[1])
+      const mostUsed = sorted[0][0]
+      const leastUsed = sorted[sorted.length - 1][0]
+      insights.push({ type: 'product', severity: 'info', title: 'Dashboard usage', detail: `Most visited: ${mostUsed} (${sorted[0][1]}x). Least visited: ${leastUsed} (${sorted[sorted.length - 1][1]}x).` })
+    }
+
+    // CLAUDE.md accuracy checks
+    // Check if registered services match what CLAUDE.md says
+    const servicesPath = join(this.projectRoot, '.jfl', 'services.json')
+    if (existsSync(servicesPath)) {
+      try {
+        const services = JSON.parse(readFileSync(servicesPath, 'utf-8'))
+        const serviceNames = (services.services || services || []).map((s: any) => s.name || s).filter(Boolean)
+        for (const svc of serviceNames) {
+          if (!claudeMdContent.includes(svc)) {
+            claudeMdUpdates.push(`Service "${svc}" is registered but not mentioned in CLAUDE.md`)
+          }
+        }
+      } catch {}
+    }
+    // Check if agent configs match CLAUDE.md
+    for (const agent of agentConfigs) {
+      if (!claudeMdContent.includes(agent)) {
+        claudeMdUpdates.push(`Agent "${agent}" exists in .jfl/agents/ but not mentioned in CLAUDE.md`)
+      }
+    }
+
+    // Stale docs check
+    const knowledgeDir = join(this.projectRoot, 'knowledge')
+    if (existsSync(knowledgeDir)) {
+      const mdFiles = readdirSync(knowledgeDir).filter(f => f.endsWith('.md'))
+      for (const f of mdFiles) {
+        const stat = spawnSync('stat', ['-f', '%m', join(knowledgeDir, f)], { encoding: 'utf-8' })
+        if (stat.stdout) {
+          const age = Math.floor((Date.now() / 1000 - parseInt(stat.stdout.trim())) / (3600 * 24))
+          if (age > 14) {
+            staleDocs.push(`${f} (${age} days old)`)
+          }
+        }
+      }
+    }
+
+    // Write insights to journal
+    if (insights.length > 0) {
+      const journalPath2 = join(this.projectRoot, '.jfl', 'journal')
+      if (existsSync(journalPath2)) {
+        const files = readdirSync(journalPath2).filter(f => f.endsWith('.jsonl')).sort()
+        const latest = files[files.length - 1]
+        if (latest) {
+          const entry = {
+            v: 2, ts: new Date().toISOString(), session: 'telemetry-agent',
+            type: 'discovery', status: 'complete',
+            title: `Product analysis: ${insights.length} insights`,
+            summary: insights.map(i => `[${i.severity}] ${i.title}`).join('; '),
+            detail: JSON.stringify({ insights, claudeMdUpdates, staleDocs, trainingGaps }),
+          }
+          appendFileSync(join(journalPath2, latest), '\n' + JSON.stringify(entry))
+        }
+      }
+    }
+
+    // Emit event
+    this.emitEvent('telemetry:product-analysis', {
+      insightCount: insights.length,
+      claudeMdUpdates: claudeMdUpdates.length,
+      staleDocs: staleDocs.length,
+      trainingGaps: trainingGaps.length,
+      tupleCount,
+      improvedRate: tupleCount > 0 ? (improvedCount / Math.min(100, tupleCount)) : 0,
+      contextAgeH: contextAge,
+    }, 'telemetry-agent-v2')
+
+    return { insights, claudeMdUpdates, staleDocs, trainingGaps }
+  }
+
+  /**
    * Run the telemetry agent
    */
   async run(): Promise<{
@@ -492,6 +710,7 @@ consumes = []
     proposedAgents: ProposedAgent[]
     alerts: MetricComparison[]
     wins: MetricComparison[]
+    productAnalysis: { insights: ProductInsight[]; claudeMdUpdates: string[]; staleDocs: string[]; trainingGaps: string[] } | null
   }> {
     const now = new Date().toISOString()
 
@@ -502,6 +721,9 @@ consumes = []
     ])
 
     if (!digest24h) {
+      // Even without platform digest, run local product analysis
+      let localAnalysis = null
+      try { localAnalysis = await this.analyzeProduct() } catch {}
       return {
         digest24h: null,
         digest7d: null,
@@ -510,6 +732,7 @@ consumes = []
         proposedAgents: [],
         alerts: [],
         wins: [],
+        productAnalysis: localAnalysis,
       }
     }
 
@@ -567,6 +790,26 @@ consumes = []
       }, 'telemetry-agent-v2')
     }
 
+    // Run product analysis (local data)
+    let productAnalysis: Awaited<ReturnType<typeof this.analyzeProduct>> | null = null
+    try {
+      productAnalysis = await this.analyzeProduct()
+      if (productAnalysis.insights.length > 0) {
+        console.log(`  Product analysis: ${productAnalysis.insights.length} insights`)
+        for (const insight of productAnalysis.insights) {
+          console.log(`    [${insight.severity}] ${insight.title}`)
+        }
+      }
+      if (productAnalysis.claudeMdUpdates.length > 0) {
+        console.log(`  CLAUDE.md drift: ${productAnalysis.claudeMdUpdates.length} items need updating`)
+      }
+      if (productAnalysis.staleDocs.length > 0) {
+        console.log(`  Stale docs: ${productAnalysis.staleDocs.join(', ')}`)
+      }
+    } catch (err: any) {
+      console.error(`  Product analysis failed: ${err.message}`)
+    }
+
     // Save state
     this.state.lastRun = now
     this.state.runCount++
@@ -584,6 +827,7 @@ consumes = []
       proposedAgents,
       alerts,
       wins,
+      productAnalysis,
     }
   }
 

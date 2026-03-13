@@ -1519,6 +1519,21 @@ function createServer(projectRoot: string, port: number, eventBus?: MAPEventBus,
       return
     }
 
+    // Product analysis (telemetry agent v2)
+    if (url.pathname === "/api/v1/product-analysis" && req.method === "GET") {
+      try {
+        const { TelemetryAgentV2 } = await import("../lib/telemetry-agent-v2.js")
+        const agent = new TelemetryAgentV2({ projectRoot })
+        const analysis = await agent.analyzeProduct()
+        res.writeHead(200, { "Content-Type": "application/json" })
+        res.end(JSON.stringify(analysis))
+      } catch (err: any) {
+        res.writeHead(500, { "Content-Type": "application/json" })
+        res.end(JSON.stringify({ error: err.message }))
+      }
+      return
+    }
+
     // Flow definitions
     if (url.pathname === "/api/flows" && req.method === "GET") {
       if (!flowEngine) {
