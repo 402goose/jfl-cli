@@ -96,6 +96,7 @@ export async function piSkyRun(options: RunOptions): Promise<void> {
   })
 
   const router = new EventRouter({ hubUrl })
+  router.on("error", () => {})
   router.registerBridge("agent", bridge)
 
   let costMonitor: InstanceType<typeof CostMonitor> | null = null
@@ -110,24 +111,6 @@ export async function piSkyRun(options: RunOptions): Promise<void> {
     })
   }
 
-  bridge.on("message_update", (event: any) => {
-    const delta = event.assistantMessageEvent
-    if (delta?.type === "text_delta" && delta.delta) {
-      process.stdout.write(delta.delta)
-    }
-  })
-
-  bridge.on("tool_execution_start", (event: any) => {
-    console.log(chalk.gray(`\n  ▸ ${event.toolName}: ${JSON.stringify(event.args ?? {}).slice(0, 80)}`))
-  })
-
-  bridge.on("agent_end", async () => {
-    console.log(chalk.green("\n\n  ✓ Done"))
-
-    if (costMonitor) {
-      console.log(chalk.gray(`  Cost: $${costMonitor.totalCost.toFixed(4)} / $${costMonitor.budget.toFixed(2)}`))
-    }
-  })
 
   bridge.on("exit", () => {
     router.stop()
@@ -143,15 +126,78 @@ export async function piSkyRun(options: RunOptions): Promise<void> {
       await router.startPolling().catch(() => {})
     }
 
-    await bridge.prompt(options.task)
+    const waitForIdle = () => new Promise<void>((resolve) => {
+      let idleTimer: ReturnType<typeof setTimeout> | null = null
 
-    await new Promise<void>((resolve) => {
+      const resetIdle = () => {
+        if (idleTimer) clearTimeout(idleTimer)
+        idleTimer = setTimeout(() => {
+          resolve()
+        }, 5000)
+      }
+
+      bridge.on("message_update", resetIdle)
+      bridge.on("tool_execution_start", resetIdle)
+      bridge.on("tool_execution_end", resetIdle)
+      bridge.on("turn_start", resetIdle)
+      bridge.on("turn_end", resetIdle)
       bridge.on("agent_end", () => {
-        setTimeout(() => {
-          bridge.shutdown().then(resolve).catch(resolve)
-        }, 1000)
+        if (idleTimer) clearTimeout(idleTimer)
+        resolve()
+      })
+
+      resetIdle()
+    })
+
+    process.stdout.write(chalk.gray("  Warming up JFL context..."))
+    await waitForIdle()
+    process.stdout.write(chalk.green(" ready\n\n"))
+
+    bridge.removeAllListeners("message_update")
+    bridge.removeAllListeners("tool_execution_start")
+    bridge.removeAllListeners("tool_execution_end")
+    bridge.removeAllListeners("turn_start")
+    bridge.removeAllListeners("turn_end")
+    bridge.removeAllListeners("agent_end")
+
+    bridge.on("message_update", (event: any) => {
+      const delta = event.assistantMessageEvent
+      if (delta?.type === "text_delta" && delta.delta) {
+        process.stdout.write(delta.delta)
+      }
+    })
+
+    bridge.on("tool_execution_start", (event: any) => {
+      console.log(chalk.gray(`\n  ▸ ${event.toolName}: ${JSON.stringify(event.args ?? {}).slice(0, 80)}`))
+    })
+
+    const taskDone = new Promise<void>((resolve) => {
+      let idleTimer: ReturnType<typeof setTimeout> | null = null
+      const finish = () => {
+        if (idleTimer) clearTimeout(idleTimer)
+        resolve()
+      }
+
+      bridge.on("agent_end", finish)
+
+      bridge.on("turn_end", () => {
+        if (idleTimer) clearTimeout(idleTimer)
+        idleTimer = setTimeout(finish, 3000)
       })
     })
+
+    await bridge.prompt(options.task)
+    await taskDone
+
+    console.log(chalk.green("\n\n  ✓ Done"))
+    if (costMonitor) {
+      await costMonitor.checkAll()
+      console.log(chalk.gray(`  Cost: $${costMonitor.totalCost.toFixed(4)} / $${costMonitor.budget.toFixed(2)}`))
+    }
+    console.log()
+
+    router.stop()
+    await bridge.shutdown().catch(() => {})
   } catch (err: any) {
     console.error(chalk.red(`\n  Error: ${err.message}\n`))
     await bridge.shutdown().catch(() => {})

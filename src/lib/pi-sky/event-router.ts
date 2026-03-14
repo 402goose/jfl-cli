@@ -27,6 +27,7 @@ export class EventRouter extends EventEmitter {
     super()
     this.hubUrl = options.hubUrl.replace(/\/$/, "")
     this.routes = options.routes ?? defaultRoutes()
+    this.on("error", () => {})
   }
 
   registerBridge(name: string, bridge: PiRpcBridge): void {
