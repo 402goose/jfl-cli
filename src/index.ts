@@ -57,7 +57,7 @@ const HELP_GROUPS: Record<string, string[]> = {
   "Daily Use": ["synopsis", "ask", "improve", "events", "voice"],
   "Management": ["services", "portfolio", "flows", "hooks", "scope", "memory", "eval", "findings", "viz", "telemetry", "context-hub", "skills", "ci"],
   "Platform": ["login", "deploy", "wallet", "preferences"],
-  "Advanced": ["peter", "orchestrate", "openclaw", "ralph", "agent"],
+  "Advanced": ["peter", "orchestrate", "openclaw", "ralph", "agent", "train"],
 }
 
 const HIDDEN_COMMANDS = new Set([
@@ -928,15 +928,17 @@ program
 program
   .command("peter")
   .description("Peter Parker - model-routed agent orchestrator")
-  .argument("[action]", "setup, run, pr, experiment, autoresearch, status, or dashboard")
+  .argument("[action]", "setup, run, pr, experiment, autoresearch, status, agent, or dashboard")
+  .argument("[name]", "Agent name (for agent subcommand)")
   .option("--cost", "Cost-optimized model routing (haiku-heavy)")
   .option("--balanced", "Balanced model routing (default)")
   .option("--quality", "Quality-first model routing (opus-heavy)")
   .option("-t, --task <task>", "Task to run (for run action)")
   .option("-r, --rounds <n>", "Number of autoresearch rounds (default: 5)")
   .option("--mode <mode>", "Experiment mode: default or autoresearch")
-  .action(async (action, options) => {
+  .action(async (action, name, options) => {
     const { peterCommand } = await import("./commands/peter.js")
+    if (name) options.name = name
     await peterCommand(action, options)
   })
 
@@ -1282,6 +1284,59 @@ program
     const { doctorCommand } = await import("./commands/doctor.js")
     await doctorCommand({ fix: options.fix })
   })
+
+// ============================================================================
+// TRAIN (policy head training pipeline)
+// ============================================================================
+
+const train = program.command("train").description("Policy head training pipeline")
+
+train
+  .command("policy-head")
+  .description("Train policy head from training buffer data")
+  .option("-f, --force", "Train even if threshold not met")
+  .option("--epochs <n>", "Max training epochs (default: 500)")
+  .option("--lr <rate>", "Learning rate (default: 3e-4)")
+  .option("--batch-size <n>", "Batch size (default: 64)")
+  .option("--min-entries <n>", "Minimum entries required (default: 50)")
+  .option("-o, --output <path>", "Output path for weights JSON")
+  .option("-a, --agent <name>", "Filter training data to specific agent")
+  .action(async (options) => {
+    const { trainPolicyHead } = await import("./commands/train.js")
+    await trainPolicyHead(options)
+  })
+
+train
+  .command("status")
+  .description("Show training data stats, last training, and threshold")
+  .action(async () => {
+    const { trainStatus } = await import("./commands/train.js")
+    await trainStatus()
+  })
+
+train
+  .command("export")
+  .description("Export training data for external tools")
+  .option("--format <fmt>", "Export format: jsonl or csv (default: jsonl)")
+  .action(async (options) => {
+    const { trainExport } = await import("./commands/train.js")
+    await trainExport(options)
+  })
+
+train
+  .command("check")
+  .description("Check if training threshold is met")
+  .option("-q, --quiet", "Quiet mode — exit code only")
+  .action(async (options) => {
+    const { trainThresholdCheck } = await import("./commands/train.js")
+    const ready = await trainThresholdCheck(options)
+    if (!ready) process.exitCode = 1
+  })
+
+train.action(async () => {
+  const { trainStatus } = await import("./commands/train.js")
+  await trainStatus()
+})
 
 // ============================================================================
 // AGENT (narrowly-scoped agent scaffolding)

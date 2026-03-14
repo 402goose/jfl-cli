@@ -40,8 +40,15 @@ coverage/
 # Generated peer agent files — machine-specific absolute paths, never commit
 .claude/agents/peer-service-*.md
 
-# Python bytecode
+# Python bytecode and venv
 *.pyc
 *.pyo
 __pycache__/
+.venv/
+
+# Training artifacts (machine-specific)
+.jfl/train-cache/
+.jfl/train-export/
+.jfl/policy-weights.json
+.jfl/training-meta.json
 .jfl/sessions/
