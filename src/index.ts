@@ -57,7 +57,7 @@ const HELP_GROUPS: Record<string, string[]> = {
   "Daily Use": ["synopsis", "ask", "improve", "events", "voice"],
   "Management": ["services", "portfolio", "flows", "hooks", "scope", "memory", "eval", "findings", "viz", "telemetry", "context-hub", "skills", "ci"],
   "Platform": ["login", "deploy", "wallet", "preferences"],
-  "Advanced": ["peter", "orchestrate", "openclaw", "ralph", "agent", "train"],
+  "Advanced": ["peter", "orchestrate", "openclaw", "ralph", "agent", "train", "pi-sky"],
 }
 
 const HIDDEN_COMMANDS = new Set([
@@ -1475,6 +1475,76 @@ piFleet
   .action(async (agent) => {
     const { fleetLogs } = await import("./commands/pi-fleet.js")
     await fleetLogs(agent)
+  })
+
+// ============================================================================
+// PI IN THE SKY — Programmable agent swarms with MAP event steering
+// ============================================================================
+
+const piSky = program
+  .command("pi-sky")
+  .description("Pi in the Sky — programmable Pi RPC agents with MAP event steering, cost budgets, and swarms")
+
+piSky
+  .command("run")
+  .description("Launch a single managed Pi agent with MAP integration")
+  .requiredOption("--task <task>", "Task for the agent to execute")
+  .option("--budget <dollars>", "Cost budget in dollars (auto-downgrades model when exceeded)")
+  .option("--model <model>", "Model ID (e.g. claude-sonnet-4-20250514)")
+  .option("--no-yolo", "Require permission prompts")
+  .action(async (options) => {
+    const { piSkyRun } = await import("./commands/pi-sky.js")
+    await piSkyRun(options)
+  })
+
+piSky
+  .command("swarm")
+  .description("Launch a multi-agent swarm from a team YAML with MAP event routing")
+  .option("--team <yaml>", "Team configuration YAML", "teams/gtm-team.yaml")
+  .option("--budget <dollars>", "Total cost budget across all agents")
+  .option("--dry-run", "Show what would be spawned without spawning")
+  .action(async (options) => {
+    const { piSkySwarm } = await import("./commands/pi-sky.js")
+    await piSkySwarm(options)
+  })
+
+piSky
+  .command("dashboard")
+  .description("Live dashboard of all running Pi agents")
+  .action(async (options) => {
+    const { piSkyDashboard } = await import("./commands/pi-sky.js")
+    await piSkyDashboard(options)
+  })
+
+piSky
+  .command("voice")
+  .description("Voice copilot — speak to steer a running Pi agent in real-time")
+  .option("-d, --device <device>", "Audio input device")
+  .option("-m, --mode <mode>", "Delivery mode: steer (default), follow_up, prompt", "steer")
+  .action(async (options) => {
+    const { piSkyVoice } = await import("./commands/pi-sky.js")
+    await piSkyVoice(options)
+  })
+
+piSky
+  .command("eval-sweep")
+  .description("Parallel eval sweep across all registered services")
+  .option("-c, --concurrency <n>", "Max parallel agents", "4")
+  .action(async (options) => {
+    const { piSkyEvalSweep } = await import("./commands/pi-sky.js")
+    await piSkyEvalSweep(options)
+  })
+
+piSky
+  .command("experiment")
+  .description("Fork-based A/B experiment — test multiple approaches and score them")
+  .requiredOption("--prompt <text>", "Base prompt for all variants")
+  .requiredOption("--variants <list>", "Comma-separated variant names (e.g. Redis,Memcached)")
+  .option("--eval <prompt>", "Evaluation prompt for scoring variants")
+  .option("--model <model>", "Model ID for experiment agents")
+  .action(async (options) => {
+    const { piSkyExperiment } = await import("./commands/pi-sky.js")
+    await piSkyExperiment(options)
   })
 
 // ============================================================================

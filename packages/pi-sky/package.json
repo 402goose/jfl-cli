@@ -1,0 +1,23 @@
+{
+  "name": "@jfl/pi-sky",
+  "version": "0.1.0",
+  "description": "JFL × Pi RPC integration — programmable agent swarms with MAP event steering",
+  "type": "module",
+  "main": "dist/bridge.js",
+  "exports": {
+    ".": "./dist/bridge.js",
+    "./swarm": "./dist/swarm.js",
+    "./event-router": "./dist/event-router.js",
+    "./cost-monitor": "./dist/cost-monitor.js",
+    "./stratus-gate": "./dist/stratus-gate.js",
+    "./voice-bridge": "./dist/voice-bridge.js",
+    "./experiment": "./dist/experiment.js",
+    "./eval-sweep": "./dist/eval-sweep.js",
+    "./types": "./dist/types.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "license": "MIT"
+}
